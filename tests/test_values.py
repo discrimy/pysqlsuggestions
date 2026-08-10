@@ -16,7 +16,7 @@ from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.types import Kind
+from pysqlsuggestions.types import ColumnValue, Kind
 from tests.corpus.cases import split_caret
 
 SNAPSHOT = {
@@ -166,3 +166,29 @@ def test_a_type_that_does_not_enumerate_itself_still_asks() -> None:
     """A varchar has no value set of its own, so statistics remain the only source."""
     assert texts('SELECT * FROM reports_database d WHERE d.type = ⌶')[:1] == ["'postgres'"]
     assert texts('SELECT * FROM reports_database d WHERE d.title = ⌶', cat=BARE)[:1] != ["'"]
+
+
+def test_a_value_says_how_much_of_the_column_it_covers() -> None:
+    """A list of values is only readable if you can see which one dominates."""
+    measured = MemoryCatalog(
+        SNAPSHOT,
+        values={
+            ('public', 'reports_database', 'type'): [
+                ColumnValue('postgres', 0.88),
+                ColumnValue('clickhouse', 0.075),
+                ColumnValue('trino', 0.0004),
+            ],
+        },
+    )
+    sql, caret = split_caret('SELECT * FROM reports_database d WHERE d.type = ⌶')
+    found = {s.text: s.detail for s in complete(sql, caret, POSTGRES, measured)}
+    assert found["'postgres'"] == '88% of reports_database.type'
+    assert found["'clickhouse'"] == '7.5% of reports_database.type'
+    assert found["'trino'"] == '<1% of reports_database.type', 'a real value never rounds away to 0%'
+
+
+def test_a_value_the_type_listed_claims_no_share() -> None:
+    """An enum names every value without saying how often each occurs."""
+    sql, caret = split_caret('SELECT * FROM reports_database d WHERE d.is_archived = ⌶')
+    found = complete(sql, caret, POSTGRES, MemoryCatalog(SNAPSHOT))
+    assert found[0].detail == 'value of reports_database.is_archived'

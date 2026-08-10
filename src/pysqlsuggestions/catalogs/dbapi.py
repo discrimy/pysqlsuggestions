@@ -19,7 +19,7 @@ from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 from pysqlsuggestions.dialects.base import Dialect, Query
-from pysqlsuggestions.types import Column, Function, Table
+from pysqlsuggestions.types import Column, ColumnValue, Function, Table
 
 _MARKER = re.compile(r'\$(\d+)')
 _DEFAULT_PARAMSTYLE = 'format'
@@ -119,7 +119,7 @@ class DbapiCatalog:
         rows = self._rows(self._dialect.catalog_queries.functions, schema or '')
         return [row for row in rows if isinstance(row, Function)]
 
-    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[str]:
+    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[ColumnValue]:
         """Frequent values of one column, from the dialect's statistics query."""
         rows = self._rows(self._dialect.catalog_queries.values, schema or '', table, column)
-        return [row for row in rows if isinstance(row, str)][:limit]
+        return [row for row in rows if isinstance(row, ColumnValue)][:limit]

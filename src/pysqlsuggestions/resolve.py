@@ -18,7 +18,18 @@ from typing import TypeVar
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Dialect
 from pysqlsuggestions.engine import datatypes
 from pysqlsuggestions.ports import Cache, Catalog, SupportsColumnSearch, SupportsColumnValues, SupportsKeywords
-from pysqlsuggestions.types import Candidate, Column, Function, Kind, Projection, Relation, Request, Scope, Table
+from pysqlsuggestions.types import (
+    Candidate,
+    Column,
+    ColumnValue,
+    Function,
+    Kind,
+    Projection,
+    Relation,
+    Request,
+    Scope,
+    Table,
+)
 
 _DEFAULT_SEARCH_LIMIT = 200
 _MAX_VALUES = 30
@@ -141,7 +152,7 @@ class _Reader:
             return everything
         return self._catalog.search_columns(prefix, limit)
 
-    def common_values(self, schema: str | None, table: str, column: str) -> Sequence[str]:
+    def common_values(self, schema: str | None, table: str, column: str) -> Sequence[ColumnValue]:
         """
         Frequent values of one column, from the backend's planner statistics.
 
@@ -358,12 +369,15 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
             continue
         # The type first: where it enumerates itself the answer is exhaustive,
         # and statistics could only narrow it to the frequent ones.
-        values = datatypes.literals(column.type) or reader.common_values(schema, table, column.name)
+        listed = datatypes.literals(column.type)
+        values = (
+            [ColumnValue(text=v) for v in listed] if listed else list(reader.common_values(schema, table, column.name))
+        )
         return [
             Candidate(
-                text=_as_literal(value, column.type, dialect_quote="'"),
+                text=_as_literal(value.text, column.type, dialect_quote="'"),
                 kind=Kind.VALUE,
-                detail=f'frequent value of {table}.{column.name}',
+                detail=_value_detail(value, f'{table}.{column.name}'),
                 position=index,
                 origin='catalog',
                 literal=True,
@@ -371,6 +385,13 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
             for index, value in enumerate(values)
         ]
     return []
+
+
+def _value_detail(value: ColumnValue, column: str) -> str:
+    """`42% of orders.status`, or just the column when nothing measured the share."""
+    if value.frequency is None:
+        return f'value of {column}'
+    return f'{_as_share(value.frequency)} of {column}'
 
 
 _BARE_BOOLEANS = frozenset({'true', 'false'})
@@ -514,7 +535,34 @@ def _column_candidate(column: Column, label: str | None = None, qualify: str | N
 
 
 def _table_candidate(table: Table) -> Candidate:
-    return Candidate(text=table.name, kind=Kind.TABLE, detail=f'{table.schema}.{table.name} ({table.kind})')
+    size = f' ~{_as_count(table.rows)} rows' if table.rows is not None else ''
+    return Candidate(text=table.name, kind=Kind.TABLE, detail=f'{table.schema}.{table.name} ({table.kind}){size}')
+
+
+def _as_count(rows: int) -> str:
+    """
+    A row count at a glance: `81M`, `1.2k`, `340`.
+
+    Two significant figures at most. The estimate is the planner's and is only
+    as fresh as the last ANALYZE, so spelling out eight digits would claim a
+    precision it does not have — and the decision it informs is only ever
+    "millions or dozens".
+    """
+    for limit, suffix in ((1_000_000_000, 'B'), (1_000_000, 'M'), (1_000, 'k')):
+        if rows >= limit:
+            scaled = rows / limit
+            return f'{scaled:.0f}{suffix}' if scaled >= 10 else f'{scaled:.1f}{suffix}'  # noqa: PLR2004
+    return str(rows)
+
+
+def _as_share(frequency: float) -> str:
+    """A share of rows as a percentage, never rounding a real value down to `0%`."""
+    percent = frequency * 100
+    if percent >= 10:  # noqa: PLR2004
+        return f'{percent:.0f}%'
+    if percent >= 1:
+        return f'{percent:.1f}%'
+    return '<1%'
 
 
 def _schema_candidate(name: str) -> Candidate:

@@ -54,6 +54,16 @@ class Table:
     name: str
     kind: str = 'table'
     """Normalised by the dialect row mappers: table, view, materialized view, foreign table..."""
+    rows: int | None = None
+    """
+    Roughly how many rows, as the backend already estimates it. None when unknown.
+
+    The planner's own figure — Postgres `pg_class.reltuples`, ClickHouse
+    `system.tables.total_rows` — so it costs nothing and is only as fresh as the
+    last ANALYZE. Approximate on purpose: knowing a relation has millions of
+    rows rather than dozens is what changes which one you pick, and an exact
+    count would mean counting them.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +86,22 @@ class Function:
     def takes_arguments(self) -> bool:
         """Whether to expect an argument list. Unknown counts as yes, which is the safe guess."""
         return self.args != ''
+
+
+@dataclass(frozen=True, slots=True)
+class ColumnValue:
+    """One value a column holds, with how much of the column it accounts for."""
+
+    text: str
+    frequency: float | None = None
+    """
+    Share of rows holding this value, 0 to 1. None when nothing measured it.
+
+    A type that enumerates itself — a boolean, an enum — lists every value
+    without saying how often each occurs, so those arrive with None. Statistics
+    carry the figure, and it is what separates a value covering most of the
+    table from one covering a thousandth of it.
+    """
 
 
 @dataclass(frozen=True, slots=True)

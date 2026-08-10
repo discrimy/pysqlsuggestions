@@ -262,7 +262,8 @@ def test_postgres_offers_values_from_planner_statistics(postgres_catalog: DbapiC
     values = postgres_catalog.common_values('public', 'auth_user', 'is_staff', 30)
     if not values:
         pytest.skip('no statistics yet: the database has not been ANALYZEd')
-    assert set(values) <= {'t', 'f'}
+    assert {v.text for v in values} <= {'t', 'f'}
+    assert all(v.frequency is not None for v in values), 'statistics carry the share of rows'
 
     found = suggest(
         'SELECT * FROM auth_user u WHERE u.is_staff = ⌶',
@@ -294,7 +295,7 @@ def test_postgres_offers_enum_labels_without_statistics(postgres_catalog: DbapiC
     """
     if not any(c.name == 'status' for c in postgres_catalog.columns('public', 'reports_runlog')):
         pytest.skip('the reports_runlog fixture predates this seed: docker compose down -v && up')
-    assert list(postgres_catalog.common_values('public', 'reports_runlog', 'status', 30)) == [
+    assert [v.text for v in postgres_catalog.common_values('public', 'reports_runlog', 'status', 30)] == [
         'queued',
         'running',
         'succeeded',
@@ -325,3 +326,22 @@ def test_trino_offers_the_two_boolean_words(trino_catalog: DbapiCatalog) -> None
         trino_catalog,
     )
     assert found[:2] == ['true', 'false']
+
+
+def test_postgres_estimates_how_big_a_relation_is(postgres_catalog: DbapiCatalog) -> None:
+    """
+    `pg_class.reltuples` is the planner's own figure, so it costs nothing and
+    needs no count. Negative means never analysed, which is not the same as
+    empty and must not be reported as a size.
+    """
+    sized = {t.name: t.rows for t in postgres_catalog.tables('public')}
+    assert sized, 'no relations came back'
+    assert all(rows is None or rows >= 0 for rows in sized.values())
+    assert any(rows is not None for rows in sized.values()), 'nothing carried an estimate'
+
+
+def test_clickhouse_estimates_how_big_a_relation_is(clickhouse_catalog: DbapiCatalog) -> None:
+    """`system.tables.total_rows` is exact for MergeTree and null for engines that cannot say."""
+    sized = {t.name: t.rows for t in clickhouse_catalog.tables('analytics')}
+    assert sized, 'no relations came back'
+    assert all(rows is None or rows >= 0 for rows in sized.values())

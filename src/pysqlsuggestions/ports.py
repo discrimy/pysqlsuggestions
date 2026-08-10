@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from pysqlsuggestions.types import Column, Function, Table
+from pysqlsuggestions.types import Column, ColumnValue, Function, Table
 
 
 @runtime_checkable
@@ -98,12 +98,13 @@ class SupportsColumnValues(Protocol):
     role may read; a backend without an equivalent should not implement this.
     """
 
-    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[str]:
+    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[ColumnValue]:
         """
-        Up to `limit` frequent values of one column, most frequent first, as text.
+        Up to `limit` frequent values of one column, most frequent first.
 
         Rendering is the engine's problem: it knows the column's type and so
-        whether the literal needs quotes.
+        whether the literal needs quotes. Each value may carry the share of rows
+        it accounts for, which is what lets a list of them be read at a glance.
         """
         ...
 

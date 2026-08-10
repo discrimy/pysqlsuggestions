@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 from pysqlsuggestions.engine import rank
-from pysqlsuggestions.types import Column, Function, Table
+from pysqlsuggestions.types import Column, ColumnValue, Function, Table
 
 ColumnSpec = tuple[str, str] | tuple[str, str, int]
 Snapshot = Mapping[tuple[str, str], Iterable[ColumnSpec]]
@@ -38,8 +38,9 @@ class MemoryCatalog:
         *,
         functions: Iterable[Function] = (),
         keywords: Iterable[tuple[str, str]] = (),
-        values: Mapping[tuple[str, str, str], Sequence[str]] | None = None,
+        values: Mapping[tuple[str, str, str], Sequence[str | ColumnValue]] | None = None,
         table_kinds: Mapping[tuple[str, str], str] | None = None,
+        table_rows: Mapping[tuple[str, str], int] | None = None,
         oversized: bool = False,
     ) -> None:
         self._columns: dict[tuple[str, str], tuple[Column, ...]] = {}
@@ -55,13 +56,22 @@ class MemoryCatalog:
                 )
                 for index, spec in enumerate(specs)
             )
+        sizes = table_rows or {}
         self._tables = tuple(
-            Table(schema=schema, name=table, kind=kinds.get((schema, table), 'table'))
+            Table(
+                schema=schema,
+                name=table,
+                kind=kinds.get((schema, table), 'table'),
+                rows=sizes.get((schema, table)),
+            )
             for schema, table in self._columns
         )
         self._functions = tuple(functions)
         self._keywords = tuple(keywords)
-        self._values = dict(values or {})
+        self._values = {
+            key: tuple(v if isinstance(v, ColumnValue) else ColumnValue(text=v) for v in found)
+            for key, found in (values or {}).items()
+        }
         self._oversized = oversized
         self.calls: list[tuple[str, ...]] = []
         """Recorded call names, so tests can assert a CTE cost no catalog reads."""
@@ -122,7 +132,7 @@ class MemoryCatalog:
         found.sort(key=lambda column: (not column.name.lower().startswith(folded), len(column.name), column.name))
         return found[:limit]
 
-    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[str]:
+    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[ColumnValue]:
         """Frequent values, when the fixture supplied any. Keyed (schema, table, column)."""
         self.calls.append(('common_values', schema or '', table, column))
         if schema is not None:

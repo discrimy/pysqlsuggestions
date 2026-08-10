@@ -517,3 +517,24 @@ def test_a_narrow_search_still_finds_the_closest_match() -> None:
     wide[('public', 'events')] = [('created', 'date')]
     found = complete('SELECT crea', 11, POSTGRES, MemoryCatalog(wide, oversized=True))
     assert [s.text for s in found][0] == 'created'
+
+
+def test_a_table_says_roughly_how_big_it_is() -> None:
+    """
+    Which of two similarly named relations you want is usually decided by size,
+    and the planner already knows it. Short on purpose: the estimate is only as
+    fresh as the last ANALYZE, so eight digits would claim a precision it lacks.
+    """
+    sized = MemoryCatalog(
+        {('public', 'events'): [('id', 'bigint')], ('public', 'events_archive'): [('id', 'bigint')]},
+        table_rows={('public', 'events'): 81_144_552, ('public', 'events_archive'): 940},
+    )
+    found = {s.text: s.detail for s in complete('SELECT * FROM ev', 16, POSTGRES, sized)}
+    assert found['events'] == 'public.events (table) ~81M rows'
+    assert found['events_archive'] == 'public.events_archive (table) ~940 rows'
+
+
+def test_a_table_of_unknown_size_says_nothing_about_it() -> None:
+    """A backend that cannot estimate must not be made to look like it did."""
+    found = {s.text: s.detail for s in complete('SELECT * FROM reports_rep', 25, POSTGRES, catalog())}
+    assert found['reports_report'] == 'public.reports_report (table)'

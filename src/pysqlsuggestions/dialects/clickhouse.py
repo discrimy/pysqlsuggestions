@@ -22,12 +22,18 @@ QUERIES = CatalogQueries(
     ),
     tables=Query(
         sql=f"""
-            SELECT database, name, engine FROM system.tables
+            SELECT database, name, engine, total_rows FROM system.tables
             WHERE ($1 = '' AND database = currentDatabase() OR database = $1)
               AND database NOT IN {_INTERNAL}
             ORDER BY database, name
         """,
-        row=lambda row: Table(schema=str(row[0]), name=str(row[1]), kind=str(row[2]).lower()),
+        row=lambda row: Table(
+            schema=str(row[0]),
+            name=str(row[1]),
+            kind=str(row[2]).lower(),
+            # Null for engines that cannot say — a View, a Merge, most integrations.
+            rows=int(row[3]) if row[3] is not None else None,
+        ),
     ),
     columns=Query(
         sql="""

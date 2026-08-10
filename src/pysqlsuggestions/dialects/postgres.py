@@ -7,7 +7,7 @@ from dataclasses import replace
 from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Query, Syntax
-from pysqlsuggestions.types import Column, Function, Kind, Table
+from pysqlsuggestions.types import Column, ColumnValue, Function, Kind, Table
 
 _RELKIND = {
     'r': 'table',
@@ -30,7 +30,7 @@ QUERIES = CatalogQueries(
     ),
     tables=Query(
         sql="""
-            SELECT n.nspname, c.relname, c.relkind
+            SELECT n.nspname, c.relname, c.relkind, c.reltuples
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -41,7 +41,13 @@ QUERIES = CatalogQueries(
               AND ($1 <> '' OR n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema')
             ORDER BY n.nspname, c.relname
         """,
-        row=lambda row: Table(schema=str(row[0]), name=str(row[1]), kind=_RELKIND.get(str(row[2]), 'table')),
+        row=lambda row: Table(
+            schema=str(row[0]),
+            name=str(row[1]),
+            kind=_RELKIND.get(str(row[2]), 'table'),
+            # -1 is "never analysed", which is not the same as empty.
+            rows=int(row[3]) if row[3] is not None and float(row[3]) >= 0 else None,
+        ),
     ),
     columns=Query(
         sql="""
@@ -98,8 +104,8 @@ QUERIES = CatalogQueries(
     # connected role may read.
     values=Query(
         sql="""
-            SELECT q.value FROM (
-                SELECT e.enumlabel::text AS value, 0 AS source, e.enumsortorder::float8 AS ord
+            SELECT q.value, q.freq FROM (
+                SELECT e.enumlabel::text AS value, NULL::float8 AS freq, 0 AS source, e.enumsortorder::float8 AS ord
                 FROM pg_attribute a
                 JOIN pg_class c ON c.oid = a.attrelid
                 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -107,18 +113,20 @@ QUERIES = CatalogQueries(
                 WHERE c.relname = $2 AND a.attname = $3 AND a.attnum > 0 AND NOT a.attisdropped
                   AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
                 UNION ALL
-                SELECT v.value, 1 AS source, v.ord::float8
+                SELECT v.value, v.freq, 1 AS source, v.ord::float8
                 FROM pg_stats s
                 JOIN pg_class c ON c.relname = s.tablename
                 JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s.schemaname
-                CROSS JOIN LATERAL unnest(s.most_common_vals::text::text[]) WITH ORDINALITY AS v(value, ord)
+                -- Two arrays unnested together, so each value keeps its own share.
+                CROSS JOIN LATERAL unnest(s.most_common_vals::text::text[], s.most_common_freqs)
+                    WITH ORDINALITY AS v(value, freq, ord)
                 WHERE s.tablename = $2 AND s.attname = $3
                   AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
             ) q
             ORDER BY q.source, q.ord
             LIMIT 50
         """,
-        row=lambda row: str(row[0]),
+        row=lambda row: ColumnValue(text=str(row[0]), frequency=float(row[1]) if row[1] is not None else None),
     ),
 )
 
