@@ -73,6 +73,7 @@ def rank(
                     replace_span=request.replace_span,
                     score=round(score, 3),
                     detail=candidate.detail,
+                    takes_arguments=candidate.takes_arguments,
                 ),
             ),
         )

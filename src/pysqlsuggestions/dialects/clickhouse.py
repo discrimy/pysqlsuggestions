@@ -52,10 +52,13 @@ QUERIES = CatalogQueries(
             ORDER BY name
             LIMIT 2000
         """,
+        # args is None, not '': system.functions carries no signatures, and an
+        # empty string would claim these take no arguments, which would put the
+        # caret after `count()` instead of inside it.
         row=lambda row: Function(
             schema=None,
             name=str(row[0]),
-            args='',
+            args=None,
             result='aggregate' if row[1] else 'function',
         ),
     ),

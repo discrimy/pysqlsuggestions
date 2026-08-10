@@ -107,8 +107,10 @@ def apply_suggestion(
     span from their own idea of a word get that wrong, which is why the span
     travels with the suggestion.
 
-    A function gets its parentheses closed and the caret parked between them,
-    unless the author already typed an opening one.
+    A function gets its parentheses closed, unless the author already typed an
+    opening one. The caret is parked between them only when the function takes
+    arguments: `now()` is finished on insertion and leaving the caret inside
+    would mean typing past a bracket that is already correct.
     """
     start, end = suggestion.replace_span
     text = suggestion.text
@@ -117,7 +119,8 @@ def apply_suggestion(
 
     if suggestion.kind is Kind.FUNCTION and close_parens and not tail.lstrip().startswith('('):
         text += '()'
-        caret = start + len(text) - 1
+        if suggestion.takes_arguments:
+            caret = start + len(text) - 1
 
     return sql[:start] + text + tail, caret if caret is not None else start + len(text)
 

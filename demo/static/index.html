@@ -308,7 +308,8 @@ function accept(i) {
   let insert = s.text, caret = null;
   if (s.kind === 'function' && !tail.trimStart().startsWith('(')) {
     insert += '()';
-    caret = from + insert.length - 1;   // park between the parens
+    // Only park inside when there is an argument to type. `now()` is finished.
+    if (s.takes_arguments) caret = from + insert.length - 1;
   }
   sql.value = sql.value.slice(0, from) + insert + tail;
   const parked = caret !== null;          // caret left inside a function's parens

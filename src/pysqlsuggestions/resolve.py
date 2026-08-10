@@ -338,5 +338,11 @@ def _schema_candidate(name: str) -> Candidate:
 
 
 def _function_candidate(function: Function) -> Candidate:
-    signature = f'{function.name}({function.args}) -> {function.result}'
-    return Candidate(text=function.name, kind=Kind.FUNCTION, detail=signature, type=function.result)
+    signature = f'{function.name}({function.args or ""}) -> {function.result}'
+    return Candidate(
+        text=function.name,
+        kind=Kind.FUNCTION,
+        detail=signature,
+        type=function.result,
+        takes_arguments=function.takes_arguments,
+    )

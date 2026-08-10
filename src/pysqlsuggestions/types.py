@@ -56,8 +56,20 @@ class Function:
 
     schema: str | None
     name: str
-    args: str
+    args: str | None
+    """
+    The argument list, `''` for none and None when the backend does not say.
+
+    The distinction decides where the caret lands: `now()` is finished on
+    insertion, `count(` is not. ClickHouse's system.functions carries no
+    signatures, so None there means unknown rather than empty.
+    """
     result: str
+
+    @property
+    def takes_arguments(self) -> bool:
+        """Whether to expect an argument list. Unknown counts as yes, which is the safe guess."""
+        return self.args != ''
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +194,8 @@ class Candidate:
     """Insert verbatim, never quoted. An ORDER BY ordinal is not an identifier."""
     type: str | None = None
     """The backend's type text, for comparison checking. None when there is none to know."""
+    takes_arguments: bool = False
+    """A function needing an argument list, so insertion parks the caret inside its parentheses."""
     qualifier: str | None = None
     """
     Relation label to prefix on insertion, when a bare name would be ambiguous.
@@ -200,3 +214,5 @@ class Suggestion:
     replace_span: tuple[int, int]
     score: float
     detail: str | None = None
+    takes_arguments: bool = False
+    """A function needing an argument list. `apply_suggestion` parks the caret inside for these."""

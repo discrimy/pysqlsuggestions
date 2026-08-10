@@ -52,10 +52,45 @@ def test_nothing_typed_yet_inserts_at_the_caret() -> None:
 
 def test_a_function_gets_its_parens_closed() -> None:
     """And the caret is parked between them, ready for the argument."""
-    suggestion = Suggestion(text='count', kind=Kind.FUNCTION, replace_span=(7, 9), score=1.0)
+    suggestion = Suggestion(
+        text='count',
+        kind=Kind.FUNCTION,
+        replace_span=(7, 9),
+        score=1.0,
+        takes_arguments=True,
+    )
     new_sql, caret = apply_suggestion('SELECT co FROM orders', suggestion)
     assert new_sql == 'SELECT count() FROM orders'
     assert new_sql[caret] == ')'
+
+
+def test_a_function_taking_no_arguments_leaves_the_caret_after_it() -> None:
+    """`now()` is finished on insertion; parking inside means typing past a correct bracket."""
+    suggestion = Suggestion(text='now', kind=Kind.FUNCTION, replace_span=(7, 9), score=1.0)
+    new_sql, caret = apply_suggestion('SELECT no FROM orders', suggestion)
+    assert new_sql == 'SELECT now() FROM orders'
+    assert caret == len('SELECT now()')
+
+
+def test_the_catalog_decides_which_it_is() -> None:
+    """Postgres reports the signature, so now() and count("any") end up different."""
+    cat = MemoryCatalog(
+        SNAPSHOT,
+        functions=(
+            Function(schema='pg_catalog', name='now', args='', result='timestamp with time zone'),
+            Function(schema='pg_catalog', name='counted', args='"any"', result='bigint'),
+        ),
+    )
+    found = {s.text: s for s in complete('SELECT no', 9, POSTGRES, cat)}
+    assert found['now'].takes_arguments is False
+    assert apply_suggestion('SELECT no', found['now'])[1] == len('SELECT now()')
+
+
+def test_an_unknown_signature_is_treated_as_taking_arguments() -> None:
+    """ClickHouse reports no signatures, and the safe guess is to park inside."""
+    cat = MemoryCatalog(SNAPSHOT, functions=(Function(schema=None, name='nowhere', args=None, result='function'),))
+    found = next(s for s in complete('SELECT no', 9, POSTGRES, cat) if s.text == 'nowhere')
+    assert found.takes_arguments is True
 
 
 def test_a_function_does_not_double_a_paren_the_author_typed() -> None:
