@@ -6,7 +6,8 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import Namespace, Syntax
+from pysqlsuggestions.dialects.base import Clause, Namespace, Syntax
+from pysqlsuggestions.types import Kind
 
 RESERVED = ANSI_RESERVED | frozenset(
     """
@@ -29,6 +30,11 @@ TRINO = replace(
         cast_operator='::',
     ),
     namespace=Namespace(levels=('catalog', 'schema', 'table')),
+    clauses=ANSI.clauses.extend(
+        Clause(name='UNNEST', follows=frozenset({'FROM', 'JOIN'}), suggests=(Kind.COLUMN, Kind.FUNCTION)),
+        Clause(name='MATCH_RECOGNIZE', follows=frozenset({'FROM'}), suggests=(Kind.COLUMN,)),
+        Clause(name='TABLESAMPLE', follows=frozenset({'FROM', 'JOIN'}), suggests=(Kind.KEYWORD,)),
+    ),
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,
 )
