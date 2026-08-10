@@ -51,7 +51,7 @@ def rank(
 ) -> list[Suggestion]:
     """Score, sort and render `candidates` for `request`."""
     kind_rank = {kind: index for index, kind in enumerate(request.kinds)}
-    scored: list[tuple[float, str, Suggestion]] = []
+    scored: list[tuple[float, int, str, Suggestion]] = []
 
     for candidate in candidates:
         strength = _match_strength(candidate.text, request.prefix, candidate.kind)
@@ -65,6 +65,7 @@ def rank(
         scored.append(
             (
                 -score,
+                len(candidate.text),
                 text.lower(),
                 Suggestion(
                     text=text,
@@ -76,7 +77,10 @@ def rank(
             ),
         )
 
-    scored.sort(key=lambda row: (row[0], row[1]))
+    # Among equal-strength matches, the shorter name is the closer one: the same
+    # prefix covers more of it. `no` should reach `now` before `normalize`, and
+    # alphabetical order alone would not.
+    scored.sort(key=lambda row: (row[0], row[1], row[2]))
 
     # Two relations in scope often share a column name. Offering `id` twice is
     # noise: the text inserted would be identical either way, so the
@@ -84,7 +88,7 @@ def rank(
     # that is simply the first one seen.
     seen: set[tuple[Kind, str]] = set()
     ordered: list[Suggestion] = []
-    for _, _, suggestion in scored:
+    for *_, suggestion in scored:
         key = (suggestion.kind, suggestion.text)
         if key in seen:
             continue
@@ -189,7 +193,10 @@ def _render(candidate: Candidate, request: Request, dialect: Dialect) -> str:
         return candidate.text
     if candidate.kind is Kind.KEYWORD:
         return candidate.text.lower() if _typing_lowercase(request) else candidate.text.upper()
-    return quote_if_needed(candidate.text, dialect)
+    text = quote_if_needed(candidate.text, dialect)
+    if candidate.qualifier:
+        return f'{quote_if_needed(candidate.qualifier, dialect)}.{text}'
+    return text
 
 
 def _typing_lowercase(request: Request) -> bool:

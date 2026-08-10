@@ -151,6 +151,13 @@ class Candidate:
     """catalog | local | keyword. Ranking treats locally derived candidates differently."""
     literal: bool = False
     """Insert verbatim, never quoted. An ORDER BY ordinal is not an identifier."""
+    qualifier: str | None = None
+    """
+    Relation label to prefix on insertion, when a bare name would be ambiguous.
+
+    Matching still runs against `text`, so typing `na` finds `r.name`: the
+    qualifier is about what gets inserted, not what has to be typed to find it.
+    """
 
 
 @dataclass(frozen=True, slots=True)

@@ -124,7 +124,7 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     if Kind.SCHEMA in request.kinds:
         # The qualifier is the level above: `prod.<caret>` lists prod's schemas.
         candidates += [_schema_candidate(name) for name in reader.schemas(request.qualifier[-1])]
-    return candidates[:limit]
+    return candidates
 
 
 def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
@@ -135,9 +135,14 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     if Kind.COLUMN in request.kinds:
         relations = scope.visible() if scope else ()
         if relations:
+            # With more than one relation in view a bare name may not even parse
+            # — `WHERE id` against two tables that both have one is an ambiguity
+            # error — and it hides the other relation's column behind the first.
+            # One relation needs no qualifier and reads better without.
+            qualify = len(relations) > 1
             seen: set[tuple[str, ...]] = set()
             for relation in relations:
-                candidates += _columns_of(relation, reader, seen)
+                candidates += _columns_of(relation, reader, seen, qualify=relation.label if qualify else None)
         else:
             candidates += [_column_candidate(c) for c in reader.loose_columns(request.prefix, limit)]
 
@@ -163,7 +168,11 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     if Kind.KEYWORD in request.kinds:
         candidates += _keywords(request, reader, dialect)
 
-    return candidates[:limit]
+    # Deliberately not truncated: ranking has to see every candidate, or a
+    # perfect match sitting past the cut is dropped before it is ever scored.
+    # `limit` reaches only the prefix-dependent column search, which is bounded
+    # server-side because it cannot be cached.
+    return candidates
 
 
 def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
@@ -199,6 +208,7 @@ def _columns_of(
     reader: _Reader,
     seen: set[tuple[str, ...]],
     label: str | None = None,
+    qualify: str | None = None,
 ) -> list[Candidate]:
     """
     The columns a relation offers.
@@ -221,9 +231,9 @@ def _columns_of(
         schema, table = _split_path(relation.path)
         if table is None:
             return []
-        return [_column_candidate(column, shown) for column in reader.columns(schema, table)]
+        return [_column_candidate(column, shown, qualify) for column in reader.columns(schema, table)]
 
-    return _from_projection(relation.projection, shown, reader, seen)
+    return _from_projection(relation.projection, shown, reader, seen, qualify)
 
 
 def _from_projection(
@@ -231,14 +241,22 @@ def _from_projection(
     label: str,
     reader: _Reader,
     seen: set[tuple[str, ...]],
+    qualify: str | None = None,
 ) -> list[Candidate]:
     """Named outputs need no fetch; unresolved stars are expanded against their sources."""
     candidates = [
-        Candidate(text=name, kind=Kind.COLUMN, detail=f'{label}.{name}', position=index, origin='local')
+        Candidate(
+            text=name,
+            kind=Kind.COLUMN,
+            detail=f'{label}.{name}',
+            position=index,
+            origin='local',
+            qualifier=qualify,
+        )
         for index, name in enumerate(projection.columns)
     ]
     for star in projection.stars:
-        candidates += _columns_of(star, reader, seen, label=label)
+        candidates += _columns_of(star, reader, seen, label=label, qualify=qualify)
     return candidates
 
 
@@ -256,12 +274,13 @@ def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
     return path[-2], path[-1]
 
 
-def _column_candidate(column: Column, label: str | None = None) -> Candidate:
+def _column_candidate(column: Column, label: str | None = None, qualify: str | None = None) -> Candidate:
     return Candidate(
         text=column.name,
         kind=Kind.COLUMN,
         detail=f'{label or column.table}.{column.name} :: {column.type}',
         position=column.position,
+        qualifier=qualify,
     )
 
 

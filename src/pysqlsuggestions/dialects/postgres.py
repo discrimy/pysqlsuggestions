@@ -61,6 +61,12 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
+    # pg_proc holds ~3300 entries, most of them type I/O plumbing that cannot be
+    # called from SQL — `anynonarray_in`, `RI_FKey_noaction_del`. Excluding
+    # anything that takes or returns internal/cstring, and anything returning a
+    # handler type, drops those without touching count, now, array_agg or
+    # string_agg. The limit is a safety valve, not a filter: set low it silently
+    # truncates the alphabet, which is how `now` went missing.
     functions=Query(
         sql="""
             SELECT n.nspname, p.proname,
@@ -68,8 +74,18 @@ QUERIES = CatalogQueries(
             FROM pg_proc p
             JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE ($1 = '' AND n.nspname IN ('pg_catalog', 'public') OR n.nspname = $1)
+              AND p.prokind IN ('f', 'a', 'w')
+              AND p.prorettype NOT IN (
+                  'internal'::regtype, 'cstring'::regtype, 'trigger'::regtype,
+                  'language_handler'::regtype, 'fdw_handler'::regtype,
+                  'tsm_handler'::regtype, 'index_am_handler'::regtype, 'event_trigger'::regtype
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM unnest(p.proargtypes) a(oid)
+                  WHERE a.oid IN ('internal'::regtype, 'cstring'::regtype)
+              )
             ORDER BY p.proname
-            LIMIT 2000
+            LIMIT 10000
         """,
         row=lambda row: Function(schema=str(row[0]), name=str(row[1]), args=str(row[2]), result=str(row[3])),
     ),

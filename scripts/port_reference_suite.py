@@ -72,6 +72,18 @@ GAPS = {
         'function_without_alias_is_harmless',
         'cte_bare_function_takes_its_own_name',
     ],
+    # Not a gap: a deliberate difference. With two relations in view a bare name
+    # may not parse — `WHERE id` against two tables that both have one is an
+    # ambiguity error — and deduplicating bare names hides the second relation's
+    # column behind the first. These assert the bare names their engine returned.
+    'columns are qualified when more than one relation is in scope': [
+        'join_brings_both_relations',
+        'cte_joined_with_a_real_table',
+        'cte_and_derived_table_both_in_scope',
+        'report_query_unqualified_scope',
+        'correlated_outer_relation_visible_inside_a_subquery',
+        'nested_subquery_sees_every_enclosing_level',
+    ],
     # Not a gap: a deliberate difference. Their engine always lists keywords in
     # canonical uppercase and adjusts the case when inserting; this one decides
     # the case in the suggestion, so the list shows what will actually be typed.

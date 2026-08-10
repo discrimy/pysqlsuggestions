@@ -103,6 +103,43 @@ def test_mid_word_fragments_match_but_rank_last() -> None:
     assert texts('SELECT * FROM atabas⌶') == ['reports_database']
 
 
+def test_one_relation_needs_no_qualifier() -> None:
+    """A bare name is unambiguous here, and shorter."""
+    assert texts('SELECT * FROM auth_user WHERE ⌶')[:3] == ['id', 'username', 'email']
+
+
+def test_two_relations_qualify_every_column() -> None:
+    """`WHERE id` against two tables that both have one does not parse."""
+    found = texts('SELECT * FROM auth_user u JOIN reports_report r ON r.author_id = u.id WHERE ⌶')
+    assert 'u.id' in found
+    assert 'r.id' in found
+    assert 'id' not in found
+
+
+def test_an_unaliased_relation_qualifies_with_its_name() -> None:
+    """No alias to use, so the table name stands in."""
+    found = texts('SELECT * FROM auth_user JOIN reports_report r ON r.author_id = auth_user.id WHERE ⌶')
+    assert 'auth_user.username' in found
+
+
+def test_qualifying_does_not_change_what_has_to_be_typed() -> None:
+    """Matching runs against the bare name: `usern` still finds `u.username`."""
+    found = texts('SELECT * FROM auth_user u JOIN reports_report r ON r.author_id = u.id WHERE usern⌶')
+    assert found == ['u.username']
+
+
+def test_a_typed_qualifier_is_not_repeated() -> None:
+    """`u.` already names the relation, so the column comes back bare."""
+    found = texts('SELECT * FROM auth_user u JOIN reports_report r ON r.author_id = u.id WHERE u.⌶')
+    assert found[:3] == ['id', 'username', 'email']
+
+
+def test_both_relations_columns_survive_deduplication() -> None:
+    """Two columns called `id` are two different columns, not one."""
+    found = texts('SELECT * FROM auth_user u JOIN reports_report r ON r.author_id = u.id WHERE i⌶')
+    assert sorted(t for t in found if t.endswith('.id')) == ['r.id', 'u.id']
+
+
 def test_operators_are_offered_after_a_completed_operand() -> None:
     """The likeliest next token leads, and none of them is case-folded or quoted."""
     found = texts('SELECT * FROM auth_user u WHERE u.id ⌶')
