@@ -132,9 +132,10 @@ def _scan_string(src: str, pos: int, syntax: Syntax) -> tuple[int, bool]:
     return len(src), False
 
 
-def _scan_line_comment(src: str, pos: int) -> int:
+def _scan_line_comment(src: str, pos: int) -> tuple[int, bool]:
+    """Scan to the newline. Returns (end, terminated); a comment reaching EOF is unterminated."""
     end = src.find('\n', pos)
-    return len(src) if end == -1 else end
+    return (len(src), False) if end == -1 else (end, True)
 
 
 def _scan_block_comment(src: str, pos: int, syntax: Syntax) -> tuple[int, bool]:
@@ -187,8 +188,10 @@ def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
         # characters, and a literal's contents must never reach the scanner below.
         comment_marker = next((m for m in syntax.line_comments if src.startswith(m, pos)), None)
         if comment_marker is not None:
-            end = _scan_line_comment(src, pos)
-            tokens.append(Token(TokenType.COMMENT, pos, end, src[pos:end], src[pos:end], depth=depth))
+            end, terminated = _scan_line_comment(src, pos)
+            tokens.append(
+                Token(TokenType.COMMENT, pos, end, src[pos:end], src[pos:end], terminated=terminated, depth=depth),
+            )
             pos = end
             continue
 
