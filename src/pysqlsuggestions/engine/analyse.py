@@ -235,7 +235,12 @@ def _scope_level(
         projection = select_outputs(tokens, derived_lo, derived_hi, dialect)
         relations.append(Relation(alias=alias, path=(), source='subquery', projection=projection))
 
-    here = Scope(relations=tuple(relations), ctes=ctes, parent=parent)
+    here = Scope(
+        relations=tuple(relations),
+        ctes=ctes,
+        parent=parent,
+        projection=select_outputs(tokens, lo, hi, dialect),
+    )
 
     for inner_lo, inner_hi in _subquery_bodies(tokens, lo, hi):
         if tokens[inner_lo].start <= caret <= tokens[inner_hi - 1].end:
@@ -442,7 +447,8 @@ def select_outputs(
     relation it refers to is recorded in `stars` for resolve to finish.
     """
     body_relations = _relations_in(tokens, lo, hi, -1, dialect)
-    start = _after_clause(tokens, lo, hi, 'SELECT', dialect)
+    base = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
+    start = _after_clause(tokens, lo, hi, 'SELECT', dialect, depth=base)
     if start is None:
         return Projection()
     end = _next_clause_at_depth(tokens, start, hi, dialect, tokens[start].depth, {'FROM'})
@@ -463,10 +469,18 @@ def _after_clause(
     hi: int,
     name: str,
     dialect: Dialect,
+    depth: int | None = None,
 ) -> int | None:
-    """Index just past the first occurrence of clause `name`."""
+    """
+    Index just past the first occurrence of clause `name`.
+
+    `depth` restricts the search to one query level, which matters for
+    `WITH a AS (SELECT ...) SELECT ...`: without it the CTE body's SELECT is
+    found first and the outer projection comes out wrong.
+    """
     for index in range(lo, hi):
-        if tokens[index].type is not TokenType.IDENT:
+        token = tokens[index]
+        if token.type is not TokenType.IDENT or (depth is not None and token.depth != depth):
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect)
         if matched is not None and matched[0] == name:

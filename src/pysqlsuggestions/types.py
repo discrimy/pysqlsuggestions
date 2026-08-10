@@ -97,6 +97,8 @@ class Scope:
     relations: tuple[Relation, ...] = ()
     ctes: Mapping[str, Relation] = field(default_factory=dict)
     parent: Scope | None = None
+    projection: Projection | None = None
+    """This query level's own select list. GROUP BY and ORDER BY are answered from it alone."""
 
     def visible(self) -> tuple[Relation, ...]:
         """This scope's relations plus every enclosing scope's, innermost first."""
@@ -135,6 +137,8 @@ class Candidate:
     position: int = 0
     origin: str = 'catalog'
     """catalog | local | keyword. Ranking treats locally derived candidates differently."""
+    literal: bool = False
+    """Insert verbatim, never quoted. An ORDER BY ordinal is not an identifier."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.engine.request import derive_request
+from pysqlsuggestions.api import complete, derive_request
+from pysqlsuggestions.ports import (
+    Cache,
+    Catalog,
+    SupportsColumnSearch,
+    SupportsKeywords,
+)
 from pysqlsuggestions.types import (
     Candidate,
     Column,
@@ -19,7 +25,9 @@ from pysqlsuggestions.types import (
 __version__ = '0.1.0.dev0'
 
 __all__ = [
+    'Cache',
     'Candidate',
+    'Catalog',
     'Column',
     'Function',
     'Kind',
@@ -28,7 +36,10 @@ __all__ = [
     'Request',
     'Scope',
     'Suggestion',
+    'SupportsColumnSearch',
+    'SupportsKeywords',
     'Table',
     '__version__',
+    'complete',
     'derive_request',
 ]
