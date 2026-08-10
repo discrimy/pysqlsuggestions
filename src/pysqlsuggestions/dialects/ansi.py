@@ -31,9 +31,11 @@ _AFTER_RELATION = (
     'UNION',
     'AS',
 )
-_AFTER_PREDICATE = ('AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS NULL', 'IS NOT NULL')
 _COMPARISON = ('=', '<>', '<', '<=', '>', '>=')
 """Ordered by how often they are what you meant, not alphabetically."""
+
+_CONTINUES_PREDICATE = ('IS NULL', 'IS NOT NULL', 'IN', 'NOT IN', 'LIKE', 'NOT LIKE', 'ILIKE', 'BETWEEN')
+"""What can follow an operand that has no comparison yet."""
 
 CLAUSES = ClauseModel(
     clauses=(
@@ -68,15 +70,17 @@ CLAUSES = ClauseModel(
             name='ON',
             follows=frozenset({'JOIN'}),
             suggests=COLUMN_EXPRESSION,
-            followed_by=('AND', 'OR', 'JOIN', 'LEFT JOIN', 'WHERE', 'GROUP BY', 'ORDER BY'),
             operators=_COMPARISON,
+            after_operand=_CONTINUES_PREDICATE,
+            followed_by=('AND', 'OR', 'JOIN', 'LEFT JOIN', 'WHERE', 'GROUP BY', 'ORDER BY'),
         ),
         Clause(name='USING', follows=frozenset({'JOIN'}), suggests=(Kind.COLUMN,), followed_by=('WHERE', 'JOIN')),
         Clause(
             name='WHERE',
             suggests=COLUMN_EXPRESSION,
-            followed_by=(*_AFTER_PREDICATE, 'GROUP BY', 'ORDER BY', 'LIMIT', 'OFFSET', 'RETURNING'),
             operators=_COMPARISON,
+            after_operand=_CONTINUES_PREDICATE,
+            followed_by=('AND', 'OR', 'GROUP BY', 'ORDER BY', 'LIMIT', 'OFFSET', 'RETURNING'),
         ),
         Clause(
             name='GROUP BY',
@@ -88,8 +92,9 @@ CLAUSES = ClauseModel(
             name='HAVING',
             follows=frozenset({'GROUP BY'}),
             suggests=COLUMN_EXPRESSION,
-            followed_by=('AND', 'OR', 'ORDER BY', 'LIMIT'),
             operators=_COMPARISON,
+            after_operand=_CONTINUES_PREDICATE,
+            followed_by=('AND', 'OR', 'ORDER BY', 'LIMIT'),
         ),
         Clause(name='WINDOW', suggests=COLUMN_EXPRESSION, followed_by=('ORDER BY', 'LIMIT')),
         Clause(

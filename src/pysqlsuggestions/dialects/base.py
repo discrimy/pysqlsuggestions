@@ -67,6 +67,18 @@ class Clause:
     Kept apart from `followed_by` rather than inferred from the spelling: these
     are emitted as Kind.OPERATOR, which is never case-folded or quoted, and a
     dialect may add its own — ClickHouse's `::`, Postgres's `~`.
+
+    A clause having any of these is what marks it a predicate clause, and so
+    what gives `after_operand` and `followed_by` their separate meanings.
+    """
+    after_operand: tuple[str, ...] = ()
+    """
+    Keywords that continue an unfinished predicate: `IS NULL`, `IN`, `BETWEEN`.
+
+    Distinct from `followed_by`, which is what comes after a *finished* one.
+    `WHERE r.id ` takes these; `WHERE r.id > 1 ` takes AND, OR or the next
+    clause. Offering both everywhere suggests `AND` where no comparison has been
+    written yet, and `=` where one already has.
     """
 
 

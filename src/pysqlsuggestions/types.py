@@ -141,6 +141,15 @@ class Request:
     clause: str | None = None
     """Nearest clause keyword, uppercased."""
     scope: Scope | None = None
+    expecting: Literal['operand', 'operator', 'connective'] = 'operand'
+    """
+    What the caret position wants next.
+
+    `WHERE ` wants an operand, `WHERE r.id ` an operator, `WHERE r.id > 1 ` a
+    connective. Carried on the Request because resolve needs it to pick between
+    a clause's `after_operand` and `followed_by` lists, and resolve has no
+    tokens to work it out for itself.
+    """
     keyword_case: Literal['lower', 'upper'] | None = None
     """
     How the author has been writing keywords, from the last one they typed.

@@ -226,6 +226,7 @@ def _describe(request: Any) -> dict[str, Any]:
     """The Request, flattened for the page."""
     return {
         'clause': request.clause,
+        'expecting': request.expecting,
         'prefix': request.prefix,
         'qualifier': list(request.qualifier),
         'kinds': [kind.value for kind in request.kinds],

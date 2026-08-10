@@ -175,7 +175,16 @@ def test_operators_are_offered_after_a_completed_operand() -> None:
     """The likeliest next token leads, and none of them is case-folded or quoted."""
     found = texts('SELECT * FROM auth_user u WHERE u.id ⌶')
     assert found[:6] == ['=', '<>', '<', '<=', '>', '>=']
+    assert 'IS NULL' in found
+    assert 'AND' not in found, 'no comparison written yet'
+
+
+def test_a_finished_predicate_offers_connectives_instead() -> None:
+    """`WHERE u.id > 1 ` takes AND or the next clause, and no second comparison."""
+    found = texts('SELECT * FROM auth_user u WHERE u.id > 1 ⌶')
     assert 'AND' in found
+    assert 'ORDER BY' in found
+    assert '=' not in found
 
 
 def test_substring_matches_columns_too() -> None:

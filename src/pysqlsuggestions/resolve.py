@@ -185,9 +185,9 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
     """
     clause = dialect.clauses.get(request.clause) if request.clause else None
     if clause is not None and clause.followed_by:
+        words = clause.after_operand if request.expecting == 'operator' else clause.followed_by
         return [
-            Candidate(text=word, kind=Kind.KEYWORD, detail=f'after {clause.name}', origin='keyword')
-            for word in clause.followed_by
+            Candidate(text=word, kind=Kind.KEYWORD, detail=f'after {clause.name}', origin='keyword') for word in words
         ]
     return [
         Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')

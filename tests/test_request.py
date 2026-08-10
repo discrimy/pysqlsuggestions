@@ -86,12 +86,39 @@ def test_a_half_typed_word_is_judged_by_what_precedes_it() -> None:
     """
     A partial word could become either a column or a keyword.
 
-    `WHERE na` follows the WHERE keyword, so it is naming a column. `> d.id AN`
-    follows a completed operand, so it is turning into AND.
+    `WHERE na` follows the WHERE keyword, so it is naming a column. `> 1 AN`
+    follows a finished predicate, so it is turning into AND.
     """
     assert request('SELECT * FROM users r WHERE na⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
-    assert request('SELECT * FROM users r WHERE r.id > 1 AN⌶').kinds == (Kind.OPERATOR, Kind.KEYWORD)
+    assert request('SELECT * FROM users r WHERE r.id > 1 AN⌶').kinds == (Kind.KEYWORD,)
     assert request('SELECT * FROM users r WHERE r.id = 1 AND na⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+
+
+def test_the_three_expression_positions() -> None:
+    """An operand is wanted, then an operator, then a connective."""
+    assert request('SELECT * FROM users r WHERE ⌶').expecting == 'operand'
+    assert request('SELECT * FROM users r WHERE r.id ⌶').expecting == 'operator'
+    assert request('SELECT * FROM users r WHERE r.id > 1 ⌶').expecting == 'connective'
+
+
+def test_an_unfinished_predicate_takes_no_connective() -> None:
+    """`WHERE r.id ` has no comparison yet, so AND would not parse."""
+    assert request('SELECT * FROM users r WHERE r.id ⌶').kinds == (Kind.OPERATOR, Kind.KEYWORD)
+
+
+def test_a_finished_predicate_takes_no_second_comparison() -> None:
+    """`WHERE r.id > 1 ` cannot be compared again."""
+    assert request('SELECT * FROM users r WHERE r.id > 1 ⌶').kinds == (Kind.KEYWORD,)
+
+
+def test_a_connective_reopens_the_predicate() -> None:
+    """After AND the next predicate starts from nothing."""
+    assert request('SELECT * FROM users r WHERE r.id > 1 AND r.name ⌶').expecting == 'operator'
+
+
+def test_is_null_finishes_a_predicate() -> None:
+    """NULL is a value, and IS is a comparison, so the predicate is complete."""
+    assert request('SELECT * FROM users r WHERE r.id IS NULL ⌶').expecting == 'connective'
 
 
 def test_the_start_of_a_clause_expects_an_operand() -> None:
@@ -111,9 +138,9 @@ def test_a_closing_paren_completes_an_operand() -> None:
 
 
 def test_a_literal_completes_an_operand() -> None:
-    """So does a string or a number."""
-    assert request("SELECT * FROM users r WHERE r.name = 'x' ⌶").kinds == (Kind.OPERATOR, Kind.KEYWORD)
-    assert request('SELECT * FROM users r WHERE r.id = 1 ⌶').kinds == (Kind.OPERATOR, Kind.KEYWORD)
+    """A string or a number closes the predicate it was compared into."""
+    assert request("SELECT * FROM users r WHERE r.name = 'x' ⌶").kinds == (Kind.KEYWORD,)
+    assert request('SELECT * FROM users r WHERE r.id = 1 ⌶').kinds == (Kind.KEYWORD,)
 
 
 def test_a_clause_without_operators_offers_only_keywords() -> None:

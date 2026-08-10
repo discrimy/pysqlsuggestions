@@ -21,6 +21,17 @@ _JOIN_QUALIFIERS = frozenset(
     """.split(),
 )
 _CTE_MODIFIERS = frozenset({'MATERIALIZED', 'NOT'})
+_LITERAL_KEYWORDS = frozenset(
+    """
+    NULL TRUE FALSE CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER SESSION_USER
+    LOCALTIME LOCALTIMESTAMP DEFAULT
+    """.split(),
+)
+"""Keywords that are values. `x IS NULL` ends an operand as surely as `x = 1` does."""
+
+_COMPARISONS = frozenset({'=', '<', '>', '<=', '>=', '<>', '!='})
+_PREDICATE_KEYWORDS = frozenset({'IS', 'IN', 'LIKE', 'ILIKE', 'BETWEEN', 'SIMILAR', 'EXISTS'})
+_CONNECTIVES = frozenset({'AND', 'OR'})
 _SET_OPERATORS = frozenset({'UNION', 'INTERSECT', 'EXCEPT'})
 
 
@@ -144,8 +155,44 @@ def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool
     if token.type is TokenType.PUNCT:
         return token.text == ')'
     if token.type is TokenType.IDENT:
-        return token.quoted or token.value.upper() not in dialect.keywords
+        word = token.value.upper()
+        return token.quoted or word in _LITERAL_KEYWORDS or word not in dialect.keywords
     return False
+
+
+def predicate_complete(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> bool:
+    """
+    Whether the predicate under the caret is finished, so a connective comes next.
+
+    `WHERE r.id ` has an operand but no comparison: what belongs there is `=` or
+    `IS NULL`, not `AND`. `WHERE r.id > 1 ` has both, so `AND` and `ORDER BY`
+    belong and another `=` does not.
+
+    Tracked rather than parsed: a comparison operator or a predicate keyword
+    arms it, a connective or a new clause disarms it. That is enough to tell the
+    two positions apart without an expression grammar.
+    """
+    depth = depth_at(tokens, caret)
+    armed = False
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type in _SKIP or token.start >= caret or token.depth != depth:
+            continue
+        if token.type is TokenType.OPERATOR and token.text in _COMPARISONS:
+            armed = True
+        elif token.type is TokenType.IDENT and not token.quoted:
+            word = token.value.upper()
+            if word in _CONNECTIVES or dialect.clauses.get(word) is not None:
+                armed = False
+            elif word in _PREDICATE_KEYWORDS:
+                armed = True
+    return armed
 
 
 def clause_at(

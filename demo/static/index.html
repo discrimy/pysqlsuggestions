@@ -143,6 +143,7 @@
       <h2>Request — pure, no catalog</h2>
       <dl>
         <dt>clause</dt><dd id="r-clause"></dd>
+        <dt>expecting</dt><dd id="r-expecting"></dd>
         <dt>prefix</dt><dd id="r-prefix"></dd>
         <dt>qualifier</dt><dd id="r-qual"></dd>
         <dt>replaces</dt><dd id="r-span"></dd>
@@ -233,6 +234,7 @@ async function fire() {
 function paintRequest(d) {
   const r = d.request;
   $('r-clause').innerHTML = r.clause ? esc(r.clause) : '<span class="none">none</span>';
+  $('r-expecting').textContent = r.expecting || '';
   $('r-prefix').innerHTML = r.prefix ? esc(r.prefix) : '<span class="none">empty</span>';
   $('r-qual').innerHTML = r.qualifier.length
     ? esc(r.qualifier.join('.')) + '.'

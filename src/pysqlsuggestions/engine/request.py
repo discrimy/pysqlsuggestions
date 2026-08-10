@@ -16,6 +16,7 @@ from pysqlsuggestions.engine.analyse import (
     after_operand,
     clause_at,
     in_literal,
+    predicate_complete,
     qualifier_and_prefix,
     scope_of,
     statement_at,
@@ -42,15 +43,40 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
+    expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
     return Request(
-        kinds=_kinds_for(clause, qualifier, scope, dialect, after_operand(tokens, caret, dialect)),
+        kinds=_kinds_for(clause, qualifier, scope, dialect, expecting),
         prefix=prefix,
         replace_span=span,
         qualifier=qualifier,
         clause=clause,
         scope=scope,
+        expecting=expecting,
         keyword_case=_keyword_case(tokens, caret, dialect),
     )
+
+
+def _expecting(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    clause: str | None,
+    dialect: Dialect,
+) -> Literal['operand', 'operator', 'connective']:
+    """
+    Which of the three expression positions the caret is in.
+
+    A clause with no operators has no predicates either — a select list, a GROUP
+    BY — so a completed item there goes straight to 'connective', where its
+    `followed_by` list lives.
+    """
+    if not after_operand(tokens, caret, dialect):
+        return 'operand'
+    found = dialect.clauses.get(clause) if clause else None
+    if found is None or not found.operators:
+        return 'connective'
+    return 'connective' if predicate_complete(tokens, lo, hi, caret, dialect) else 'operator'
 
 
 def _keyword_case(tokens: Sequence[Token], caret: int, dialect: Dialect) -> Literal['lower', 'upper'] | None:
@@ -80,11 +106,11 @@ def _kinds_for(
     qualifier: tuple[str, ...],
     scope: Scope | None,
     dialect: Dialect,
-    operand_complete: bool,
+    expecting: str,
 ) -> tuple[Kind, ...]:
     """What the caret position admits, narrowed by any qualifier."""
     if not qualifier:
-        return _clause_kinds(clause, scope, dialect, operand_complete)
+        return _clause_kinds(clause, scope, dialect, expecting)
     return _qualified_kinds(qualifier, scope, dialect)
 
 
@@ -92,7 +118,7 @@ def _clause_kinds(
     clause: str | None,
     scope: Scope | None,
     dialect: Dialect,
-    operand_complete: bool,
+    expecting: str,
 ) -> tuple[Kind, ...]:
     """
     The kinds the governing clause admits.
@@ -104,10 +130,10 @@ def _clause_kinds(
     read into scope", and tables stay on offer because a comma may still bring
     another.
 
-    In an expression position it is "an operand was just completed", and there
-    the keywords *replace* the columns rather than joining them: after
-    `WHERE r.id ` another column name would not be valid SQL, so offering one is
-    worse than offering nothing.
+    In an expression position the keywords *replace* the columns rather than
+    joining them: after `WHERE r.id ` another column name would not parse, so
+    offering one is worse than offering nothing. Which keywords depends on
+    whether the predicate is finished — see `Request.expecting`.
     """
     if clause is None:
         return (Kind.KEYWORD,)
@@ -120,10 +146,11 @@ def _clause_kinds(
         return kinds
     if Kind.TABLE in kinds:
         return (*kinds, Kind.KEYWORD) if (scope and scope.relations) else kinds
-    if not operand_complete:
+    if expecting == 'operand':
         return kinds
     # An operator is the likeliest next token after `WHERE r.id `, so it leads.
-    return (Kind.OPERATOR, Kind.KEYWORD) if found.operators else (Kind.KEYWORD,)
+    # A finished predicate takes a connective instead, and no second comparison.
+    return (Kind.OPERATOR, Kind.KEYWORD) if expecting == 'operator' else (Kind.KEYWORD,)
 
 
 def _qualified_kinds(
