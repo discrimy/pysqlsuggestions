@@ -30,7 +30,8 @@ class GoldenRequest:
     relations: tuple[str, ...] = ()
     """Rendered as 'alias:dotted.path' per relation, in scope order. '' alias when unaliased."""
     dialect: str = 'postgres'
-    pending: bool = True
+    pending: bool = False
+    """Set True for a case the current stage cannot yet satisfy: an xfail(strict=True) until it can."""
     note: str = ''
 
 
@@ -38,11 +39,6 @@ def split_caret(sql: str) -> tuple[str, int]:
     """Strip the ⌶ marker and return (sql without marker, caret offset)."""
     caret = sql.index(CARET)
     return sql[:caret] + sql[caret + len(CARET) :], caret
-
-
-def render_relations(relations: tuple[tuple[str | None, tuple[str, ...]], ...]) -> tuple[str, ...]:
-    """Render (alias, path) pairs the way `GoldenRequest.relations` spells them."""
-    return tuple(f'{alias or ""}:{".".join(path)}' for alias, path in relations)
 
 
 CASES: tuple[GoldenRequest, ...] = (

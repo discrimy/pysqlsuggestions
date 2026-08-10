@@ -371,7 +371,14 @@ def _read_relation_list(
         if token.type is not TokenType.IDENT:
             break
         path, index = _read_dotted_path(tokens, index, hi)
-        if _covers_caret(path, caret):
+        reference_end = path[-1].end
+        # A dangling dot means no identifier followed it, so the reference is
+        # still being typed: `FROM analytics.<caret>` names no relation yet.
+        probe = _skip_forward(tokens, index, hi)
+        if probe < hi and tokens[probe].type is TokenType.PUNCT and tokens[probe].text == '.':
+            reference_end = tokens[probe].end
+            index = probe + 1
+        if path[0].start < caret <= reference_end:
             continue
         alias, index = _read_alias(tokens, index, hi, dialect)
         out.append(Relation(alias=alias, path=tuple(t.value for t in path), source='table'))
@@ -419,11 +426,6 @@ def _read_alias(
     if word in dialect.reserved_upper or _clause_starting_at(tokens, probe, hi, dialect) is not None:
         return None, index
     return tokens[probe].value, probe + 1
-
-
-def _covers_caret(path: Sequence[Token], caret: int) -> bool:
-    """Whether the caret sits inside this reference — a half-typed name is not a relation."""
-    return any(token.covers(caret) for token in path)
 
 
 def select_outputs(
