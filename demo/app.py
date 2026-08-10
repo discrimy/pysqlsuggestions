@@ -4,6 +4,11 @@ A web demo autocompleting against the docker backends.
     docker compose -f docker/docker-compose.yml up -d --wait
     uv run uvicorn demo.app:app --reload --port 8000
 
+Point the Postgres backend somewhere else with PYSQLSUGGESTIONS_PG_DSN:
+
+    PYSQLSUGGESTIONS_PG_DSN=postgresql://user:pw@host:5432/db \
+        uv run uvicorn demo.app:app --port 8000
+
 Nothing here belongs in the library. It exists to show the pipeline working
 against real servers, and to make the parts that are normally invisible — the
 derived Request, the clause, the scope — visible while you type.
@@ -11,6 +16,7 @@ derived Request, the clause, the scope — visible while you type.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -51,10 +57,26 @@ class Backend:
         return lambda: connection.cursor()
 
 
+_DOCKER_PG_DSN = 'postgresql://report:report@localhost:57432/report_service'
+
+POSTGRES_DSN = os.environ.get('PYSQLSUGGESTIONS_PG_DSN', _DOCKER_PG_DSN)
+"""
+Where the Postgres backend connects, overridable so the demo can be pointed at
+a real database.
+
+From the environment rather than a file, because a DSN carries a password and
+this repository has no ignored place to keep one. The default is the docker
+fixture, so `docker compose up` still needs no configuration at all.
+
+Everything this issues is a read of `pg_catalog` and `pg_stats`. No user table
+is queried, and nothing is written.
+"""
+
+
 def _postgres() -> Any:
     import psycopg2
 
-    return psycopg2.connect('postgresql://report:report@localhost:57432/report_service')
+    return psycopg2.connect(POSTGRES_DSN, connect_timeout=10)
 
 
 def _clickhouse() -> Any:
@@ -97,6 +119,26 @@ app = FastAPI(title='pysqlsuggestions demo')
 
 _connections: dict[str, Any] = {}
 _caches: dict[str, dict[Any, Any]] = {}
+_examples: dict[str, str] = {}
+"""Examples discovered from the connected database, overriding the fixture ones."""
+
+
+def _discovered_example(key: str, catalog: DbapiCatalog) -> str | None:
+    """
+    An opening query built from a relation this database actually has.
+
+    The shipped examples name the docker fixture's tables, which say nothing on
+    someone else's database. Rather than show a query that cannot resolve, pick
+    a relation and start one.
+    """
+    if key != 'postgres' or POSTGRES_DSN == _DOCKER_PG_DSN:
+        return None
+    with suppress(Exception):
+        for table in catalog.tables(None):
+            columns = catalog.columns(table.schema, table.name)
+            if columns:
+                return f'SELECT *\nFROM {table.name} t\nWHERE t.'
+    return None
 
 
 def _catalog(key: str) -> DbapiCatalog | None:
@@ -135,6 +177,9 @@ def _warm(key: str) -> None:
         return
     cache = _caches.setdefault(key, {})
     dialect = BACKENDS[key].dialect
+    found = _discovered_example(key, catalog)
+    if found is not None:
+        _examples[key] = found
     with suppress(Exception):
         for name in ('', *catalog.schemas()):
             cache[('demo', dialect.name, name, '\x00schemas')] = catalog.schemas(name or None)
@@ -165,7 +210,7 @@ def backends() -> dict[str, Any]:
                 'note': backend.note,
                 'levels': list(backend.dialect.namespace.levels),
                 'paramstyle': PARAMSTYLE[backend.key],
-                'example': EXAMPLES[backend.key],
+                'example': _examples.get(backend.key, EXAMPLES[backend.key]),
                 'available': _catalog(backend.key) is not None,
             }
             for backend in BACKENDS.values()
