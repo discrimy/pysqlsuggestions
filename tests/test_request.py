@@ -94,6 +94,29 @@ def test_a_half_typed_word_is_judged_by_what_precedes_it() -> None:
     assert request('SELECT * FROM users r WHERE r.id = 1 AND na⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
 
 
+def test_a_select_star_completes_an_item() -> None:
+    """`SELECT * ` takes FROM; the star is the item, not an operator."""
+    assert request('SELECT * ⌶').expecting == 'connective'
+    assert request('SELECT * ⌶').kinds == (Kind.KEYWORD,)
+
+
+def test_a_qualified_star_completes_an_item_too() -> None:
+    """So does `SELECT t.* `."""
+    assert request('SELECT t.* ⌶ FROM t').expecting == 'connective'
+    assert request('SELECT id, * ⌶ FROM t').expecting == 'connective'
+
+
+def test_multiplication_is_still_an_operator() -> None:
+    """`SELECT a * ` opens an operand; the same character, the other meaning."""
+    assert request('SELECT a * ⌶ FROM t').expecting == 'operand'
+    assert request('SELECT 5 * ⌶ FROM t').expecting == 'operand'
+
+
+def test_a_star_inside_a_call_completes_an_item() -> None:
+    """`count(*` is the item form."""
+    assert request('SELECT count(* ⌶) FROM t').expecting == 'connective'
+
+
 def test_the_three_expression_positions() -> None:
     """An operand is wanted, then an operator, then a connective."""
     assert request('SELECT * FROM users r WHERE ⌶').expecting == 'operand'

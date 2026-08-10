@@ -154,9 +154,35 @@ def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool
         return True
     if token.type is TokenType.PUNCT:
         return token.text == ')'
+    if token.type is TokenType.OPERATOR and token.text == '*':
+        return _star_is_an_item(tokens, index, dialect)
     if token.type is TokenType.IDENT:
         word = token.value.upper()
         return token.quoted or word in _LITERAL_KEYWORDS or word not in dialect.keywords
+    return False
+
+
+def _star_is_an_item(tokens: Sequence[Token], index: int, dialect: Dialect) -> bool:
+    """
+    Whether the `*` at `index` is a select item rather than multiplication.
+
+    The lexer cannot tell them apart — both are the same character — but the
+    token before decides it. `SELECT *`, `SELECT id, *`, `SELECT t.*` and
+    `count(*)` are items and complete an operand. `SELECT a * ` and `WHERE 5 * `
+    are the operator and open one.
+
+    A keyword before it means an item; a plain name means multiplication. That
+    is the same test `after_operand` applies everywhere else, which is why a
+    quoted identifier counts as a name however it is spelled.
+    """
+    before = _skip_back(tokens, index - 1)
+    if before < 0:
+        return True
+    token = tokens[before]
+    if token.type is TokenType.PUNCT:
+        return token.text in {',', '.', '('}
+    if token.type is TokenType.IDENT:
+        return not token.quoted and token.value.upper() in dialect.keywords
     return False
 
 
