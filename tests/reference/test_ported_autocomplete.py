@@ -11,9 +11,8 @@ The fixture, the SQL strings and the assertions are theirs verbatim. Only the
 harness is reimplemented: `texts(cur, sql)` now runs `complete()`, and `cur` is a
 MemoryCatalog rather than their FakeCatalog.
 
-Five cases are not ported, because they assert on APIs this library does not
-have: `apply_suggestion` (insertion is the front end's job here) and the old
-module's own dataclass field names.
+Two cases are not ported, because they assert on the old module's own dataclass
+field names and Catalog protocol rather than on any behaviour.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from pysqlsuggestions.api import complete, derive_request
+from pysqlsuggestions.api import apply_suggestion, complete, derive_request
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.types import Suggestion
@@ -576,6 +575,15 @@ def test_insert_select_from_cte(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['email', 'id']
 
 
+def test_apply_suggestion_on_a_cte_column(cur: MemoryCatalog) -> None:
+    """Тестировать применение suggestion к CTE колонке."""
+    sql = 'WITH a AS (SELECT id, email FROM auth_user)\nSELECT * FROM a WHERE a.em'
+    suggestion = suggestions(cur, sql)[0]
+    new_sql, caret = apply_suggestion(sql, suggestion)
+    assert new_sql.endswith('WHERE a.email')
+    assert caret == len(new_sql)
+
+
 @pytest.mark.xfail(strict=True, reason='CTE and derived-table bodies are not analysed recursively enough')
 def test_deeply_nested_derived_tables(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для глубоко вложенных derived tables."""
@@ -645,7 +653,6 @@ def test_cte_columns_in_join_on(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['id', 'total']
 
 
-@pytest.mark.xfail(strict=True, reason='no keywords offered after a completed item')
 def test_keywords_offered_after_a_cte_relation(cur: MemoryCatalog) -> None:
     """Тестировать предложение ключевых слов после CTE relation."""
     sql = 'WITH a AS (SELECT id FROM auth_user)\nSELECT * FROM a '
@@ -700,6 +707,15 @@ def test_insert_column_list_uses_the_target_table(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql, limit=50)) == ALL_ORDER_COLUMNS
 
 
+def test_cte_name_completion_can_be_applied(cur: MemoryCatalog) -> None:
+    """Тестировать применение suggestion к CTE имени таблицы."""
+    sql = 'WITH totals AS (SELECT id FROM orders)\nSELECT * FROM tot'
+    suggestion = suggestions(cur, sql)[0]
+    new_sql, caret = apply_suggestion(sql, suggestion)
+    assert new_sql.endswith('FROM totals')
+    assert caret == len(new_sql)
+
+
 def test_uppercase_cte_keywords(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE с uppercase ключевами."""
     sql = 'WITH A AS (SELECT ID, EMAIL FROM AUTH_USER) SELECT * FROM A WHERE A.'
@@ -741,6 +757,14 @@ def test_quoted_identifier_keeps_its_case(cur: MemoryCatalog) -> None:
     """Тестировать сохранение case для quoted identifier."""
     sql = 'WITH a AS (SELECT id AS "MixedCase" FROM auth_user) SELECT * FROM a WHERE a.'
     assert texts(cur, sql) == ['"MixedCase"']
+
+
+def test_keyword_casing_still_follows_what_was_typed(cur: MemoryCatalog) -> None:
+    """Тестировать, что casing keywords следует за вводом пользователя."""
+    lower = suggestions(cur, 'select * from auth_user wh')
+    assert apply_suggestion('select * from auth_user wh', lower[0])[0].endswith('where')
+    upper = suggestions(cur, 'SELECT * FROM auth_user WH')
+    assert apply_suggestion('SELECT * FROM auth_user WH', upper[0])[0].endswith('WHERE')
 
 
 @pytest.mark.xfail(strict=True, reason='set-returning functions in FROM are not read as relations')
@@ -1074,7 +1098,7 @@ def test_earlier_substring_position_ranks_higher(cur: MemoryCatalog) -> None:
     assert got == ['email', 'username', 'date_joined']
 
 
-@pytest.mark.xfail(strict=True, reason='no keywords offered after a completed item')
+@pytest.mark.xfail(strict=True, reason='keyword case is decided in the suggestion here, not at insertion')
 def test_keywords_stay_prefix_only(cur: MemoryCatalog) -> None:
     """Тестировать, что keywords только prefix-matching."""
     assert 'WHERE' in texts(cur, 'select * from auth_user w', limit=50)

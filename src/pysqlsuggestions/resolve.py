@@ -154,13 +154,29 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         candidates += [_function_candidate(function) for function in reader.functions()]
 
     if Kind.KEYWORD in request.kinds:
-        candidates += [
-            Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
-            for word, description in reader.keywords()
-        ]
+        candidates += _keywords(request, reader, dialect)
 
-    del dialect
     return candidates[:limit]
+
+
+def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
+    """
+    Keywords for this position.
+
+    A clause that declares what follows it offers only those: after
+    `FROM auth_user ` there are about ten legal continuations, and burying them
+    in six hundred reserved words is the same as not offering them.
+    """
+    clause = dialect.clauses.get(request.clause) if request.clause else None
+    if clause is not None and clause.followed_by:
+        return [
+            Candidate(text=word, kind=Kind.KEYWORD, detail=f'after {clause.name}', origin='keyword')
+            for word in clause.followed_by
+        ]
+    return [
+        Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
+        for word, description in reader.keywords()
+    ]
 
 
 def _find_relation(label: str, scope: Scope) -> Relation | None:

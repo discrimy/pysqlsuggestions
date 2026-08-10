@@ -51,6 +51,15 @@ class Clause:
     """Clauses this one may appear after. Empty means unconstrained."""
     suggests: tuple[Kind, ...] = ()
     """Most relevant first."""
+    followed_by: tuple[str, ...] = ()
+    """
+    What usually comes next, once this clause has an item.
+
+    Offering the whole reserved-word list after `FROM auth_user ` is useless —
+    there are hundreds and only a handful can legally follow. This is the same
+    per-clause table the helper this supersedes carried, kept as dialect data so
+    ClickHouse can add PREWHERE after FROM without touching the engine.
+    """
 
 
 @dataclass(frozen=True, slots=True)

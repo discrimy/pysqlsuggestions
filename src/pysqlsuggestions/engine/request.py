@@ -8,6 +8,9 @@ completion engine — mediocre ones suggest everything all the time.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Literal
+
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.engine.analyse import (
     clause_at,
@@ -16,7 +19,7 @@ from pysqlsuggestions.engine.analyse import (
     scope_of,
     statement_at,
 )
-from pysqlsuggestions.engine.lex import lex
+from pysqlsuggestions.engine.lex import Token, TokenType, lex
 from pysqlsuggestions.types import Kind, Request, Scope
 
 _NAMESPACE_KINDS = {
@@ -45,7 +48,30 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         qualifier=qualifier,
         clause=clause,
         scope=scope,
+        keyword_case=_keyword_case(tokens, caret, dialect),
     )
+
+
+def _keyword_case(tokens: Sequence[Token], caret: int, dialect: Dialect) -> Literal['lower', 'upper'] | None:
+    """
+    How the author is writing keywords: the half-typed word if there is one,
+    otherwise the last complete keyword before the caret.
+
+    It has to read `Token.text` rather than `Request.prefix`, because the lexer
+    folds identifiers for a case-insensitive dialect — `WH` arrives as `wh` and
+    the typed case is gone. The raw slice is the only place it survives.
+    """
+    for token in reversed(tokens):
+        if token.type is not TokenType.IDENT or token.quoted or token.start >= caret:
+            continue
+        typed = token.text[: caret - token.start]
+        partial = token.end > caret
+        if not partial and token.value.upper() not in dialect.keywords:
+            continue
+        if not typed.isalpha():
+            continue
+        return 'lower' if typed.islower() else 'upper'
+    return None
 
 
 def _kinds_for(
@@ -56,16 +82,33 @@ def _kinds_for(
 ) -> tuple[Kind, ...]:
     """What the caret position admits, narrowed by any qualifier."""
     if not qualifier:
-        return _clause_kinds(clause, dialect)
+        return _clause_kinds(clause, scope, dialect)
     return _qualified_kinds(qualifier, scope, dialect)
 
 
-def _clause_kinds(clause: str | None, dialect: Dialect) -> tuple[Kind, ...]:
-    """The kinds the governing clause admits."""
+def _clause_kinds(clause: str | None, scope: Scope | None, dialect: Dialect) -> tuple[Kind, ...]:
+    """
+    The kinds the governing clause admits.
+
+    Once the clause has an item, what usually comes *next* is offered too: after
+    `FROM auth_user ` the useful answer is WHERE or JOIN, not another table.
+
+    Only relation positions qualify. There, "the clause has an item" is exactly
+    "a relation was read into scope" — precise and cheap. In an expression
+    clause it would mean "a complete predicate was written", which needs
+    expression analysis this stage does not do, and guessing turns `WHERE a AND
+    <caret>` into a list of keywords where columns belong.
+    """
     if clause is None:
         return (Kind.KEYWORD,)
     found = dialect.clauses.get(clause)
-    return found.suggests if found is not None else (Kind.KEYWORD,)
+    if found is None:
+        return (Kind.KEYWORD,)
+    kinds = found.suggests
+    offers_relations = Kind.TABLE in kinds
+    if not found.followed_by or not offers_relations or not (scope and scope.relations):
+        return kinds
+    return (*kinds, Kind.KEYWORD)
 
 
 def _qualified_kinds(

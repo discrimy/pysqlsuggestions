@@ -26,8 +26,13 @@ _SUBSTRING = 25.0
 _SUBSTRING_POSITION_WEIGHT = 0.5
 
 _KIND_STEP = 5.0
-_LOCAL_BONUS = 15.0
-"""Candidates derived from the query itself outrank anything fetched: the user wrote them."""
+_LOCAL_BONUS = 30.0
+"""
+Candidates derived from the query itself outrank anything fetched: the user wrote them.
+
+Large enough to clear a whole kind step, so adding a kind to a clause's list
+cannot silently demote a generated alias below the tables it was derived from.
+"""
 
 _MAX_POSITION_PENALTY = 50
 _POSITION_WEIGHT = 0.1
@@ -188,8 +193,16 @@ def _render(candidate: Candidate, request: Request, dialect: Dialect) -> str:
 
 
 def _typing_lowercase(request: Request) -> bool:
-    """Follow the case the user has been writing keywords in."""
-    return bool(request.prefix) and request.prefix.islower()
+    """
+    Follow the case the author has been writing keywords in.
+
+    `Request.prefix` cannot answer this: a case-insensitive dialect folds it, so
+    `WH` and `wh` are indistinguishable by the time it gets here. `keyword_case`
+    is derived from the raw source slice for exactly that reason.
+
+    Defaults to upper, the convention most SQL style guides assume.
+    """
+    return request.keyword_case == 'lower'
 
 
 def quote_if_needed(name: str, dialect: Dialect) -> str:

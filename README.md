@@ -49,7 +49,7 @@ request = derive_request('SELECT id, na FROM users u', 13, POSTGRES)
 request.prefix        # 'na'
 request.clause        # 'SELECT'
 request.replace_span  # (11, 13) — what the editor overwrites
-request.kinds         # (Kind.COLUMN, Kind.FUNCTION, Kind.KEYWORD)
+request.kinds         # (Kind.COLUMN, Kind.FUNCTION)
 request.scope         # relations in view, built from the whole statement
 ```
 

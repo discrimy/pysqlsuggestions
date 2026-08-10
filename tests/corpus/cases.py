@@ -45,13 +45,13 @@ CASES: tuple[GoldenRequest, ...] = (
     # --- prefix and qualifier ------------------------------------------------
     GoldenRequest(
         sql='SELECT ⌶',
-        kinds=('column', 'function', 'keyword'),
+        kinds=('column', 'function'),
         clause='SELECT',
         note='empty prefix, no relations yet',
     ),
     GoldenRequest(
         sql='SELECT id, na⌶ FROM users u',
-        kinds=('column', 'function', 'keyword'),
+        kinds=('column', 'function'),
         prefix='na',
         clause='SELECT',
         relations=('u:users',),
@@ -124,7 +124,13 @@ CASES: tuple[GoldenRequest, ...] = (
     ),
     # --- clause detection ----------------------------------------------------
     GoldenRequest(sql='SELECT * FROM ⌶', kinds=('table', 'schema'), clause='FROM'),
-    GoldenRequest(sql='SELECT * FROM t JOIN ⌶', kinds=('table', 'schema'), clause='JOIN', relations=(':t',)),
+    GoldenRequest(
+        sql='SELECT * FROM t JOIN ⌶',
+        kinds=('table', 'schema', 'keyword'),
+        clause='JOIN',
+        relations=(':t',),
+        note='a relation is already in scope, so what may follow it is offered too',
+    ),
     GoldenRequest(
         sql='SELECT * FROM t GROUP BY ⌶',
         kinds=('column', 'function'),
@@ -139,7 +145,7 @@ CASES: tuple[GoldenRequest, ...] = (
     ),
     GoldenRequest(
         sql='SELECT a, (SELECT b FROM t2), ⌶ FROM t1',
-        kinds=('column', 'function', 'keyword'),
+        kinds=('column', 'function'),
         clause='SELECT',
         relations=(':t1',),
         note='a subquery that closed before the caret must not capture the clause',

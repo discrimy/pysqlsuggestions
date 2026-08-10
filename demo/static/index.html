@@ -291,13 +291,21 @@ function place() {
   pop.style.left = `${Math.min(14 + col * ch, sql.clientWidth - 340)}px`;
 }
 
+// Mirrors pysqlsuggestions.apply_suggestion. Splicing at the server's span
+// rather than at a word boundary is what keeps a qualifier in place:
+// `where u.crea` accepting `created_at` gives `where u.created_at`.
 function accept(i) {
   const s = items[i];
   if (!s) return;
   const [from, to] = s.replace_span;
-  const insert = s.kind === 'function' ? `${s.text}()` : s.text;
-  sql.value = sql.value.slice(0, from) + insert + sql.value.slice(to);
-  const caret = from + insert.length - (s.kind === 'function' ? 1 : 0);
+  const tail = sql.value.slice(to);
+  let insert = s.text, caret = null;
+  if (s.kind === 'function' && !tail.trimStart().startsWith('(')) {
+    insert += '()';
+    caret = from + insert.length - 1;   // park between the parens
+  }
+  sql.value = sql.value.slice(0, from) + insert + tail;
+  if (caret === null) caret = from + insert.length;
   sql.setSelectionRange(caret, caret);
   sql.dataset.example = 'no';
   pop.hidden = true;

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.api import complete, derive_request
+from pysqlsuggestions.api import apply_suggestion, complete, derive_request
 from pysqlsuggestions.ports import (
     Cache,
     Catalog,
@@ -40,6 +40,7 @@ __all__ = [
     'SupportsKeywords',
     'Table',
     '__version__',
+    'apply_suggestion',
     'complete',
     'derive_request',
 ]

@@ -57,9 +57,6 @@ for node in tree.body:
 # Exercise APIs this library deliberately does not have, or the old module's own
 # dataclass shapes. Listed rather than silently dropped.
 SKIP = {
-    'test_apply_suggestion_on_a_cte_column': 'apply_suggestion is not part of this library',
-    'test_cte_name_completion_can_be_applied': 'apply_suggestion is not part of this library',
-    'test_keyword_casing_still_follows_what_was_typed': 'apply_suggestion is not part of this library',
     'test_catalog_types_carry_their_fields': "asserts the old module's dataclass field names",
     'test_catalog_protocol_is_structural': "asserts the old module's Catalog protocol",
 }
@@ -75,9 +72,12 @@ GAPS = {
         'function_without_alias_is_harmless',
         'cte_bare_function_takes_its_own_name',
     ],
-    'no keywords offered after a completed item': [
+    # Not a gap: a deliberate difference. Their engine always lists keywords in
+    # canonical uppercase and adjusts the case when inserting; this one decides
+    # the case in the suggestion, so the list shows what will actually be typed.
+    # Both halves of the assertion hold except that ours reads `where`, not `WHERE`.
+    'keyword case is decided in the suggestion here, not at insertion': [
         'keywords_stay_prefix_only',
-        'keywords_offered_after_a_cte_relation',
     ],
     'LATERAL subqueries are not read as relations': [
         'lateral_subquery_columns',
@@ -136,9 +136,8 @@ The fixture, the SQL strings and the assertions are theirs verbatim. Only the
 harness is reimplemented: `texts(cur, sql)` now runs `complete()`, and `cur` is a
 MemoryCatalog rather than their FakeCatalog.
 
-Five cases are not ported, because they assert on APIs this library does not
-have: `apply_suggestion` (insertion is the front end's job here) and the old
-module's own dataclass field names.
+Two cases are not ported, because they assert on the old module's own dataclass
+field names and Catalog protocol rather than on any behaviour.
 """
 
 from __future__ import annotations
@@ -147,7 +146,7 @@ from typing import Any
 
 import pytest
 
-from pysqlsuggestions.api import complete, derive_request
+from pysqlsuggestions.api import apply_suggestion, complete, derive_request
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.types import Suggestion

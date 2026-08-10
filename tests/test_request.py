@@ -24,9 +24,15 @@ def test_alias_qualifier_narrows_to_columns() -> None:
     assert result.qualifier == ('u',)
 
 
-def test_unqualified_select_offers_columns_functions_and_keywords() -> None:
-    """Narrowing only happens when there is something to narrow on."""
-    assert request('SELECT ⌶ FROM t').kinds == (Kind.COLUMN, Kind.FUNCTION, Kind.KEYWORD)
+def test_unqualified_select_offers_columns_and_functions() -> None:
+    """A select list wants columns and functions; keywords there would bury them."""
+    assert request('SELECT ⌶ FROM t').kinds == (Kind.COLUMN, Kind.FUNCTION)
+
+
+def test_a_relation_position_offers_what_may_follow_once_it_has_one() -> None:
+    """`FROM t JOIN ⌶` can be followed by ON or USING; `FROM ⌶` cannot be followed by anything yet."""
+    assert request('SELECT * FROM ⌶').kinds == (Kind.TABLE, Kind.SCHEMA)
+    assert request('SELECT * FROM t JOIN ⌶').kinds == (Kind.TABLE, Kind.SCHEMA, Kind.KEYWORD)
 
 
 def test_from_clause_offers_tables_and_schemas() -> None:
@@ -105,7 +111,7 @@ def test_readme_example_is_accurate() -> None:
     assert result.prefix == 'na'
     assert result.clause == 'SELECT'
     assert result.replace_span == (11, 13)
-    assert result.kinds == (Kind.COLUMN, Kind.FUNCTION, Kind.KEYWORD)
+    assert result.kinds == (Kind.COLUMN, Kind.FUNCTION)
     assert [r.label for r in (result.scope.visible() if result.scope else ())] == ['u']
 
 

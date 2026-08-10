@@ -127,6 +127,14 @@ class Request:
     clause: str | None = None
     """Nearest clause keyword, uppercased."""
     scope: Scope | None = None
+    keyword_case: Literal['lower', 'upper'] | None = None
+    """
+    How the author has been writing keywords, from the last one they typed.
+
+    `SELECT * FROM t ` should offer `where`, not `WHERE`, when everything before
+    it is lowercase — and the prefix is empty there, so the casing has to come
+    from somewhere else.
+    """
 
 
 @dataclass(frozen=True, slots=True)

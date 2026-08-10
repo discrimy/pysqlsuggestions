@@ -16,7 +16,7 @@ from pysqlsuggestions.engine.rank import rank
 from pysqlsuggestions.engine.request import derive_request
 from pysqlsuggestions.ports import Cache, Catalog
 from pysqlsuggestions.resolve import resolve
-from pysqlsuggestions.types import Candidate, Column, Function, Request, Suggestion, Table
+from pysqlsuggestions.types import Candidate, Column, Function, Kind, Request, Suggestion, Table
 
 DEFAULT_LIMIT = 40
 
@@ -92,4 +92,34 @@ def _candidates(
     return [*local, *(c for c in fetched if (c.kind, c.text) not in known)]
 
 
-__all__ = ['DEFAULT_LIMIT', 'complete', 'derive_request']
+def apply_suggestion(
+    sql: str,
+    suggestion: Suggestion,
+    *,
+    close_parens: bool = True,
+) -> tuple[str, int]:
+    """
+    Insert `suggestion` into `sql`. Returns (new sql, new caret offset).
+
+    Splicing at `suggestion.replace_span` rather than at a word boundary is what
+    keeps a qualifier in place: `where u.crea` accepting `created_at` gives
+    `where u.created_at`, not `where created_at`. Editors that re-derive the
+    span from their own idea of a word get that wrong, which is why the span
+    travels with the suggestion.
+
+    A function gets its parentheses closed and the caret parked between them,
+    unless the author already typed an opening one.
+    """
+    start, end = suggestion.replace_span
+    text = suggestion.text
+    tail = sql[end:]
+    caret: int | None = None
+
+    if suggestion.kind is Kind.FUNCTION and close_parens and not tail.lstrip().startswith('('):
+        text += '()'
+        caret = start + len(text) - 1
+
+    return sql[:start] + text + tail, caret if caret is not None else start + len(text)
+
+
+__all__ = ['DEFAULT_LIMIT', 'apply_suggestion', 'complete', 'derive_request']
