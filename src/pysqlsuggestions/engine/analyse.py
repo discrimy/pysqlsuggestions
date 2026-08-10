@@ -9,10 +9,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pysqlsuggestions.dialects.base import ClauseModel
+from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
+from pysqlsuggestions.types import Relation, Scope
 
 _SKIP = (TokenType.WHITESPACE, TokenType.COMMENT)
+_RELATION_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO'})
+_JOIN_QUALIFIERS = frozenset(
+    """
+    LEFT RIGHT FULL INNER OUTER CROSS NATURAL LATERAL ANTI SEMI ASOF GLOBAL ANY ALL
+    """.split(),
+)
 
 
 def _index_before(tokens: Sequence[Token], caret: int) -> int:
@@ -192,3 +199,143 @@ def _value_of(typed: str, token: Token) -> str:
         return typed.lstrip('"`')
     folded = token.value
     return folded[: len(typed)] if len(folded) == len(token.text) else typed.lower()
+
+
+def scope_of(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> Scope:
+    """
+    The relations visible at `caret`, built from the whole statement.
+
+    Reading only the text left of the caret cannot work: in `SELECT na<caret>
+    FROM users u` the relation that answers the question sits to the right.
+    """
+    return Scope(relations=tuple(_relations_in(tokens, lo, hi, caret, dialect)))
+
+
+def _relations_in(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> list[Relation]:
+    """Every table reference introduced between `lo` and `hi`."""
+    relations: list[Relation] = []
+    index = lo
+    while index < hi:
+        token = tokens[index]
+        if token.type in _SKIP:
+            index += 1
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect)
+        if matched is None or matched[0] not in _RELATION_CLAUSES:
+            index += 1
+            continue
+        index = _read_relation_list(tokens, matched[1], hi, caret, dialect, relations)
+    return relations
+
+
+def _clause_starting_at(
+    tokens: Sequence[Token],
+    index: int,
+    hi: int,
+    dialect: Dialect,
+) -> tuple[str, int] | None:
+    """(clause name, index just past it) when a clause name starts at `index`."""
+    for name in dialect.clauses.names():
+        parts = name.split()
+        run = _ident_run(tokens, index, hi, len(parts))
+        if run is not None and [t.value.upper() for t in run] == parts:
+            return name, _index_of(tokens, run[-1]) + 1
+    return None
+
+
+def _index_of(tokens: Sequence[Token], token: Token) -> int:
+    """The position of `token` in `tokens`, located by its start offset."""
+    for index, candidate in enumerate(tokens):
+        if candidate.start == token.start:
+            return index
+    raise ValueError('token not in stream')
+
+
+def _read_relation_list(
+    tokens: Sequence[Token],
+    index: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+    out: list[Relation],
+) -> int:
+    """Read comma-separated relation references until the next clause keyword."""
+    while index < hi:
+        index = _skip_forward(tokens, index, hi)
+        if index >= hi or _clause_starting_at(tokens, index, hi, dialect) is not None:
+            break
+        token = tokens[index]
+        if token.type is TokenType.PUNCT and token.text == ',':
+            index += 1
+            continue
+        if token.type is TokenType.IDENT and token.value.upper() in _JOIN_QUALIFIERS:
+            index += 1
+            continue
+        if token.type is not TokenType.IDENT:
+            break
+        path, index = _read_dotted_path(tokens, index, hi)
+        if _covers_caret(path, caret):
+            continue
+        alias, index = _read_alias(tokens, index, hi, dialect)
+        out.append(Relation(alias=alias, path=tuple(t.value for t in path), source='table'))
+    return index
+
+
+def _skip_forward(tokens: Sequence[Token], index: int, hi: int) -> int:
+    """The next index at or after `index` that is not whitespace or a comment."""
+    while index < hi and tokens[index].type in _SKIP:
+        index += 1
+    return index
+
+
+def _read_dotted_path(tokens: Sequence[Token], index: int, hi: int) -> tuple[list[Token], int]:
+    """Read `ident (. ident)*` starting at `index`."""
+    path = [tokens[index]]
+    index += 1
+    while True:
+        probe = _skip_forward(tokens, index, hi)
+        if probe >= hi or tokens[probe].type is not TokenType.PUNCT or tokens[probe].text != '.':
+            return path, index
+        after = _skip_forward(tokens, probe + 1, hi)
+        if after >= hi or tokens[after].type is not TokenType.IDENT:
+            return path, index
+        path.append(tokens[after])
+        index = after + 1
+
+
+def _read_alias(
+    tokens: Sequence[Token],
+    index: int,
+    hi: int,
+    dialect: Dialect,
+) -> tuple[str | None, int]:
+    """Read an optional alias, with or without AS."""
+    probe = _skip_forward(tokens, index, hi)
+    if probe >= hi or tokens[probe].type is not TokenType.IDENT:
+        return None, index
+    if tokens[probe].value.upper() == 'AS':
+        probe = _skip_forward(tokens, probe + 1, hi)
+        if probe >= hi or tokens[probe].type is not TokenType.IDENT:
+            return None, index
+        return tokens[probe].value, probe + 1
+    word = tokens[probe].value.upper()
+    if word in dialect.reserved_upper or _clause_starting_at(tokens, probe, hi, dialect) is not None:
+        return None, index
+    return tokens[probe].value, probe + 1
+
+
+def _covers_caret(path: Sequence[Token], caret: int) -> bool:
+    """Whether the caret sits inside this reference — a half-typed name is not a relation."""
+    return any(token.covers(caret) for token in path)

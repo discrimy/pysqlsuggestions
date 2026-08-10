@@ -111,3 +111,8 @@ class Dialect:
     reserved: frozenset[str] = frozenset()
     """Lowercased. Drives quoting decisions, which must be made before any connection exists."""
     catalog_queries: CatalogQueries = field(default_factory=CatalogQueries)
+
+    @property
+    def reserved_upper(self) -> frozenset[str]:
+        """`reserved`, uppercased. Alias detection compares against folded-then-uppercased words."""
+        return frozenset(word.upper() for word in self.reserved)
