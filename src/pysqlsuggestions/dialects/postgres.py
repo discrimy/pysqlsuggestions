@@ -99,6 +99,29 @@ RESERVED = ANSI_RESERVED | frozenset(
     """.split(),
 )
 
+TYPES = (
+    'text',
+    'integer',
+    'bigint',
+    'boolean',
+    'numeric',
+    'date',
+    'timestamptz',
+    'timestamp',
+    'interval',
+    'jsonb',
+    'json',
+    'uuid',
+    'smallint',
+    'real',
+    'double precision',
+    'character varying',
+    'bytea',
+    'inet',
+    'time',
+    'money',
+)
+
 POSTGRES = replace(
     ANSI,
     name='postgres',
@@ -119,5 +142,6 @@ POSTGRES = replace(
     ),
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,
+    types=TYPES,
     catalog_queries=QUERIES,
 )

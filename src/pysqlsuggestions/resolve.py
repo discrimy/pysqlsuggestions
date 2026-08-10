@@ -58,7 +58,11 @@ def _of_comparable_type(candidates: list[Candidate], request: Request, reader: _
 
 
 def _comparand_family(request: Request, reader: _Reader) -> str | None:
-    """The type family of the reference on the left of the comparison, if it can be found."""
+    """The type family of the left operand, from a cast if it names one and the catalog otherwise."""
+    if request.comparand_type is not None:
+        declared = datatypes.family(request.comparand_type)
+        return None if declared == datatypes.UNKNOWN else declared
+
     path, scope = request.comparand, request.scope
     if not path or scope is None:
         return None
@@ -196,6 +200,12 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
 
     if Kind.FUNCTION in request.kinds:
         candidates += [_function_candidate(function) for function in reader.functions()]
+
+    if Kind.TYPE in request.kinds:
+        candidates += [
+            Candidate(text=name, kind=Kind.TYPE, detail='type', position=index, origin='keyword', literal=True)
+            for index, name in enumerate(dialect.types)
+        ]
 
     if Kind.OPERATOR in request.kinds:
         clause = dialect.clauses.get(request.clause) if request.clause else None

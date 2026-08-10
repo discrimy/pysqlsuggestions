@@ -25,6 +25,8 @@ class Kind(Enum):
     ALIAS = 'alias'
     KEYWORD = 'keyword'
     OPERATOR = 'operator'
+    TYPE = 'type'
+    """A data type name, wanted after a cast: `'7 days'::interval`."""
     """`=`, `<>`, `>=`. Separate from KEYWORD because it has no case to follow."""
 
 
@@ -161,7 +163,17 @@ class Request:
     say *what* was compared but not what type it has; resolve looks that up and
     drops the columns that cannot face it.
     """
-    expecting: Literal['operand', 'operator', 'connective'] = 'operand'
+    comparand_type: str | None = None
+    """
+    The type of that left operand, when the text says so outright.
+
+    A cast names its own type — `'7 days'::interval > <caret>` is a temporal
+    comparison however the literal is spelled — so no catalog lookup is needed
+    and `comparand` stays empty. A bare literal sets nothing: an unadorned
+    `'7 days'` is of unknown type in Postgres and coerces to whatever it is
+    compared against, so narrowing on it would be wrong.
+    """
+    expecting: Literal['operand', 'operator', 'connective', 'type'] = 'operand'
     """
     What the caret position wants next.
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from pysqlsuggestions.api import complete
+from pysqlsuggestions.api import complete, derive_request
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
@@ -176,6 +177,44 @@ def test_both_relations_columns_survive_deduplication() -> None:
     """Two columns called `id` are two different columns, not one."""
     found = texts('SELECT * FROM auth_user u JOIN reports_report r ON r.author_id = u.id WHERE i⌶')
     assert sorted(t for t in found if t.endswith('.id')) == ['r.id', 'u.id']
+
+
+def test_a_cast_offers_type_names() -> None:
+    """`'7 days'::` wants a type, not a column."""
+    found = texts("SELECT * FROM reports_report r WHERE r.dt_created > '7 days'::⌶")
+    assert found[:3] == ['text', 'integer', 'bigint']
+    assert 'id' not in found
+
+
+def test_a_cast_prefix_filters_the_types() -> None:
+    """And they match like anything else."""
+    assert texts("SELECT * FROM reports_report r WHERE x > '7 days'::inte⌶") == ['integer', 'interval']
+
+
+def test_a_cast_names_the_type_of_its_comparison() -> None:
+    """`'7 days'::interval > ` is temporal however the literal is spelled."""
+    found = texts("SELECT * FROM reports_report r WHERE '7 days'::interval > ⌶")
+    assert found == ['dt_created']
+
+
+def test_a_cast_on_a_column_overrides_the_column_type() -> None:
+    """`r.id::text > ` compares text, whatever r.id is."""
+    found = texts('SELECT * FROM reports_report r WHERE r.id::text > ⌶')
+    assert 'name' in found
+    assert 'id' not in found
+
+
+def test_a_bare_literal_does_not_narrow() -> None:
+    """An unadorned literal is of unknown type in Postgres and coerces to what it meets."""
+    found = texts("SELECT * FROM reports_report r WHERE '7 days' > ⌶")
+    assert 'id' in found
+    assert 'name' in found
+
+
+def test_ansi_has_no_cast_operator_so_no_type_position() -> None:
+    """Strict ANSI writes CAST(x AS interval); `::` is not a cast there."""
+    sql, caret = split_caret("SELECT * FROM reports_report r WHERE x > '7 days'::⌶")
+    assert derive_request(sql, caret, ANSI).expecting != 'type'
 
 
 def test_a_comparison_narrows_to_its_own_type() -> None:

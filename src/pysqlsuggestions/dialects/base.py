@@ -146,6 +146,14 @@ class Dialect:
     """Offered as completions. Ideally introspected; the static set is the offline fallback."""
     reserved: frozenset[str] = frozenset()
     """Lowercased. Drives quoting decisions, which must be made before any connection exists."""
+    types: tuple[str, ...] = ()
+    """
+    Data type names, for a cast position. Ordered by how often they are wanted.
+
+    Static here, as the offline fallback plan.md §4 asks for; a backend that can
+    introspect its types should prefer that, since a user's own composite and
+    enum types belong in this list too.
+    """
     catalog_queries: CatalogQueries = field(default_factory=CatalogQueries)
 
     @property

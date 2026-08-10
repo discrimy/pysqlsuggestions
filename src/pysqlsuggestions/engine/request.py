@@ -13,6 +13,7 @@ from typing import Literal
 
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.engine.analyse import (
+    after_cast,
     after_operand,
     clause_at,
     comparand_at,
@@ -45,6 +46,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
+    comparand, comparand_type = comparand_at(tokens, caret, dialect)
     return Request(
         kinds=_kinds_for(clause, qualifier, scope, dialect, expecting),
         prefix=prefix,
@@ -52,7 +54,8 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         qualifier=qualifier,
         clause=clause,
         scope=scope,
-        comparand=comparand_at(tokens, caret),
+        comparand=comparand,
+        comparand_type=comparand_type,
         expecting=expecting,
         keyword_case=_keyword_case(tokens, caret, dialect),
     )
@@ -65,14 +68,16 @@ def _expecting(
     caret: int,
     clause: str | None,
     dialect: Dialect,
-) -> Literal['operand', 'operator', 'connective']:
+) -> Literal['operand', 'operator', 'connective', 'type']:
     """
-    Which of the three expression positions the caret is in.
+    Which expression position the caret is in.
 
     A clause with no operators has no predicates either — a select list, a GROUP
     BY — so a completed item there goes straight to 'connective', where its
     `followed_by` list lives.
     """
+    if after_cast(tokens, caret, dialect):
+        return 'type'
     if not after_operand(tokens, caret, dialect):
         return 'operand'
     found = dialect.clauses.get(clause) if clause else None
@@ -111,7 +116,7 @@ def _kinds_for(
     expecting: str,
 ) -> tuple[Kind, ...]:
     """What the caret position admits, narrowed by any qualifier."""
-    if not qualifier:
+    if not qualifier or expecting == 'type':
         return _clause_kinds(clause, scope, dialect, expecting)
     return _qualified_kinds(qualifier, scope, dialect)
 
@@ -137,6 +142,8 @@ def _clause_kinds(
     offering one is worse than offering nothing. Which keywords depends on
     whether the predicate is finished — see `Request.expecting`.
     """
+    if expecting == 'type':
+        return (Kind.TYPE,)
     if clause is None:
         return (Kind.KEYWORD,)
     found = dialect.clauses.get(clause)
