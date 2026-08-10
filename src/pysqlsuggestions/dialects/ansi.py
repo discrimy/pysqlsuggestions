@@ -18,24 +18,44 @@ RESERVED = frozenset(
 COLUMN_EXPRESSION = (Kind.COLUMN, Kind.FUNCTION)
 RELATION_REFERENCE = (Kind.TABLE, Kind.SCHEMA)
 
-_AFTER_RELATION = (
-    'WHERE',
-    'JOIN',
-    'LEFT JOIN',
-    'INNER JOIN',
-    'CROSS JOIN',
-    'GROUP BY',
-    'ORDER BY',
-    'LIMIT',
-    'OFFSET',
-    'UNION',
-    'AS',
-)
 _COMPARISON = ('=', '<>', '<', '<=', '>', '>=')
 """Ordered by how often they are what you meant, not alphabetically."""
 
 _CONTINUES_PREDICATE = ('IS NULL', 'IS NOT NULL', 'IN', 'NOT IN', 'LIKE', 'NOT LIKE', 'ILIKE', 'BETWEEN')
 """What can follow an operand that has no comparison yet."""
+
+_ORDER = (
+    'FROM',
+    'WHERE',
+    'GROUP BY',
+    'HAVING',
+    'WINDOW',
+    'ORDER BY',
+    'LIMIT',
+    'OFFSET',
+    'FETCH',
+    'UNION',
+    'INTERSECT',
+    'EXCEPT',
+)
+"""
+The canonical clause sequence of a SELECT.
+
+Each clause's continuations are derived from this rather than listed by hand.
+Curating a dozen independent lists is how `ON` ended up offering ORDER BY but
+not HAVING, LIMIT or OFFSET: every one of them was a separate chance to forget.
+"""
+
+_JOINS = ('JOIN', 'LEFT JOIN', 'INNER JOIN', 'CROSS JOIN')
+"""A join may follow another join's ON, so these are added back where the order alone would not."""
+
+
+def _onwards(name: str) -> tuple[str, ...]:
+    """Every clause that may follow, in canonical order, starting at `name`."""
+    return _ORDER[_ORDER.index(name) :]
+
+
+_AFTER_RELATION = ('AS', *_JOINS, *_onwards('WHERE'))
 
 CLAUSES = ClauseModel(
     clauses=(
@@ -43,7 +63,7 @@ CLAUSES = ClauseModel(
         # No KEYWORD here: a select list wants columns and functions, and burying
         # them under reserved words is the failure mode this engine exists to avoid.
         # AS/FROM/DISTINCT arrive through `followed_by`, once an item is written.
-        Clause(name='SELECT', suggests=COLUMN_EXPRESSION, followed_by=('AS', 'FROM', 'DISTINCT')),
+        Clause(name='SELECT', suggests=COLUMN_EXPRESSION, followed_by=('AS', 'DISTINCT', *_onwards('FROM'))),
         Clause(name='FROM', follows=frozenset({'SELECT'}), suggests=RELATION_REFERENCE, followed_by=_AFTER_RELATION),
         Clause(
             name='DELETE FROM',
@@ -64,7 +84,7 @@ CLAUSES = ClauseModel(
             name='JOIN',
             follows=frozenset({'FROM', 'JOIN'}),
             suggests=RELATION_REFERENCE,
-            followed_by=('ON', 'USING', 'AS'),
+            followed_by=('AS', 'ON', 'USING'),
         ),
         Clause(
             name='ON',
@@ -72,21 +92,26 @@ CLAUSES = ClauseModel(
             suggests=COLUMN_EXPRESSION,
             operators=_COMPARISON,
             after_operand=_CONTINUES_PREDICATE,
-            followed_by=('AND', 'OR', 'JOIN', 'LEFT JOIN', 'WHERE', 'GROUP BY', 'ORDER BY'),
+            followed_by=('AND', 'OR', *_JOINS, *_onwards('WHERE')),
         ),
-        Clause(name='USING', follows=frozenset({'JOIN'}), suggests=(Kind.COLUMN,), followed_by=('WHERE', 'JOIN')),
+        Clause(
+            name='USING',
+            follows=frozenset({'JOIN'}),
+            suggests=(Kind.COLUMN,),
+            followed_by=(*_JOINS, *_onwards('WHERE')),
+        ),
         Clause(
             name='WHERE',
             suggests=COLUMN_EXPRESSION,
             operators=_COMPARISON,
             after_operand=_CONTINUES_PREDICATE,
-            followed_by=('AND', 'OR', 'GROUP BY', 'ORDER BY', 'LIMIT', 'OFFSET', 'RETURNING'),
+            followed_by=('AND', 'OR', 'RETURNING', *_onwards('GROUP BY')),
         ),
         Clause(
             name='GROUP BY',
             follows=frozenset({'FROM', 'WHERE'}),
             suggests=COLUMN_EXPRESSION,
-            followed_by=('HAVING', 'ORDER BY', 'LIMIT'),
+            followed_by=_onwards('HAVING'),
         ),
         Clause(
             name='HAVING',
@@ -94,17 +119,17 @@ CLAUSES = ClauseModel(
             suggests=COLUMN_EXPRESSION,
             operators=_COMPARISON,
             after_operand=_CONTINUES_PREDICATE,
-            followed_by=('AND', 'OR', 'ORDER BY', 'LIMIT'),
+            followed_by=('AND', 'OR', *_onwards('WINDOW')),
         ),
-        Clause(name='WINDOW', suggests=COLUMN_EXPRESSION, followed_by=('ORDER BY', 'LIMIT')),
+        Clause(name='WINDOW', suggests=COLUMN_EXPRESSION, followed_by=_onwards('ORDER BY')),
         Clause(
             name='ORDER BY',
             suggests=COLUMN_EXPRESSION,
-            followed_by=('ASC', 'DESC', 'NULLS FIRST', 'NULLS LAST', 'LIMIT', 'OFFSET'),
+            followed_by=('ASC', 'DESC', 'NULLS FIRST', 'NULLS LAST', *_onwards('LIMIT')),
         ),
-        Clause(name='PARTITION BY', suggests=COLUMN_EXPRESSION, followed_by=('ORDER BY',)),
-        Clause(name='LIMIT', suggests=(Kind.KEYWORD,), followed_by=('OFFSET',)),
-        Clause(name='OFFSET', suggests=(Kind.KEYWORD,), followed_by=('LIMIT', 'FETCH')),
+        Clause(name='PARTITION BY', suggests=COLUMN_EXPRESSION, followed_by=_onwards('ORDER BY')),
+        Clause(name='LIMIT', suggests=(Kind.KEYWORD,), followed_by=_onwards('OFFSET')),
+        Clause(name='OFFSET', suggests=(Kind.KEYWORD,), followed_by=_onwards('FETCH')),
         Clause(name='FETCH', suggests=(Kind.KEYWORD,)),
         Clause(
             name='SET',

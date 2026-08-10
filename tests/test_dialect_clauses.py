@@ -50,6 +50,27 @@ def test_postgres_clause_vocabulary(name: str) -> None:
     assert ANSI.clauses.get(name) is None
 
 
+@pytest.mark.parametrize('clause', ['ON', 'USING', 'FROM', 'JOIN'])
+def test_every_later_clause_can_follow_a_join_block(clause: str) -> None:
+    """
+    A finished ON takes anything a FROM does. Curating each list by hand meant
+    ON offered ORDER BY but not HAVING, LIMIT or OFFSET.
+    """
+    found = ANSI.clauses.get(clause)
+    assert found is not None
+    tail = found.followed_by if clause != 'JOIN' else ANSI.clauses.get('ON').followed_by  # type: ignore[union-attr]
+    assert {'WHERE', 'GROUP BY', 'HAVING', 'WINDOW', 'ORDER BY', 'LIMIT', 'OFFSET', 'UNION'} <= set(tail)
+
+
+def test_a_clause_does_not_offer_itself_or_anything_earlier() -> None:
+    """The order is a sequence: nothing before GROUP BY may follow it."""
+    group_by = ANSI.clauses.get('GROUP BY')
+    assert group_by is not None
+    assert 'WHERE' not in group_by.followed_by
+    assert 'GROUP BY' not in group_by.followed_by
+    assert 'HAVING' in group_by.followed_by
+
+
 def test_extending_did_not_disturb_ansi() -> None:
     """ANSI is shared by all three; extend() must never mutate it."""
     assert len(ANSI.clauses.clauses) == 24

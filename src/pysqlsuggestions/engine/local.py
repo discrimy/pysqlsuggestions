@@ -36,10 +36,13 @@ def _select_list(request: Request) -> list[Candidate]:
 
     `GROUP BY` takes the non-aggregated ones and `ORDER BY` accepts aliases and
     ordinals that are not columns of any table — a catalog cannot supply either.
+
+    Only where an operand is wanted. `GROUP BY d.title ` has one already, and a
+    second name there needs a comma first.
     """
     scope = request.scope
     projection = scope.projection if scope else None
-    if projection is None or not projection.columns:
+    if projection is None or not projection.columns or request.expecting != 'operand':
         return []
 
     candidates = [

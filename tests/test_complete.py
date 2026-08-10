@@ -327,6 +327,13 @@ def test_order_by_offers_select_list_names() -> None:
     assert found[:2] == ['total', 'name']
 
 
+def test_a_select_list_name_is_only_offered_where_an_operand_fits() -> None:
+    """`GROUP BY name ` has its operand; another name there needs a comma first."""
+    sql = 'SELECT count(*) AS total, name FROM reports_report GROUP BY name '
+    assert 'name' not in [s.text for s in complete(sql, len(sql), POSTGRES, catalog())]
+    assert 'name' in [s.text for s in complete(sql + ', ', len(sql) + 2, POSTGRES, catalog())]
+
+
 def test_order_by_offers_ordinals() -> None:
     """`ORDER BY 1` is legal and is not a column of any table."""
     assert '1' in texts('SELECT name, executions FROM reports_report ORDER BY ⌶')
