@@ -44,7 +44,12 @@ extend-exclude = ['*.md']
 
 [tool.ruff.lint]
 select = ['A', 'B', 'BLE', 'C4', 'COM', 'D', 'E', 'F', 'G', 'I', 'PT', 'Q', 'RET', 'RSE', 'SIM', 'T20', 'UP', 'W']
-ignore = ['A003', 'COM812', 'D100', 'D104', 'D105', 'D106', 'D107', 'D203', 'D205', 'D212', 'D4', 'PT009', 'RET504']
+ignore = [
+    'A003', 'COM812', 'D100', 'D104', 'D105', 'D106', 'D107', 'D203', 'D205', 'D212', 'D4', 'PT009', 'RET504',
+    # Reserved-word and keyword sets are word lists. A 100-entry list literal at one
+    # word per line is unreadable; a whitespace-split block reads like the docs it came from.
+    'SIM905',
+]
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = 'single'

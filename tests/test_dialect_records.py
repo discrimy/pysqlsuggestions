@@ -1,0 +1,56 @@
+"""Dialects are composed data. These tests pin the composition mechanics."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+from pysqlsuggestions.dialects.ansi import ANSI
+from pysqlsuggestions.dialects.base import Clause, ClauseModel, Namespace, Syntax
+from pysqlsuggestions.types import Kind
+
+
+def test_extend_appends_without_mutating() -> None:
+    """A dialect adding a clause must not disturb the model it extended."""
+    base = ClauseModel(clauses=(Clause(name='WHERE', suggests=(Kind.COLUMN,)),))
+    extended = base.extend(Clause(name='PREWHERE', suggests=(Kind.COLUMN,)))
+    assert [c.name for c in base.clauses] == ['WHERE']
+    assert [c.name for c in extended.clauses] == ['WHERE', 'PREWHERE']
+
+
+def test_get_finds_by_name() -> None:
+    """Lookup is by exact uppercased name."""
+    model = ClauseModel(clauses=(Clause(name='GROUP BY', suggests=(Kind.COLUMN,)),))
+    found = model.get('GROUP BY')
+    assert found is not None
+    assert found.suggests == (Kind.COLUMN,)
+    assert model.get('ORDER BY') is None
+
+
+def test_names_are_sorted_longest_first() -> None:
+    """clause_at matches greedily, so multi-word names must be tried before their prefixes."""
+    model = ClauseModel(clauses=(Clause(name='BY'), Clause(name='GROUP BY'), Clause(name='ORDER BY')))
+    assert model.names()[0] in {'GROUP BY', 'ORDER BY'}
+    assert model.names()[-1] == 'BY'
+
+
+def test_replace_composes_a_variant() -> None:
+    """The documented way to build a dialect: replace fields, never subclass."""
+    variant = replace(
+        ANSI,
+        name='clickhouse',
+        syntax=replace(ANSI.syntax, identifier_quotes=('"', '`'), unquoted_case='preserve'),
+        namespace=Namespace(levels=('database', 'table')),
+    )
+    assert variant.name == 'clickhouse'
+    assert variant.syntax.identifier_quotes == ('"', '`')
+    assert ANSI.syntax.identifier_quotes == ('"',)
+    assert ANSI.namespace.levels == ('schema', 'table')
+
+
+def test_ansi_defaults() -> None:
+    """The fallback dialect must be conservative: no dollar quoting, no :: cast."""
+    assert ANSI.name == 'ansi'
+    assert ANSI.syntax == Syntax()
+    assert ANSI.syntax.dollar_quoting is False
+    assert ANSI.syntax.cast_operator is None
+    assert 'select' in ANSI.reserved
