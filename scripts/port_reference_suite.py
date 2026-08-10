@@ -64,14 +64,6 @@ SKIP = {
 # Known gaps, grouped by root cause. Each is a real behaviour report_service
 # users have today and this library does not yet — a burn-down, not a wontfix.
 GAPS = {
-    'set-returning functions in FROM are not read as relations': [
-        'function_in_from_does_not_swallow_the_rest_of_the_list',
-        'function_in_from_unqualified_scope',
-        'function_column_definition_list',
-        'function_column_definition_list_keeps_later_items',
-        'function_without_alias_is_harmless',
-        'cte_bare_function_takes_its_own_name',
-    ],
     # Not a gap: a deliberate difference. With two relations in view a bare name
     # may not parse — `WHERE id` against two tables that both have one is an
     # ambiguity error — and deduplicating bare names hides the second relation's
@@ -91,32 +83,14 @@ GAPS = {
     'keyword case is decided in the suggestion here, not at insertion': [
         'keywords_stay_prefix_only',
     ],
-    # Not a gap: a deliberate difference. Their engine offers every column of the
-    # qualified relation; this one drops the ones that cannot face the operand on
-    # the left, so `u.id = o.<caret>` withholds `o.created`. Asked for directly:
-    # "Do not suggest columns of incompatible types".
+    # Not a gap: a deliberate difference, and one asked for directly — "do not
+    # suggest columns of incompatible types". Their engine offers every column of
+    # the qualified relation; this one drops the ones that cannot face the value
+    # on the left. `u.id = o.<caret>` withholds `o.created`, and `SET total =
+    # EXCLUDED.<caret>` withholds it too, both because Postgres rejects them.
     'a comparison narrows by type here, and their engine did not narrow at all': [
         'outer_qualifier_inside_an_exists_subquery',
-    ],
-    'LATERAL subqueries are not read as relations': [
-        'lateral_subquery_columns',
-    ],
-    'CTE and derived-table bodies are not analysed recursively enough': [
-        'nested_cte_inside_a_cte_body',
-        'deeply_nested_derived_tables',
-        'derived_table_with_column_list',
-    ],
-    'select-list output naming misses some expression shapes': [
-        'cte_implicit_alias',
-        'cte_boolean_expression_tail_is_not_a_column',
-        'cte_distinct_on',
-        'cte_columns_in_order_by',
-    ],
-    'statement forms beyond SELECT are not fully modelled': [
-        'delete_using_relation_is_in_scope',
-        'insert_column_list_uses_the_target_table',
         'excluded_offers_the_target_columns',
-        'unknown_qualifier_still_falls_back_to_catalog',
     ],
 }
 REASON = {f'test_{name}': reason for reason, names in GAPS.items() for name in names}

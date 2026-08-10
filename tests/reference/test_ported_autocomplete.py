@@ -234,7 +234,6 @@ def test_cte_with_expression_alias(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['double', 'n']
 
 
-@pytest.mark.xfail(strict=True, reason='select-list output naming misses some expression shapes')
 def test_cte_implicit_alias(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE с неявным псевдонимом выражения."""
     sql = 'WITH a as (select count(*) n, u.id x from auth_user u)\nSELECT * FROM a WHERE a.'
@@ -247,14 +246,12 @@ def test_cte_unaliased_expression_is_not_invented(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['id']
 
 
-@pytest.mark.xfail(strict=True, reason='select-list output naming misses some expression shapes')
 def test_cte_boolean_expression_tail_is_not_a_column(cur: MemoryCatalog) -> None:
     """Тестировать отсутствие предложений для булевых выражений в CTE."""
     sql = 'WITH a as (select id, is_staff and is_staff from auth_user)\nSELECT * FROM a WHERE a.'
     assert texts(cur, sql) == ['id']
 
 
-@pytest.mark.xfail(strict=True, reason='set-returning functions in FROM are not read as relations')
 def test_cte_bare_function_takes_its_own_name(cur: MemoryCatalog) -> None:
     """Тестировать предложение собственного имени функции в CTE."""
     sql = 'WITH a as (select count(*) from orders)\nSELECT * FROM a WHERE a.'
@@ -267,7 +264,6 @@ def test_cte_set_operation_uses_first_branch(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['id']
 
 
-@pytest.mark.xfail(strict=True, reason='select-list output naming misses some expression shapes')
 def test_cte_distinct_on(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE с distinct on."""
     sql = 'WITH a as (select distinct on (id) id, total from orders)\nSELECT * FROM a WHERE a.'
@@ -322,7 +318,6 @@ def test_inner_relation_does_not_leak_outward(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['id']
 
 
-@pytest.mark.xfail(strict=True, reason='statement forms beyond SELECT are not fully modelled')
 def test_unknown_qualifier_still_falls_back_to_catalog(cur: MemoryCatalog) -> None:
     """Тестировать fallback к каталогу для неизвестного qualifier."""
     sql = 'WITH a as (select id from auth_user)\nSELECT * FROM a WHERE auth_user.'
@@ -449,7 +444,6 @@ def test_with_is_not_confused_by_other_uses(cur: MemoryCatalog) -> None:
 ALL_ORDER_COLUMNS = ['created', 'id', 'total', 'user_id']
 
 
-@pytest.mark.xfail(strict=True, reason='CTE and derived-table bodies are not analysed recursively enough')
 def test_nested_cte_inside_a_cte_body(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для вложенного CTE в теле CTE."""
     sql = (
@@ -478,7 +472,6 @@ def test_cte_two_qualified_stars_dedupe(cur: MemoryCatalog) -> None:
     assert sorted(got) == sorted(['id', 'username', 'email', 'is_staff', 'date_joined', 'user_id', 'total', 'created'])
 
 
-@pytest.mark.xfail(strict=True, reason='CTE and derived-table bodies are not analysed recursively enough')
 def test_derived_table_with_column_list(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для derived table с объявлением колонок."""
     sql = 'SELECT * FROM (SELECT id, email FROM auth_user) s(a, b) WHERE s.'
@@ -546,7 +539,6 @@ def test_cte_from_a_previous_statement_is_not_visible(cur: MemoryCatalog) -> Non
     assert sorted(texts(cur, sql, limit=50)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='LATERAL subqueries are not read as relations')
 def test_lateral_subquery_columns(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для LATERAL subquery."""
     sql = 'SELECT * FROM auth_user u, LATERAL (SELECT total FROM orders WHERE user_id = u.id) l WHERE l.'
@@ -586,7 +578,6 @@ def test_apply_suggestion_on_a_cte_column(cur: MemoryCatalog) -> None:
     assert caret == len(new_sql)
 
 
-@pytest.mark.xfail(strict=True, reason='CTE and derived-table bodies are not analysed recursively enough')
 def test_deeply_nested_derived_tables(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для глубоко вложенных derived tables."""
     sql = 'SELECT * FROM (SELECT * FROM (SELECT id, email FROM auth_user) inner_t) outer_t WHERE outer_t.'
@@ -642,7 +633,6 @@ def test_cte_columns_in_having(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql, limit=50)) == ['id', 'total']
 
 
-@pytest.mark.xfail(strict=True, reason='select-list output naming misses some expression shapes')
 def test_cte_columns_in_order_by(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE в ORDER BY."""
     sql = 'WITH a AS (SELECT id, total FROM orders)\nSELECT id FROM a ORDER BY '
@@ -703,7 +693,6 @@ def test_cte_and_derived_table_both_in_scope(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql, limit=50)) == ['id', 'total']
 
 
-@pytest.mark.xfail(strict=True, reason='statement forms beyond SELECT are not fully modelled')
 def test_insert_column_list_uses_the_target_table(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для INSERT с CTE."""
     sql = 'WITH a AS (SELECT id FROM auth_user)\nINSERT INTO orders ('
@@ -770,42 +759,36 @@ def test_keyword_casing_still_follows_what_was_typed(cur: MemoryCatalog) -> None
     assert apply_suggestion('SELECT * FROM auth_user WH', upper[0])[0].endswith('WHERE')
 
 
-@pytest.mark.xfail(strict=True, reason='set-returning functions in FROM are not read as relations')
 def test_function_in_from_does_not_swallow_the_rest_of_the_list(cur: MemoryCatalog) -> None:
     """Тестировать видимость колонок при function в FROM с другими tables."""
     sql = 'SELECT * FROM generate_series(1, 10) g, auth_user u WHERE u.'
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='set-returning functions in FROM are not read as relations')
 def test_function_in_from_unqualified_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для function in FROM без qualifier."""
     sql = 'SELECT * FROM generate_series(1, 10) g, auth_group WHERE '
     assert sorted(texts(cur, sql, limit=50)) == ['id', 'name']
 
 
-@pytest.mark.xfail(strict=True, reason='set-returning functions in FROM are not read as relations')
 def test_function_column_definition_list(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для function с column definition list."""
     sql = 'SELECT * FROM jsonb_to_recordset(x) AS t(a int, b text), orders o WHERE t.'
     assert sorted(texts(cur, sql)) == ['a', 'b']
 
 
-@pytest.mark.xfail(strict=True, reason='set-returning functions in FROM are not read as relations')
 def test_function_column_definition_list_keeps_later_items(cur: MemoryCatalog) -> None:
     """Тестировать видимость колонок после function с column definition list."""
     sql = 'SELECT * FROM jsonb_to_recordset(x) AS t(a int, b text), orders o WHERE o.'
     assert sorted(texts(cur, sql)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='set-returning functions in FROM are not read as relations')
 def test_function_without_alias_is_harmless(cur: MemoryCatalog) -> None:
     """Тестировать, что function без alias не ломает scope."""
     sql = 'SELECT * FROM generate_series(1, 10), auth_group WHERE '
     assert sorted(texts(cur, sql, limit=50)) == ['id', 'name']
 
 
-@pytest.mark.xfail(strict=True, reason='statement forms beyond SELECT are not fully modelled')
 def test_delete_using_relation_is_in_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для DELETE USING."""
     sql = 'DELETE FROM orders o USING auth_user u WHERE u.'
@@ -901,7 +884,7 @@ def test_dollar_quote_inside_a_cte(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['id', 'note']
 
 
-@pytest.mark.xfail(strict=True, reason='statement forms beyond SELECT are not fully modelled')
+@pytest.mark.xfail(strict=True, reason='a comparison narrows by type here, and their engine did not narrow at all')
 def test_excluded_offers_the_target_columns(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для EXCLUDED в ON CONFLICT UPDATE."""
     sql = 'INSERT INTO orders (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET total = EXCLUDED.'

@@ -91,15 +91,15 @@ CASES: tuple[GoldenRequest, ...] = (
     # --- namespace depth -----------------------------------------------------
     GoldenRequest(
         sql='SELECT * FROM analytics.⌶',
-        kinds=('table',),
+        kinds=('column', 'table'),
         qualifier=('analytics',),
         clause='FROM',
         dialect='postgres',
-        note='segment 1 reads as a schema',
+        note='segment 1 reads as a schema, or as a relation not in the FROM list',
     ),
     GoldenRequest(
         sql='SELECT * FROM analytics.⌶',
-        kinds=('table',),
+        kinds=('column', 'table'),
         qualifier=('analytics',),
         clause='FROM',
         dialect='clickhouse',

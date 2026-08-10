@@ -41,8 +41,12 @@ def test_from_clause_offers_tables_and_schemas() -> None:
 
 
 def test_namespace_qualifier_postgres() -> None:
-    """One segment names a schema, so the answer is tables."""
-    assert request('SELECT * FROM analytics.⌶').kinds == (Kind.TABLE,)
+    """
+    One segment above a table names a schema, so the answer is tables — and
+    also columns, because that is how a relation not in the FROM list is
+    written. Both readings are legal and only the catalog can decide.
+    """
+    assert request('SELECT * FROM analytics.⌶').kinds == (Kind.COLUMN, Kind.TABLE)
 
 
 def test_namespace_qualifier_trino() -> None:
@@ -52,7 +56,7 @@ def test_namespace_qualifier_trino() -> None:
 
 def test_namespace_qualifier_clickhouse() -> None:
     """ClickHouse's first segment is a database, so the answer is tables."""
-    assert request('SELECT * FROM analytics.⌶', CLICKHOUSE).kinds == (Kind.TABLE,)
+    assert request('SELECT * FROM analytics.⌶', CLICKHOUSE).kinds == (Kind.COLUMN, Kind.TABLE)
 
 
 def test_qualifier_deeper_than_the_namespace_reads_as_a_column() -> None:
@@ -61,8 +65,12 @@ def test_qualifier_deeper_than_the_namespace_reads_as_a_column() -> None:
 
 
 def test_trino_two_segment_qualifier_reaches_tables() -> None:
-    """Three namespace levels mean catalog.schema. still has a table level to offer."""
-    assert request('SELECT * FROM prod.analytics.⌶', TRINO).kinds == (Kind.TABLE,)
+    """
+    Three namespace levels mean `catalog.schema.` still has a table level to
+    offer — and, as everywhere a table level is reached, a column too, since
+    `schema.table.` is written the same way.
+    """
+    assert request('SELECT * FROM prod.analytics.⌶', TRINO).kinds == (Kind.COLUMN, Kind.TABLE)
 
 
 def test_alias_beats_a_schema_of_the_same_name() -> None:
@@ -230,7 +238,7 @@ def test_readme_qualifier_example_is_accurate() -> None:
 def test_readme_dialect_example_is_accurate() -> None:
     """One tuple, three answers to the same text."""
     sql = 'SELECT * FROM analytics.'
-    assert derive_request(sql, len(sql), POSTGRES).kinds == (Kind.TABLE,)
+    assert derive_request(sql, len(sql), POSTGRES).kinds == (Kind.COLUMN, Kind.TABLE)
     assert derive_request(sql, len(sql), TRINO).kinds == (Kind.SCHEMA,)
 
 

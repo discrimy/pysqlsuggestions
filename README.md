@@ -69,7 +69,7 @@ And one tuple per dialect gives three different answers to the same text:
 from pysqlsuggestions.dialects.trino import TRINO
 
 sql = 'SELECT * FROM analytics.'
-derive_request(sql, len(sql), POSTGRES).kinds  # (Kind.TABLE,)   analytics is a schema
+derive_request(sql, len(sql), POSTGRES).kinds  # (Kind.COLUMN, Kind.TABLE)  a schema, or a relation
 derive_request(sql, len(sql), TRINO).kinds     # (Kind.SCHEMA,)  analytics is a catalog
 ```
 

@@ -14,9 +14,15 @@ from __future__ import annotations
 
 from pysqlsuggestions.types import Candidate, Kind, Request
 
-_SELECT_LIST_CLAUSES = frozenset({'GROUP BY', 'ORDER BY', 'HAVING', 'PARTITION BY', 'LIMIT BY'})
+_SELECT_LIST_CLAUSES = frozenset({'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT BY'})
+"""
+Clauses answered from this query's own select list.
+
+`PARTITION BY` is not one of them. It sits inside a window spec, which sits
+inside a select item, and offering that item its own output name is circular —
+Postgres does not make select-list aliases visible there either.
+"""
 _ALIAS_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO'})
-_MAX_ORDINALS = 9
 
 
 def local_candidates(request: Request) -> list[Candidate]:
@@ -36,7 +42,9 @@ def local_candidates(request: Request) -> list[Candidate]:
         return _alias_suggestions(request) if request.clause in _ALIAS_CLAUSES else []
     if request.clause in _SELECT_LIST_CLAUSES:
         return _select_list(request)
-    if request.clause in _ALIAS_CLAUSES:
+    if request.clause in _ALIAS_CLAUSES and Kind.TABLE in request.kinds:
+        # Only where a relation may still be named. `INSERT INTO orders (` is
+        # the column list, and a generated alias there is nonsense.
         return _alias_suggestions(request)
     return []
 
@@ -45,8 +53,8 @@ def _select_list(request: Request) -> list[Candidate]:
     """
     The output names of this query's own SELECT list.
 
-    `GROUP BY` takes the non-aggregated ones and `ORDER BY` accepts aliases and
-    ordinals that are not columns of any table — a catalog cannot supply either.
+    `GROUP BY` takes the non-aggregated ones and `ORDER BY` accepts aliases that
+    are not columns of any table — a catalog cannot supply either.
 
     Only where an operand is wanted. `GROUP BY d.title ` has one already, and a
     second name there needs a comma first.
@@ -67,21 +75,6 @@ def _select_list(request: Request) -> list[Candidate]:
         for index, name in enumerate(projection.columns)
     ]
 
-    if request.clause == 'ORDER BY':
-        # Ordinals sit after the names they stand for: `ORDER BY 1` is a shorthand,
-        # not the first thing to offer. They are literals, so they are never quoted.
-        offset = len(projection.columns)
-        candidates += [
-            Candidate(
-                text=str(index + 1),
-                kind=Kind.COLUMN,
-                detail=f'ordinal: {name}',
-                position=offset + index,
-                origin='local',
-                literal=True,
-            )
-            for index, name in enumerate(projection.columns[:_MAX_ORDINALS])
-        ]
     return candidates
 
 

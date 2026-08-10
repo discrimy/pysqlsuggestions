@@ -34,9 +34,15 @@ def test_aliased_outputs_use_the_alias() -> None:
     assert outputs('SELECT sum(total) AS revenue, id FROM orders') == (('revenue', 'id'), ())
 
 
-def test_expression_without_an_alias_has_no_output_name() -> None:
-    """`sum(total)` with no AS contributes nothing referenceable."""
-    assert outputs('SELECT sum(total), id FROM orders') == (('id',), ())
+def test_a_bare_call_is_named_after_its_function() -> None:
+    """
+    `SELECT sum(total)` outputs a column called `sum`, so a CTE wrapping it can
+    be queried by that name. Postgres names it, and an author reading the CTE
+    back will reach for the same word.
+    """
+    assert outputs('SELECT sum(total), id FROM orders') == (('sum', 'id'), ())
+    assert outputs('SELECT row_number() OVER (PARTITION BY id) FROM orders') == (('row_number',), ())
+    assert outputs('SELECT total + 1, id FROM orders') == (('id',), ()), 'an expression names nothing'
 
 
 def test_bare_star_records_its_source() -> None:

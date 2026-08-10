@@ -22,6 +22,13 @@ _JOIN_QUALIFIERS = frozenset(
     """.split(),
 )
 _CTE_MODIFIERS = frozenset({'MATERIALIZED', 'NOT'})
+_FUNCTION_SOURCES = frozenset({'FROM', 'JOIN', 'USING', 'LATERAL'})
+"""
+Where `name(...)` in a relation position is a set-returning function.
+
+`INSERT INTO orders (id)` puts a parenthesis after a relation too, and that one
+is the column list — reading it as an argument list loses the target.
+"""
 _LITERAL_KEYWORDS = frozenset(
     """
     NULL TRUE FALSE CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER SESSION_USER
@@ -484,11 +491,28 @@ def clause_at(
         return None
     depth = depth_at(tokens, caret)
     while depth >= 0:
-        found = _scan_for_clause(tokens, lo, hi, caret, clauses, depth)
+        found = _scan_for_clause(tokens, max(lo, _group_start(tokens, caret, depth)), hi, caret, clauses, depth)
         if found is not None:
             return found
         depth -= 1
     return None
+
+
+def _group_start(tokens: Sequence[Token], caret: int, depth: int) -> int:
+    """
+    Index where the caret's own parenthesised group begins, at `depth`.
+
+    Depth alone does not identify a group: the body of `WITH a AS (SELECT id
+    FROM t)` and the column list of `INSERT INTO orders (` are both depth one,
+    and scanning across both answers the INSERT with the CTE's FROM.
+    """
+    if depth <= 0:
+        return 0
+    for index in range(_index_before(tokens, caret), -1, -1):
+        token = tokens[index]
+        if token.type is TokenType.PUNCT and token.text == '(' and token.depth == depth - 1:
+            return index + 1
+    return 0
 
 
 def _scan_for_clause(
@@ -609,17 +633,20 @@ def _scope_level(
     lo, hi = _branch_at(tokens, lo, hi, caret)
     relations = [_bind(r, ctes) for r in _relations_in(tokens, lo, hi, caret, dialect)]
     derived = _derived_tables(tokens, lo, hi, dialect)
-    for derived_lo, derived_hi, alias in derived:
-        projection = select_outputs(tokens, derived_lo, derived_hi, dialect)
+    for derived_lo, derived_hi, alias, renamed in derived:
+        projection = (
+            Projection(columns=renamed) if renamed else select_outputs(tokens, derived_lo, derived_hi, dialect, ctes)
+        )
         relations.append(Relation(alias=alias, path=(), source='subquery', projection=projection))
 
+    relations += _conflict_alias(tokens, lo, hi, caret, dialect, relations)
     here = Scope(
         relations=tuple(relations),
         ctes=ctes,
         parent=parent,
-        projection=select_outputs(tokens, lo, hi, dialect),
+        projection=select_outputs(tokens, lo, hi, dialect, ctes),
     )
-    opaque = {(body_lo, body_hi) for body_lo, body_hi, _ in derived if not _is_lateral(tokens, body_lo, dialect)}
+    opaque = {(body_lo, body_hi) for body_lo, body_hi, _, _ in derived if not _is_lateral(tokens, body_lo, dialect)}
 
     for inner_lo, inner_hi in _subquery_bodies(tokens, lo, hi) if remaining > 0 else ():
         if tokens[inner_lo].start <= caret <= tokens[inner_hi - 1].end:
@@ -627,20 +654,53 @@ def _scope_level(
             # A CTE body sees the CTEs written before it and nothing of the outer
             # FROM; a derived table sees neither, unless LATERAL asks for it; a
             # correlated subquery in an expression sees everything.
-            declared = cte_scopes.get((inner_lo, inner_hi))
-            opaque_here = declared is not None or (inner_lo, inner_hi) in opaque
+            body_ctes = cte_scopes.get((inner_lo, inner_hi))
+            opaque_here = body_ctes is not None or (inner_lo, inner_hi) in opaque
             return _scope_level(
                 tokens,
                 inner_lo,
                 inner_hi,
                 caret,
                 dialect,
-                ctes if declared is None else declared,
+                ctes if body_ctes is None else body_ctes,
                 parent=None if opaque_here else here,
                 cte_scopes=cte_scopes,
                 remaining=remaining - 1,
             )
     return here
+
+
+_CONFLICT_ALIAS = 'excluded'
+"""
+The row that `ON CONFLICT ... DO UPDATE` could not insert.
+
+Postgres exposes it as a relation shaped exactly like the target, so
+`SET total = EXCLUDED.<caret>` wants the target's columns. Named here rather
+than in the dialect because the clause it belongs to already is: a dialect
+without ON CONFLICT never reaches this.
+"""
+
+
+def _conflict_alias(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+    relations: Sequence[Relation],
+) -> list[Relation]:
+    """The `excluded` pseudo-relation, when the caret is past an ON CONFLICT."""
+    if not relations or dialect.clauses.get('ON CONFLICT') is None:
+        return []
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type is not TokenType.IDENT or token.end >= caret:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
+        if matched is not None and matched[0] == 'ON CONFLICT':
+            target = relations[0]
+            return [Relation(alias=_CONFLICT_ALIAS, path=target.path, source=target.source)]
+    return []
 
 
 def _is_lateral(tokens: Sequence[Token], body_lo: int, dialect: Dialect) -> bool:
@@ -707,21 +767,53 @@ def _derived_tables(
     lo: int,
     hi: int,
     dialect: Dialect,
-) -> list[tuple[int, int, str | None]]:
-    """Subquery bodies in a FROM position, with the alias that names them."""
+) -> list[tuple[int, int, str | None, tuple[str, ...]]]:
+    """
+    Subquery bodies in a FROM position: (body span, alias, declared columns).
+
+    A body qualifies by what introduces it. `FROM (`, `JOIN (` and `LATERAL (`
+    do; a comma does too, because `FROM a, (SELECT ...) b` is a join written
+    the older way. Anything else is an expression subquery, which is a value
+    rather than a relation.
+
+    `(SELECT ...) s(a, b)` renames the outputs, and those names are what the
+    author will reference — the body's own are no longer reachable.
+    """
     out = []
     for body_lo, body_hi in _subquery_bodies(tokens, lo, hi):
         opener = body_lo - 1
         while opener > lo and tokens[opener].text != '(':
             opener -= 1
         before = _skip_back(tokens, opener - 1)
-        if before < lo or tokens[before].type is not TokenType.IDENT:
+        if before < lo:
             continue
-        if tokens[before].value.upper() not in _RELATION_CLAUSES | {'JOIN'}:
+        token = tokens[before]
+        introduced = (
+            token.type is TokenType.IDENT
+            and not token.quoted
+            and token.value.upper() in _RELATION_CLAUSES | {'JOIN', 'LATERAL'}
+        ) or (
+            token.type is TokenType.PUNCT and token.text == ',' and _inside_a_relation_list(tokens, before, lo, dialect)
+        )
+        if not introduced:
             continue
-        alias, _ = _read_alias(tokens, body_hi + 1, hi, dialect)
-        out.append((body_lo, body_hi, alias))
+        alias, after = _read_alias(tokens, body_hi + 1, hi, dialect)
+        declared, _ = _read_declared_columns(tokens, after, hi)
+        out.append((body_lo, body_hi, alias, declared))
     return out
+
+
+def _inside_a_relation_list(tokens: Sequence[Token], comma: int, lo: int, dialect: Dialect) -> bool:
+    """Whether the comma at `comma` separates relations rather than expressions."""
+    depth = tokens[comma].depth
+    for index in range(comma - 1, lo - 1, -1):
+        token = tokens[index]
+        if token.type in _SKIP or token.depth != depth:
+            continue
+        matched = _clause_starting_at(tokens, index, comma, dialect.clauses)
+        if matched is not None:
+            return matched[0] in _RELATION_CLAUSES
+    return False
 
 
 def _bind(relation: Relation, ctes: dict[str, Relation]) -> Relation:
@@ -761,10 +853,10 @@ def _relations_in(
             index += 1
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
-        if matched is None or matched[0] not in _RELATION_CLAUSES:
+        if matched is None or not _introduces_relations(tokens, matched, hi):
             index += 1
             continue
-        index = _read_relation_list(tokens, matched[1], hi, caret, dialect, relations)
+        index = _read_relation_list(tokens, matched[1], hi, caret, dialect, relations, matched[0])
     return relations
 
 
@@ -882,6 +974,21 @@ def _opens_a_query(tokens: Sequence[Token], index: int, hi: int, dialect: Dialec
     return matched is not None and matched[0] in dialect.statement_start
 
 
+def _introduces_relations(tokens: Sequence[Token], matched: tuple[str, int], hi: int) -> bool:
+    """
+    Whether the clause just matched is followed by a list of relations.
+
+    `USING` is two clauses wearing one name: the join's column list, written
+    `USING (a, b)`, and `DELETE FROM t USING other`, which brings a relation
+    into scope exactly as a join does. The parenthesis tells them apart.
+    """
+    name, after = matched
+    if name == 'USING':
+        probe = _skip_forward(tokens, after, hi)
+        return probe >= hi or tokens[probe].text != '('
+    return name in _RELATION_CLAUSES
+
+
 def _clause_starting_at(
     tokens: Sequence[Token],
     index: int,
@@ -924,6 +1031,7 @@ def _read_relation_list(
     caret: int,
     dialect: Dialect,
     out: list[Relation],
+    clause: str = 'FROM',
 ) -> int:
     """Read comma-separated relation references until the next clause keyword."""
     while index < hi:
@@ -946,6 +1054,19 @@ def _read_relation_list(
         if not token.quoted and token.value.upper() in dialect.reserved_upper:
             break
         path, index = _read_dotted_path(tokens, index, hi)
+        call = _skip_forward(tokens, index, hi)
+        if (
+            clause in _FUNCTION_SOURCES
+            and call < hi
+            and tokens[call].type is TokenType.PUNCT
+            and tokens[call].text == '('
+        ):
+            # A set-returning function, not a relation: `FROM generate_series(1, 10) g`.
+            # Its rows have no columns this engine can name, but reading it as a
+            # relation asks the catalog for a table that does not exist and — worse
+            # — leaves the argument list to be read as more relations.
+            index = _read_function_source(tokens, call, hi, dialect, out)
+            continue
         reference_end = path[-1].end
         # A dangling dot means no identifier followed it, so the reference is
         # still being typed: `FROM analytics.<caret>` names no relation yet.
@@ -957,6 +1078,34 @@ def _read_relation_list(
             continue
         alias, index = _read_alias(tokens, index, hi, dialect)
         out.append(Relation(alias=alias, path=tuple(t.value for t in path), source='table'))
+    return index
+
+
+def _read_function_source(
+    tokens: Sequence[Token],
+    call: int,
+    hi: int,
+    dialect: Dialect,
+    out: list[Relation],
+) -> int:
+    """
+    Skip a function call in a FROM list, keeping any relation it declares.
+
+    `AS t(a int, b text)` is a column definition list: it names the only columns
+    this engine can know about such a source, so the alias enters scope with
+    them as its projection. Without one there is nothing to offer, and the
+    relation is left out rather than sent to the catalog as a table name.
+    """
+    index = _matching_paren(tokens, call, hi) + 1
+    alias, index = _read_alias(tokens, index, hi, dialect)
+    declared, index = _read_declared_columns(tokens, index, hi)
+    if alias is not None and declared:
+        # Only with a column definition list. Without one nothing is known about
+        # the rows, and a relation in scope that can answer nothing still counts
+        # towards "more than one relation", which qualifies every other column.
+        out.append(
+            Relation(alias=alias, path=(), source='subquery', projection=Projection(columns=declared)),
+        )
     return index
 
 
@@ -1016,8 +1165,23 @@ def select_outputs(
     Explicit names and aliases go into `columns`. A bare `*` or a qualified
     `t.*` cannot be expanded here — the catalog holds that answer — so the
     relation it refers to is recorded in `stars` for resolve to finish.
+
+    Everything a body declares for itself counts as one of its relations: a
+    derived table inside it, and a WITH of its own. `SELECT * FROM (SELECT id
+    FROM t) d` has to reach `d` to know what its star stands for, and
+    `WITH outer_q AS (WITH inner_q AS (...) SELECT * FROM inner_q)` has to
+    reach inner_q — neither is visible from the level above.
     """
-    body_relations = [_bind(r, ctes or {}) for r in _relations_in(tokens, lo, hi, -1, dialect)]
+    declared, _ = _read_ctes(tokens, lo, hi, dialect)
+    visible = {**(ctes or {}), **declared}
+    body_relations = [_bind(r, visible) for r in _relations_in(tokens, lo, hi, -1, dialect)]
+    for derived_lo, derived_hi, alias, columns_of in _derived_tables(tokens, lo, hi, dialect):
+        nested = (
+            Projection(columns=columns_of)
+            if columns_of
+            else select_outputs(tokens, derived_lo, derived_hi, dialect, visible)
+        )
+        body_relations.append(Relation(alias=alias, path=(), source='subquery', projection=nested))
     base = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
     start = _after_clause(tokens, lo, hi, 'SELECT', dialect, depth=base)
     if start is None or start >= hi:
@@ -1104,8 +1268,15 @@ def _output_of(
     relations: Sequence[Relation],
     dialect: Dialect,
 ) -> tuple[str | None, list[Relation] | None]:
-    """(output name, star sources). At most one of the two is not None."""
-    significant = [t for t in tokens[lo:hi] if t.type not in _SKIP]
+    """
+    (output name, star sources). At most one of the two is not None.
+
+    An item names an output four ways: `AS n`, a bare implicit alias `count(*) n`,
+    a plain or qualified column, and a bare call taking the function's own name.
+    Anything else — `is_staff AND is_staff` — is an expression Postgres calls
+    `?column?`, and nothing useful can be suggested for it.
+    """
+    significant = _without_quantifier([t for t in tokens[lo:hi] if t.type not in _SKIP])
     if not significant:
         return None, None
 
@@ -1115,20 +1286,82 @@ def _output_of(
             return None, [r for r in relations if r.label == label]
         return None, list(relations)
 
-    if len(significant) >= 2 and significant[-2].value.upper() == 'AS':
+    if len(significant) >= 2 and significant[-2].value.upper() == 'AS':  # noqa: PLR2004
         return significant[-1].value, None
 
     if len(significant) == 1 and significant[0].type is TokenType.IDENT:
         return significant[0].value, None
 
-    if len(significant) >= 2 and significant[-1].type is TokenType.IDENT:
-        if significant[-2].text == '.':
-            return significant[-1].value, None
-        word = significant[-1].value.upper()
-        if word not in dialect.reserved_upper and significant[-2].type is not TokenType.PUNCT:
-            return significant[-1].value, None
+    if _is_an_implicit_alias(significant, dialect):
+        return significant[-1].value, None
+
+    if _is_a_call(significant, dialect):
+        # A bare call is named after the function: `SELECT count(*)` outputs
+        # `count`, and so does `row_number() OVER (...)`. The head names it,
+        # however many parenthesised groups follow.
+        return significant[0].value, None
+
+    if len(significant) >= 2 and significant[-1].type is TokenType.IDENT and significant[-2].text == '.':  # noqa: PLR2004
+        return significant[-1].value, None
 
     return None, None
+
+
+def _without_quantifier(significant: list[Token]) -> list[Token]:
+    """
+    Drop a leading `DISTINCT`, `ALL` or `DISTINCT ON (...)` from a select item.
+
+    They qualify the whole select rather than name anything, and leaving them
+    attached makes `SELECT DISTINCT id` look like an expression: `id` follows a
+    reserved word, which is how an operand is told from an alias.
+    """
+    if not significant or significant[0].type is not TokenType.IDENT:
+        return significant
+    if significant[0].value.upper() not in {'DISTINCT', 'ALL'} or significant[0].quoted:
+        return significant
+    rest = significant[1:]
+    if rest and rest[0].type is TokenType.IDENT and rest[0].value.upper() == 'ON':
+        opening = next((index for index, t in enumerate(rest) if t.text == '('), None)
+        if opening is not None:
+            level = 0
+            for index in range(opening, len(rest)):
+                if rest[index].type is not TokenType.PUNCT:
+                    continue
+                level += 1 if rest[index].text == '(' else -1 if rest[index].text == ')' else 0
+                if level == 0:
+                    return rest[index + 1 :]
+    return rest
+
+
+def _is_an_implicit_alias(significant: Sequence[Token], dialect: Dialect) -> bool:
+    """
+    Whether the item ends in a name that renames what precedes it.
+
+    `count(*) n` and `u.id x` do; `is_staff AND is_staff` does not. What tells
+    them apart is the token before: an alias follows a *finished* operand, so a
+    reserved word there means the trailing name is an operand of its own.
+    """
+    minimum = 2
+    if len(significant) < minimum or significant[-1].type is not TokenType.IDENT:
+        return False
+    if significant[-1].value.upper() in dialect.reserved_upper and not significant[-1].quoted:
+        return False
+    before = significant[-2]
+    if before.type is TokenType.PUNCT:
+        return before.text == ')'
+    if before.type is TokenType.IDENT:
+        return before.quoted or before.value.upper() not in dialect.reserved_upper
+    return before.type in (TokenType.NUMBER, TokenType.STRING)
+
+
+def _is_a_call(significant: Sequence[Token], dialect: Dialect) -> bool:
+    """Whether the item is a function call, which Postgres names after the function."""
+    minimum = 2
+    if len(significant) < minimum or significant[0].type is not TokenType.IDENT:
+        return False
+    if not significant[0].quoted and significant[0].value.upper() in dialect.reserved_upper:
+        return False
+    return significant[1].type is TokenType.PUNCT and significant[1].text == '('
 
 
 def _read_ctes(
@@ -1189,13 +1422,26 @@ def _read_ctes(
 
 
 def _read_declared_columns(tokens: Sequence[Token], index: int, hi: int) -> tuple[tuple[str, ...], int]:
-    """Read an optional `(x, y)` column list following a CTE name."""
+    """
+    Read an optional `(x, y)` column list following a CTE or function alias.
+
+    The first identifier of each comma-separated group, because a function's
+    column definition list spells the types too — `AS t(a int, b text)` declares
+    two columns, not four.
+    """
     probe = _skip_forward(tokens, index, hi)
     if probe >= hi or tokens[probe].text != '(':
         return (), index
     close = _matching_paren(tokens, probe, hi)
-    names = tuple(t.value for t in tokens[probe + 1 : close] if t.type is TokenType.IDENT)
-    return names, close + 1
+    names: list[str] = []
+    wanted = True
+    for token in tokens[probe + 1 : close]:
+        if token.type is TokenType.PUNCT and token.text == ',' and token.depth == tokens[probe].depth + 1:
+            wanted = True
+        elif wanted and token.type is TokenType.IDENT:
+            names.append(token.value)
+            wanted = False
+    return tuple(names), close + 1
 
 
 def _matching_paren(tokens: Sequence[Token], index: int, hi: int) -> int:

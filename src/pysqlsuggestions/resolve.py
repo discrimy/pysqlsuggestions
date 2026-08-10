@@ -162,6 +162,11 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         return [_column_candidate(column) for column in reader.columns(schema, table)]
 
     candidates: list[Candidate] = []
+    if Kind.COLUMN in request.kinds:
+        # A name that is not in scope may still be a relation the catalog knows:
+        # `WITH a AS (...) SELECT * FROM a WHERE auth_user.<caret>` reads as the
+        # table. Nothing comes back when it is only a schema name.
+        candidates += [_column_candidate(column) for column in reader.columns(None, request.qualifier[-1])]
     if Kind.TABLE in request.kinds:
         candidates += [_table_candidate(table) for table in reader.tables(request.qualifier[-1])]
     if Kind.SCHEMA in request.kinds:

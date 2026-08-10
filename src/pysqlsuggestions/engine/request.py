@@ -21,6 +21,7 @@ from pysqlsuggestions.engine.analyse import (
     clauses_written,
     comparand_at,
     continues_a_keyword,
+    depth_at,
     in_literal,
     predicate_complete,
     qualifier_and_prefix,
@@ -63,7 +64,11 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
     comparand, comparand_type = comparand_at(tokens, caret, dialect)
     return Request(
-        kinds=_continued_kinds(continues, only, _kinds_for(clause, qualifier, scope, dialect, expecting)),
+        kinds=_continued_kinds(
+            continues,
+            only,
+            _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
+        ),
         prefix=prefix,
         replace_span=span,
         qualifier=qualifier,
@@ -197,10 +202,11 @@ def _kinds_for(
     scope: Scope | None,
     dialect: Dialect,
     expecting: str,
+    inside_a_group: bool = False,
 ) -> tuple[Kind, ...]:
     """What the caret position admits, narrowed by any qualifier."""
     if not qualifier or expecting == 'type':
-        return _clause_kinds(clause, scope, dialect, expecting)
+        return _clause_kinds(clause, scope, dialect, expecting, inside_a_group)
     return _qualified_kinds(qualifier, scope, dialect)
 
 
@@ -209,6 +215,7 @@ def _clause_kinds(
     scope: Scope | None,
     dialect: Dialect,
     expecting: str,
+    inside_a_group: bool = False,
 ) -> tuple[Kind, ...]:
     """
     The kinds the governing clause admits.
@@ -235,6 +242,10 @@ def _clause_kinds(
         # Nothing written yet: a statement may begin, and a whole shape is worth
         # offering alongside the single words that start one.
         return (Kind.SNIPPET, Kind.KEYWORD)
+    if clause == 'INSERT INTO' and inside_a_group:
+        # `INSERT INTO orders (<caret>` is the column list. The clause otherwise
+        # names a relation, and offering another one there cannot parse.
+        return (Kind.COLUMN,)
     found = dialect.clauses.get(clause)
     if found is None:
         return (Kind.KEYWORD,)
@@ -280,7 +291,15 @@ def _qualified_kinds(
         return (Kind.COLUMN,)
 
     kind = _NAMESPACE_KINDS.get(level)
-    return (kind,) if kind is not None else ()
+    if kind is None:
+        return ()
+    if kind is Kind.TABLE:
+        # The union plan.md 3.3 asks for. One segment above a table is a schema,
+        # but it is also how a relation not in the FROM list is written, and a
+        # name matching a real table is far likelier to be that than a schema
+        # that happens to share the name.
+        return (Kind.COLUMN, kind)
+    return (kind,)
 
 
 def _names_a_relation(segment: str, scope: Scope) -> bool:

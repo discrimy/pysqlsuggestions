@@ -342,9 +342,14 @@ def test_a_select_list_name_is_only_offered_where_an_operand_fits() -> None:
     assert 'name' in [s.text for s in complete(sql + ', ', len(sql) + 2, POSTGRES, catalog())]
 
 
-def test_order_by_offers_ordinals() -> None:
-    """`ORDER BY 1` is legal and is not a column of any table."""
-    assert '1' in texts('SELECT name, executions FROM reports_report ORDER BY ⌶')
+def test_order_by_does_not_offer_ordinals() -> None:
+    """
+    `ORDER BY 1` is legal and is not a column of any table, so it was offered
+    for a while. It is noise: the names are what was meant in almost every case,
+    the number is one keystroke to type, and there is nothing to complete once
+    it has been typed. The suite this library inherits does not offer them.
+    """
+    assert '1' not in texts('SELECT name, executions FROM reports_report ORDER BY ⌶')
 
 
 def test_alias_generation() -> None:
