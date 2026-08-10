@@ -82,9 +82,16 @@ def test_an_operator_reopens_the_operand_position() -> None:
     assert request('SELECT * FROM users r WHERE r.id = 1 AND ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
 
 
-def test_a_half_typed_word_is_mid_operand_not_after_one() -> None:
-    """`WHERE na` is still naming a column, so it must not switch to keywords."""
+def test_a_half_typed_word_is_judged_by_what_precedes_it() -> None:
+    """
+    A partial word could become either a column or a keyword.
+
+    `WHERE na` follows the WHERE keyword, so it is naming a column. `> d.id AN`
+    follows a completed operand, so it is turning into AND.
+    """
     assert request('SELECT * FROM users r WHERE na⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+    assert request('SELECT * FROM users r WHERE r.id > 1 AN⌶').kinds == (Kind.OPERATOR, Kind.KEYWORD)
+    assert request('SELECT * FROM users r WHERE r.id = 1 AND na⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
 
 
 def test_the_start_of_a_clause_expects_an_operand() -> None:

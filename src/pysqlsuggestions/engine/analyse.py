@@ -122,14 +122,18 @@ def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool
 
     One token decides it, which is why this needs no expression analysis. A
     name, a literal or a closing paren ends an operand; an operator, a comma, an
-    opening paren or a keyword opens the next one. A caret still inside a word
-    is mid-operand, not after one.
+    opening paren or a keyword opens the next one.
+
+    A half-typed word is skipped rather than answered from, because it could
+    become either: in `WHERE r.id > d.id AN` it is turning into AND, and in
+    `WHERE na` into a column name. What separates them is the token before it —
+    a completed operand in the first, the WHERE keyword in the second.
     """
     index = _index_before(tokens, caret)
     if index < 0:
         return False
     if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
-        return False
+        index -= 1
 
     index = _skip_back(tokens, index)
     if index < 0:
