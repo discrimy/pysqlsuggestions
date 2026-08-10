@@ -151,8 +151,13 @@ STATEMENT_START = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
 TEMPLATES = (
     Template(
         label='SELECT … FROM … AS …',
-        snippet='SELECT $1 FROM $2 AS $3',
-        detail='a whole query, with places to fill in',
+        # Numbered against the order they can be answered, not the order they
+        # are written. The relation comes first because nothing can suggest a
+        # column until it knows the table, and the alias second because the
+        # generated one is derived from that relation's name. The select list is
+        # last, by which point both are in scope.
+        snippet='SELECT $3 FROM $1 AS $2',
+        detail='a whole query: relation first, then its alias, then the columns',
     ),
 )
 

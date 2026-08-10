@@ -169,7 +169,19 @@ let items = [];
 let active = -1;
 let timer = null;
 let seq = 0;
-let pending = [];        // remaining snippet stops, absolute offsets
+// Remaining snippet stops as absolute offsets, kept moving as the text grows.
+// The library reports them relative to the inserted text, which is correct at
+// insertion and stale one keystroke later — following an edit is the editor's job.
+let pending = [];
+let measured = 0;
+
+function trackEdit() {
+  const delta = sql.value.length - measured;
+  measured = sql.value.length;
+  if (!delta || !pending.length) return;
+  const editedAt = sql.selectionStart - Math.max(delta, 0);
+  pending = pending.map((p) => (p >= editedAt ? p + delta : p));
+}
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -318,6 +330,7 @@ function accept(i) {
   if (pending.length) caret = pending.shift();
 
   sql.value = sql.value.slice(0, from) + insert + tail;
+  measured = sql.value.length;
   const parked = caret !== null;          // caret left inside parens or at a stop
   if (caret === null) caret = from + insert.length;
   sql.setSelectionRange(caret, caret);
@@ -339,19 +352,21 @@ function move(delta) {
   if (el) el.scrollIntoView({block: 'nearest'});
 }
 
-sql.addEventListener('input', () => { sql.dataset.example = 'no'; request(); });
+sql.addEventListener('input', () => { sql.dataset.example = 'no'; trackEdit(); request(); });
 sql.addEventListener('click', request);
 sql.addEventListener('keydown', (e) => {
   const open = !pop.hidden && items.length;
   if (e.key === 'ArrowDown' && open) { e.preventDefault(); move(1); }
   else if (e.key === 'ArrowUp' && open) { e.preventDefault(); move(-1); }
   else if ((e.key === 'Enter' || e.key === 'Tab') && open) { e.preventDefault(); accept(active); }
-  // With the popup closed, Tab walks the stops a snippet left behind.
+  // With the popup closed, Tab walks the stops a snippet left behind. Each one
+  // reopens the list: that is the whole point of the ordering — the relation is
+  // filled first so the column stop can offer that relation's columns.
   else if (e.key === 'Tab' && pending.length) {
     e.preventDefault();
     const next = pending.shift();
     sql.setSelectionRange(next, next);
-    request(true);
+    request();
   }
   else if (e.key === 'Escape') { pop.hidden = true; }
   else if (e.key === ' ' && e.ctrlKey) { e.preventDefault(); fire(); }

@@ -24,6 +24,13 @@ def test_placeholders_become_offsets() -> None:
     assert [text[:s] for s in stops] == ['SELECT ', 'SELECT  FROM ', 'SELECT  FROM  AS ']
 
 
+def test_numbering_orders_the_visit_not_the_text() -> None:
+    """`$3` written first is still visited last, which is how the SELECT template works."""
+    text, stops = expand_snippet('SELECT $3 FROM $1 AS $2')
+    assert text == 'SELECT  FROM  AS '
+    assert [text[:s] for s in stops] == ['SELECT  FROM ', 'SELECT  FROM  AS ', 'SELECT ']
+
+
 def test_zero_is_visited_last() -> None:
     """LSP orders $0 after every numbered stop, wherever it appears in the text."""
     text, stops = expand_snippet('a$0b$1c$2')
@@ -67,18 +74,31 @@ def test_the_snippet_matches_on_its_label() -> None:
     assert found[0].label == 'SELECT … FROM … AS …'
 
 
-def test_the_first_stop_is_where_insertion_leaves_the_caret() -> None:
-    """Right after SELECT, where the columns go."""
+def test_the_first_stop_is_the_relation() -> None:
+    """Nothing can suggest a column until it knows the table, so that comes first."""
     chosen = next(s for s in complete('', 0, POSTGRES, CATALOG) if s.kind is Kind.SNIPPET)
     new_sql, caret = apply_suggestion('', chosen)
     assert new_sql == 'SELECT  FROM  AS '
-    assert new_sql[:caret] == 'SELECT '
+    assert new_sql[:caret] == 'SELECT  FROM '
 
 
-def test_the_remaining_stops_travel_with_the_suggestion() -> None:
+def test_the_stops_run_relation_then_alias_then_columns() -> None:
     """A front end that can cycle them needs them all, relative to the insertion point."""
     chosen = next(s for s in complete('', 0, POSTGRES, CATALOG) if s.kind is Kind.SNIPPET)
-    assert chosen.stops == (7, 13, 17)
+    text = chosen.text
+    assert [text[:s] for s in chosen.stops] == ['SELECT  FROM ', 'SELECT  FROM  AS ', 'SELECT ']
+
+
+def test_each_stop_is_answerable_when_it_is_reached() -> None:
+    """The order exists so that every stop has something to offer by the time you get there."""
+    relation = complete('SELECT  FROM  AS ', 13, POSTGRES, CATALOG)
+    assert 'auth_user' in [s.text for s in relation]
+
+    alias = complete('SELECT  FROM auth_user AS ', 26, POSTGRES, CATALOG)
+    assert 'au' in [s.text for s in alias]
+
+    columns = complete('SELECT  FROM auth_user AS au', 7, POSTGRES, CATALOG)
+    assert 'username' in [s.text for s in columns]
 
 
 def test_a_snippet_follows_the_document_casing() -> None:

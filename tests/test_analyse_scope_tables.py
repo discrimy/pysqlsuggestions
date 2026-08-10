@@ -70,6 +70,11 @@ def test_the_half_typed_word_is_not_a_relation() -> None:
     assert rendered('SELECT * FROM us⌶') == []
 
 
+def test_a_dangling_as_is_not_a_relation() -> None:
+    """`FROM users AS ` leaves the AS unconsumed; reading it as a relation puts `as` in scope."""
+    assert rendered('SELECT * FROM users AS ⌶') == [':users']
+
+
 def test_keywords_are_not_read_as_aliases() -> None:
     """`FROM users WHERE` must not alias users to `where`."""
     assert rendered('SELECT * FROM users WHERE ⌶') == [':users']

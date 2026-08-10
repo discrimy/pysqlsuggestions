@@ -592,6 +592,12 @@ def _read_relation_list(
             continue
         if token.type is not TokenType.IDENT:
             break
+        # A reserved word here is a keyword, not a relation. `FROM users AS `
+        # leaves the AS unconsumed once no alias follows it, and reading it as a
+        # relation would put a phantom `as` in scope — which then supplies the
+        # generated alias, and answers `as.` with nothing.
+        if not token.quoted and token.value.upper() in dialect.reserved_upper:
+            break
         path, index = _read_dotted_path(tokens, index, hi)
         reference_end = path[-1].end
         # A dangling dot means no identifier followed it, so the reference is
