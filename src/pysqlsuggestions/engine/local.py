@@ -23,6 +23,13 @@ def local_candidates(request: Request) -> list[Candidate]:
     """Everything answerable from `request` alone."""
     if not request.kinds or request.scope is None:
         return []
+    if request.continues:
+        # A half-written construct answers itself: `IS ` and `CASE WHEN id = 1 `
+        # take their own words, and no catalog holds them.
+        return [
+            Candidate(text=word, kind=Kind.KEYWORD, detail='continues the expression', position=index, origin='local')
+            for index, word in enumerate(request.continues)
+        ]
     if request.expecting == 'alias':
         # Only where a relation was just named. The `AS` in `count(*) AS ` names
         # an output column, and a relation's initials are no answer to that.

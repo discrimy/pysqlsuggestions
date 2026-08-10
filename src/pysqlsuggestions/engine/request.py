@@ -16,9 +16,11 @@ from pysqlsuggestions.engine.analyse import (
     after_as,
     after_cast,
     after_operand,
+    case_position,
     clause_at,
     clauses_written,
     comparand_at,
+    continues_a_keyword,
     in_literal,
     predicate_complete,
     qualifier_and_prefix,
@@ -56,15 +58,17 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
+    continues, only = _continues(tokens, lo, hi, caret, dialect)
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
     comparand, comparand_type = comparand_at(tokens, caret, dialect)
     return Request(
-        kinds=_kinds_for(clause, qualifier, scope, dialect, expecting),
+        kinds=_continued_kinds(continues, only, _kinds_for(clause, qualifier, scope, dialect, expecting)),
         prefix=prefix,
         replace_span=span,
         qualifier=qualifier,
         clause=clause,
         scope=scope,
+        continues=continues,
         comparand=comparand,
         comparand_type=comparand_type,
         expecting=expecting,
@@ -97,10 +101,64 @@ def _expecting(
         return 'alias'
     if not after_operand(tokens, caret, dialect):
         return 'operand'
+    if case_position(tokens, caret) == 'when':
+        # A WHEN branch is a predicate however plain the enclosing clause is:
+        # `SELECT CASE WHEN id ` wants `=`, and SELECT declares no operators.
+        return 'connective' if predicate_complete(tokens, lo, hi, caret, dialect) else 'operator'
     found = dialect.clauses.get(clause) if clause else None
     if found is None or not found.operators:
         return 'connective'
     return 'connective' if predicate_complete(tokens, lo, hi, caret, dialect) else 'operator'
+
+
+_CASE_CONTINUATIONS = {
+    'start': ('WHEN',),
+    'when': ('THEN',),
+    'then': ('WHEN', 'ELSE', 'END'),
+    'else': ('END',),
+}
+
+
+def _continued_kinds(continues: tuple[str, ...], only: bool, otherwise: tuple[Kind, ...]) -> tuple[Kind, ...]:
+    """Kinds for a caret inside a construct: its own words, leading or alone."""
+    if not continues:
+        return otherwise
+    return (Kind.KEYWORD,) if only else (Kind.KEYWORD, *otherwise)
+
+
+def _continues(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> tuple[tuple[str, ...], bool]:
+    """
+    The words that finish a half-written construct here, and whether they are all.
+
+    Two sources: a multi-word keyword the author has started — `IS `, `NULLS ` —
+    and a CASE expression, whose branches are the same shape but tracked by
+    position rather than by the words immediately to the left.
+
+    Straight after `CASE` the words are a lead rather than the whole answer:
+    `CASE WHEN` and `CASE x WHEN` are both real, so a column still belongs.
+    Everywhere else nothing but these words can parse.
+    """
+    found = continues_a_keyword(tokens, caret)
+    if found:
+        return found, True
+
+    where = case_position(tokens, caret)
+    if where is None:
+        return (), False
+    if where == 'start':
+        return _CASE_CONTINUATIONS['start'], after_operand(tokens, caret, dialect)
+    if not after_operand(tokens, caret, dialect):
+        # Mid-branch the ordinary rules apply: `THEN ` and `WHEN ` open operands.
+        return (), False
+    if where == 'when' and not predicate_complete(tokens, lo, hi, caret, dialect):
+        return (), False
+    return _CASE_CONTINUATIONS.get(where, ()), True
 
 
 def _keyword_case(tokens: Sequence[Token], caret: int, dialect: Dialect) -> Literal['lower', 'upper'] | None:

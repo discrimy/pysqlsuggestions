@@ -225,7 +225,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         clause = dialect.clauses.get(request.clause) if request.clause else None
         candidates += [
             Candidate(text=operator, kind=Kind.OPERATOR, detail='operator', position=index, origin='keyword')
-            for index, operator in enumerate(clause.operators if clause else ())
+            for index, operator in enumerate(_operators(clause, dialect))
         ]
 
     if Kind.KEYWORD in request.kinds:
@@ -250,6 +250,10 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
     continuation ties and the tiebreak sorts them by name length, which puts
     `OR` before `AND` and `FETCH` before `WHERE`.
     """
+    if request.continues:
+        # The construct under the caret named its own continuations; a clause's
+        # list would talk about the statement, which is not what is unfinished.
+        return []
     clause = dialect.clauses.get(request.clause) if request.clause else None
     if clause is None and dialect.statement_start:
         # No clause means no statement yet, so nothing can say what follows.
@@ -278,6 +282,23 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
         for word, description in reader.keywords()
     ]
+
+
+def _operators(clause: object, dialect: Dialect) -> tuple[str, ...]:
+    """
+    Comparison operators for this position.
+
+    A clause that declares its own wins. Otherwise the caret is in a predicate
+    the clause model does not own — a `CASE WHEN` branch inside a select list —
+    and WHERE's operators are the dialect's answer to "how are two values
+    compared here", which is the same question.
+    """
+    declared = getattr(clause, 'operators', ())
+    if declared:
+        found: tuple[str, ...] = declared
+        return found
+    fallback = dialect.clauses.get('WHERE')
+    return fallback.operators if fallback else ()
 
 
 def _find_relation(label: str, scope: Scope) -> Relation | None:

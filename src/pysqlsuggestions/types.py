@@ -184,6 +184,15 @@ class Request:
     a clause's `after_operand` and `followed_by` lists, and resolve has no
     tokens to work it out for itself.
     """
+    continues: tuple[str, ...] = ()
+    """
+    Words that finish the construct under the caret, when it is not a clause.
+
+    `WHERE id IS ` and `SELECT CASE WHEN id = 1 ` are both mid-construct, and
+    neither the clause model nor the catalog has anything to say about them —
+    the clause is WHERE or SELECT either way. Non-empty means these words are
+    the whole answer.
+    """
     statement: str | None = None
     """
     Which kind of statement this is: SELECT, UPDATE, INSERT INTO...

@@ -163,8 +163,64 @@ def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool
         return _star_is_an_item(tokens, index, dialect)
     if token.type is TokenType.IDENT:
         word = token.value.upper()
+        if word in _CLOSES_ITEM:
+            return True
         return token.quoted or word in _LITERAL_KEYWORDS or word not in dialect.keywords
     return False
+
+
+_CLOSES_ITEM = frozenset({'ASC', 'DESC', 'FIRST', 'LAST', 'END'})
+"""
+Keywords that finish the item before them instead of opening a new one.
+
+The general rule reads a reserved word as the start of an operand, which is
+right for `AND` and `NOT` and wrong for these: `ORDER BY id ASC ` takes LIMIT,
+not a second column, and accepting one there writes `ORDER BY id ASC name`.
+"""
+
+_CONTINUES = {
+    ('IS',): ('NULL', 'NOT NULL', 'TRUE', 'FALSE', 'DISTINCT FROM'),
+    ('IS', 'NOT'): ('NULL', 'TRUE', 'FALSE', 'DISTINCT FROM'),
+    ('NULLS',): ('FIRST', 'LAST'),
+}
+"""
+Multi-word constructs and the words that finish them.
+
+The clause model carries `IS NULL` as one string, which is reachable while the
+whole thing is being typed and unreachable the moment the author writes `IS`
+themselves — at which point `IS` reads as a keyword, an operand looks like it
+is starting, and the offer is a column name.
+"""
+
+_LONGEST_CONTINUATION = max(len(words) for words in _CONTINUES)
+
+
+def continues_a_keyword(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:
+    """
+    The words that finish the half-written construct left of the caret, if any.
+
+    Longest match wins, so `IS NOT ` answers with its own list rather than the
+    one `IS ` would give. A word still being typed is skipped: `IS NUL` is `IS `
+    with a prefix, and the prefix does the narrowing.
+    """
+    index = _index_before(tokens, caret)
+    if index >= 0 and tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
+        index -= 1
+
+    written: list[str] = []
+    cursor = _skip_back(tokens, index)
+    while cursor >= 0 and len(written) < _LONGEST_CONTINUATION:
+        token = tokens[cursor]
+        if token.type is not TokenType.IDENT or token.quoted:
+            break
+        written.append(token.value.upper())
+        cursor = _skip_back(tokens, cursor - 1)
+
+    for length in range(len(written), 0, -1):
+        found = _CONTINUES.get(tuple(reversed(written[:length])))
+        if found is not None:
+            return found
+    return ()
 
 
 def _star_is_an_item(tokens: Sequence[Token], index: int, dialect: Dialect) -> bool:
@@ -314,6 +370,11 @@ def predicate_complete(
     Tracked rather than parsed: a comparison operator or a predicate keyword
     arms it, a connective or a new clause disarms it. That is enough to tell the
     two positions apart without an expression grammar.
+
+    A group that closed before the caret is read as a whole. `WHERE (a AND b) `
+    is a finished predicate, but its comparisons are a level deeper than the
+    scan reaches, so without this the caret looks like it is still waiting for
+    an operator and offers `BETWEEN` after a closing paren.
     """
     depth = depth_at(tokens, caret)
     armed = False
@@ -323,6 +384,8 @@ def predicate_complete(
             continue
         if token.type is TokenType.OPERATOR and token.text in _COMPARISONS:
             armed = True
+        elif token.type is TokenType.PUNCT and token.text == ')':
+            armed = armed or _group_is_a_predicate(tokens, index, dialect)
         elif token.type is TokenType.IDENT and not token.quoted:
             word = token.value.upper()
             if word in _CONNECTIVES or dialect.clauses.get(word) is not None:
@@ -330,6 +393,63 @@ def predicate_complete(
             elif word in _PREDICATE_KEYWORDS:
                 armed = True
     return armed
+
+
+def _group_is_a_predicate(tokens: Sequence[Token], close: int, dialect: Dialect) -> bool:
+    """
+    Whether the group closing at `close` holds a comparison of its own.
+
+    `(a AND b)` does and `count(*)` does not, which is the difference between a
+    finished predicate and a value that still needs comparing to something.
+    """
+    depth = tokens[close].depth
+    for index in range(close - 1, -1, -1):
+        token = tokens[index]
+        if token.type is TokenType.PUNCT and token.text == '(' and token.depth == depth:
+            return False
+        if token.type is TokenType.OPERATOR and token.text in _COMPARISONS:
+            return True
+        if token.type is TokenType.IDENT and not token.quoted and token.value.upper() in _PREDICATE_KEYWORDS:
+            return True
+        if token.type is TokenType.IDENT and not token.quoted and dialect.clauses.get(token.value.upper()):
+            # A subquery, not a predicate: `WHERE id IN (SELECT ...)` is armed by
+            # the IN that precedes it, and `FROM (SELECT ...)` by nothing at all.
+            return False
+    return False
+
+
+_CASE_BRANCHES = frozenset({'WHEN', 'THEN', 'ELSE'})
+
+
+def case_position(tokens: Sequence[Token], caret: int) -> str | None:
+    """
+    Where the caret sits inside a CASE expression, or None if it is outside one.
+
+    Answers 'start' straight after CASE, then the branch keyword governing the
+    caret. CASE nests, so the opening one is found by counting ENDs back, and
+    only at the caret's own depth — a CASE inside parens is its own expression.
+
+    Needed because a CASE lives *inside* a clause: the caret's clause is SELECT,
+    whose position rules say a completed operand takes `AS` or `FROM`, and
+    `CASE WHEN id AS` is what that produces.
+    """
+    depth = depth_at(tokens, caret)
+    pending = 0
+    branch: str | None = None
+    for index in range(_index_before(tokens, caret), -1, -1):
+        token = tokens[index]
+        if token.type is not TokenType.IDENT or token.quoted or token.depth != depth or token.start >= caret:
+            continue
+        word = token.value.upper()
+        if word == 'END':
+            pending += 1
+        elif word == 'CASE':
+            if pending == 0:
+                return branch or 'start'
+            pending -= 1
+        elif pending == 0 and branch is None and word in _CASE_BRANCHES:
+            branch = word.lower()
+    return None
 
 
 def clause_at(
