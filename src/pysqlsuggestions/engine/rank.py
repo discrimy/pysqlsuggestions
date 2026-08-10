@@ -20,6 +20,7 @@ from pysqlsuggestions.types import Candidate, Kind, Request, Suggestion
 
 _EXACT_PREFIX = 100.0
 _FOLDED_PREFIX = 70.0
+_WORD_PREFIX = 55.0
 _WORD_BOUNDARY = 40.0
 
 _KIND_STEP = 5.0
@@ -72,36 +73,62 @@ def rank(
 
 
 def _match_strength(text: str, prefix: str) -> float | None:
-    """How well `text` matches `prefix`, or None when it does not match at all."""
+    """
+    How well `text` matches `prefix`, or None when it does not match at all.
+
+    Four tiers, all anchored to a word boundary. Snake_case names bury the
+    meaningful word — nobody types `reports_` to reach `reports_database`, they
+    type `data` — so a prefix of any word component counts, while a fragment
+    starting mid-word (`atabas`) does not. That is the line plan.md §6 draws:
+    looser matching demos well and then degrades badly, because on a 400-table
+    schema a three-character prefix matching sixty things is worse than matching
+    nothing.
+    """
     if not prefix:
         return _EXACT_PREFIX
     if text.startswith(prefix):
         return _EXACT_PREFIX
-    if text.lower().startswith(prefix.lower()):
+    folded = prefix.lower()
+    if text.lower().startswith(folded):
         return _FOLDED_PREFIX
-    if _initials(text).startswith(prefix.lower()):
+    words = _words(text)
+    if any(word.startswith(folded) for word in words):
+        return _WORD_PREFIX
+    if ''.join(word[0] for word in words).startswith(folded):
         return _WORD_BOUNDARY
     return None
 
 
-def _initials(text: str) -> str:
+def _words(text: str) -> list[str]:
     """
-    The first letter of each word, so `oi` finds `order_items`.
+    The lowercased word components of an identifier.
 
-    Subsequence matching on word boundaries only. Looser fuzzy matching demos
-    well and then degrades badly: on a 400-table schema a three-character prefix
-    matching sixty things is worse than matching nothing.
+    Split on underscores and dollars, and on a lower-to-upper transition so
+    `MonthlyTotals` reads as two words rather than one.
     """
-    letters: list[str] = []
-    previous = '_'
+    words: list[str] = []
+    current: list[str] = []
+    previous = ''
     for char in text:
         if char in '_$':
+            if current:
+                words.append(''.join(current).lower())
+                current = []
             previous = char
             continue
-        if previous in '_$' or (previous.islower() and char.isupper()):
-            letters.append(char.lower())
+        if current and previous.islower() and char.isupper():
+            words.append(''.join(current).lower())
+            current = []
+        current.append(char)
         previous = char
-    return ''.join(letters)
+    if current:
+        words.append(''.join(current).lower())
+    return words
+
+
+def _initials(text: str) -> str:
+    """The first letter of each word, so `oi` finds `order_items`."""
+    return ''.join(word[0] for word in _words(text) if word)
 
 
 def _kind_bonus(kind: Kind, kind_rank: dict[Kind, int], total: int) -> float:

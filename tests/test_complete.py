@@ -72,6 +72,36 @@ def test_word_boundary_subsequence() -> None:
     assert texts('SELECT * FROM reports_report r WHERE r.di⌶') == ['database_id']
 
 
+def test_a_whole_word_inside_the_name_matches() -> None:
+    """
+    `data` finds reports_database.
+
+    Snake_case names bury the meaningful word: nobody types `reports_` to reach
+    `reports_database`, they type `data`. The existing helper matched this by
+    substring, so failing to would be a regression for its users.
+    """
+    assert 'reports_database' in texts('SELECT * FROM data⌶')
+
+
+def test_a_word_match_scores_below_a_real_prefix() -> None:
+    """The same relation, reached two ways: `reports` prefixes it, `data` is a word inside it."""
+
+    def score_of(marked: str) -> float:
+        sql, caret = split_caret(marked)
+        found = complete(sql, caret, POSTGRES, catalog())
+        return next(s.score for s in found if s.text == 'reports_database')
+
+    assert score_of('SELECT * FROM data⌶') < score_of('SELECT * FROM reports⌶')
+
+
+def test_mid_word_fragments_still_do_not_match() -> None:
+    """
+    `atabas` is a substring but not a word — the old helper matched it, and that
+    is the looseness plan.md §6 rejects.
+    """
+    assert texts('SELECT * FROM atabas⌶') == []
+
+
 def test_tables_in_from_clause() -> None:
     """A relation position offers relations and schemas, never columns."""
     found = texts('SELECT * FROM reports_⌶')
