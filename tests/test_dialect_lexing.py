@@ -1,0 +1,68 @@
+"""Lexical divergence between the four dialects, which is where most dialect variance lives."""
+
+from __future__ import annotations
+
+import pytest
+
+from pysqlsuggestions.dialects.ansi import ANSI
+from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
+from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.dialects.trino import TRINO
+from pysqlsuggestions.engine.lex import TokenType, lex
+
+ALL = [ANSI, POSTGRES, CLICKHOUSE, TRINO]
+
+
+def significant(src: str, dialect: Dialect) -> list[tuple[TokenType, str]]:
+    """(type, value) for every non-whitespace token."""
+    return [(t.type, t.value) for t in lex(src, dialect.syntax) if t.type is not TokenType.WHITESPACE]
+
+
+@pytest.mark.parametrize('dialect', ALL, ids=lambda d: d.name)
+def test_every_dialect_has_reserved_words(dialect: Dialect) -> None:
+    """Reserved words ship offline because quoting decisions precede any connection."""
+    assert 'select' in dialect.reserved
+    assert all(word.islower() for word in dialect.reserved)
+
+
+def test_namespace_depth_differs() -> None:
+    """One tuple drives three different answers to `analytics.<caret>`."""
+    assert POSTGRES.namespace.levels == ('schema', 'table')
+    assert CLICKHOUSE.namespace.levels == ('database', 'table')
+    assert TRINO.namespace.levels == ('catalog', 'schema', 'table')
+
+
+def test_postgres_folds_to_lower_clickhouse_preserves() -> None:
+    """Case folding is the divergence users notice first."""
+    assert significant('SELECT Foo', POSTGRES)[1] == (TokenType.IDENT, 'foo')
+    assert significant('SELECT Foo', CLICKHOUSE)[1] == (TokenType.IDENT, 'Foo')
+    assert significant('SELECT Foo', TRINO)[1] == (TokenType.IDENT, 'foo')
+
+
+def test_clickhouse_accepts_backtick_identifiers() -> None:
+    """ClickHouse quotes with either " or `; the others only know about "."""
+    assert significant('`My Col`', CLICKHOUSE) == [(TokenType.IDENT, 'My Col')]
+    assert significant('`My Col`', POSTGRES)[0][0] is not TokenType.IDENT
+
+
+def test_clickhouse_hash_comments() -> None:
+    """ClickHouse alone treats # as a line comment."""
+    assert significant('# note\nSELECT', CLICKHOUSE) == [(TokenType.COMMENT, '# note'), (TokenType.IDENT, 'SELECT')]
+
+
+def test_postgres_dollar_quoting_and_nested_comments() -> None:
+    """Both are Postgres-only among these four."""
+    assert significant('$fn$ x $fn$', POSTGRES) == [(TokenType.STRING, '$fn$ x $fn$')]
+    assert significant('$fn$ x $fn$', TRINO)[0][0] is not TokenType.STRING
+    # Trino does not nest, so its comment stops early and `c */` lexes on as ordinary tokens.
+    assert significant('/* a /* b */ c */', POSTGRES) == [(TokenType.COMMENT, '/* a /* b */ c */')]
+    assert significant('/* a /* b */ c */', TRINO)[0] == (TokenType.COMMENT, '/* a /* b */')
+
+
+def test_ansi_has_no_cast_operator() -> None:
+    """The conservative fallback does not assume ::; the three real backends do."""
+    assert ANSI.syntax.cast_operator is None
+    assert POSTGRES.syntax.cast_operator == '::'
+    assert CLICKHOUSE.syntax.cast_operator == '::'
+    assert TRINO.syntax.cast_operator == '::'
