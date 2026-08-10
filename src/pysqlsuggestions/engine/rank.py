@@ -72,7 +72,20 @@ def rank(
         )
 
     scored.sort(key=lambda row: (row[0], row[1]))
-    ordered = [row[2] for row in scored]
+
+    # Two relations in scope often share a column name. Offering `id` twice is
+    # noise: the text inserted would be identical either way, so the
+    # highest-scoring occurrence is the one worth keeping. Sorting first means
+    # that is simply the first one seen.
+    seen: set[tuple[Kind, str]] = set()
+    ordered: list[Suggestion] = []
+    for _, _, suggestion in scored:
+        key = (suggestion.kind, suggestion.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(suggestion)
+
     return ordered[:limit] if limit is not None else ordered
 
 

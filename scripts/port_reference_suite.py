@@ -67,14 +67,6 @@ SKIP = {
 # Known gaps, grouped by root cause. Each is a real behaviour report_service
 # users have today and this library does not yet — a burn-down, not a wontfix.
 GAPS = {
-    'set operations scope per branch, not merged': [
-        'union_first_branch_scope',
-        'union_second_branch_scope',
-        'union_second_branch_where',
-        'union_of_two_ctes',
-        'union_inside_a_cte_body',
-        'except_second_branch',
-    ],
     'set-returning functions in FROM are not read as relations': [
         'function_in_from_does_not_swallow_the_rest_of_the_list',
         'function_in_from_unqualified_scope',
@@ -87,22 +79,18 @@ GAPS = {
         'keywords_stay_prefix_only',
         'keywords_offered_after_a_cte_relation',
     ],
-    'outer relations are not visible inside every nested construct': [
-        'correlated_outer_relation_visible_inside_a_subquery',
-        'nested_subquery_sees_every_enclosing_level',
+    'LATERAL subqueries are not read as relations': [
         'lateral_subquery_columns',
     ],
     'CTE and derived-table bodies are not analysed recursively enough': [
         'nested_cte_inside_a_cte_body',
         'deeply_nested_derived_tables',
         'derived_table_with_column_list',
-        'cte_joined_with_a_real_table',
     ],
     'select-list output naming misses some expression shapes': [
         'cte_implicit_alias',
         'cte_boolean_expression_tail_is_not_a_column',
         'cte_distinct_on',
-        'cte_two_qualified_stars_dedupe',
         'cte_columns_in_order_by',
     ],
     'statement forms beyond SELECT are not fully modelled': [
@@ -211,7 +199,12 @@ def cur() -> MemoryCatalog:
     return fake_catalog()
 
 
-def suggestions(cursor: MemoryCatalog, sql: str, pos: int | None = None, limit: int = DEFAULT_LIMIT) -> list[Suggestion]:
+def suggestions(
+    cursor: MemoryCatalog,
+    sql: str,
+    pos: int | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> list[Suggestion]:
     """Complete at `pos`, defaulting to end of input as their harness did."""
     return complete(sql, len(sql) if pos is None else pos, POSTGRES, cursor, limit=limit)
 

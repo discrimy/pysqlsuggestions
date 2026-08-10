@@ -73,6 +73,10 @@ ignore = [
     'SIM905',
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# A developer script that reports what it did.
+'scripts/*' = ['T201']
+
 [tool.ruff.lint.isort]
 known-first-party = ['pysqlsuggestions', 'tests']
 

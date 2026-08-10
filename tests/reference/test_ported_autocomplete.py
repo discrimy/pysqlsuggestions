@@ -75,7 +75,10 @@ def cur() -> MemoryCatalog:
 
 
 def suggestions(
-    cursor: MemoryCatalog, sql: str, pos: int | None = None, limit: int = DEFAULT_LIMIT
+    cursor: MemoryCatalog,
+    sql: str,
+    pos: int | None = None,
+    limit: int = DEFAULT_LIMIT,
 ) -> list[Suggestion]:
     """Complete at `pos`, defaulting to end of input as their harness did."""
     return complete(sql, len(sql) if pos is None else pos, POSTGRES, cursor, limit=limit)
@@ -459,7 +462,6 @@ def test_nested_cte_inside_a_cte_body(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['email', 'id']
 
 
-@pytest.mark.xfail(strict=True, reason='CTE and derived-table bodies are not analysed recursively enough')
 def test_cte_joined_with_a_real_table(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE с JOIN реальной таблицы."""
     sql = 'WITH a AS (SELECT id, email FROM auth_user)\nSELECT * FROM a JOIN orders o ON o.user_id = a.id WHERE '
@@ -467,7 +469,6 @@ def test_cte_joined_with_a_real_table(cur: MemoryCatalog) -> None:
     assert sorted(got) == sorted(['id', 'email', 'user_id', 'total', 'created'])
 
 
-@pytest.mark.xfail(strict=True, reason='select-list output naming misses some expression shapes')
 def test_cte_two_qualified_stars_dedupe(cur: MemoryCatalog) -> None:
     """Тестировать дедупликацию колонок при двух qualified stars."""
     sql = 'WITH a AS (SELECT u.*, o.* FROM auth_user u JOIN orders o ON true)\nSELECT * FROM a WHERE a.'
@@ -544,7 +545,7 @@ def test_cte_from_a_previous_statement_is_not_visible(cur: MemoryCatalog) -> Non
     assert sorted(texts(cur, sql, limit=50)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='outer relations are not visible inside every nested construct')
+@pytest.mark.xfail(strict=True, reason='LATERAL subqueries are not read as relations')
 def test_lateral_subquery_columns(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для LATERAL subquery."""
     sql = 'SELECT * FROM auth_user u, LATERAL (SELECT total FROM orders WHERE user_id = u.id) l WHERE l.'
@@ -592,7 +593,6 @@ def test_cte_chain_three_deep(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['email', 'id']
 
 
-@pytest.mark.xfail(strict=True, reason='set operations scope per branch, not merged')
 def test_union_of_two_ctes(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для UNION двух CTE."""
     sql = (
@@ -946,21 +946,18 @@ def test_report_query_inside_the_second_cte_body(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, head + '     WHERE o.', limit=50)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='set operations scope per branch, not merged')
 def test_union_second_branch_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для second branch UNION."""
     got = at(cur, 'SELECT id FROM auth_user UNION SELECT ‸ FROM orders', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='set operations scope per branch, not merged')
 def test_union_first_branch_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для first branch UNION."""
     got = at(cur, 'SELECT ‸ FROM auth_user UNION SELECT id FROM orders', limit=50)
     assert sorted(got) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='set operations scope per branch, not merged')
 def test_union_second_branch_where(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для second branch UNION WHERE."""
     got = at(cur, 'SELECT id FROM auth_user UNION SELECT id FROM orders WHERE ‸', limit=50)
@@ -979,14 +976,12 @@ def test_parenthesised_union_branches(cur: MemoryCatalog) -> None:
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='set operations scope per branch, not merged')
 def test_except_second_branch(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для EXCEPT second branch."""
     got = at(cur, 'SELECT id FROM auth_user EXCEPT SELECT ‸ FROM orders', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='set operations scope per branch, not merged')
 def test_union_inside_a_cte_body(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для UNION внутри тела CTE."""
     got = at(cur, 'WITH a AS (SELECT id FROM auth_user UNION SELECT ‸ FROM orders) SELECT * FROM a', limit=50)
@@ -999,7 +994,6 @@ def test_subquery_relations_drop_out_once_it_closes(cur: MemoryCatalog) -> None:
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='outer relations are not visible inside every nested construct')
 def test_correlated_outer_relation_visible_inside_a_subquery(cur: MemoryCatalog) -> None:
     """Тестировать видимость outer relation внутри subquery."""
     got = at(cur, 'SELECT * FROM orders o WHERE o.user_id IN (SELECT ‸ FROM auth_user)', limit=50)
@@ -1030,7 +1024,6 @@ def test_any_subquery_relations_drop_out(cur: MemoryCatalog) -> None:
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='outer relations are not visible inside every nested construct')
 def test_nested_subquery_sees_every_enclosing_level(cur: MemoryCatalog) -> None:
     """Тестировать видимость всех enclosing levels в nested subquery."""
     got = at(

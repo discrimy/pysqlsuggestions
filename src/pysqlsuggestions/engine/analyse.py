@@ -21,6 +21,7 @@ _JOIN_QUALIFIERS = frozenset(
     """.split(),
 )
 _CTE_MODIFIERS = frozenset({'MATERIALIZED', 'NOT'})
+_SET_OPERATORS = frozenset({'UNION', 'INTERSECT', 'EXCEPT'})
 
 
 def _index_before(tokens: Sequence[Token], caret: int) -> int:
@@ -217,8 +218,8 @@ def scope_of(
 
     Returns the innermost scope containing the caret, chained to its parents.
     """
-    ctes = _read_ctes(tokens, lo, hi, dialect)
-    return _scope_level(tokens, lo, hi, caret, dialect, ctes, parent=None)
+    ctes, cte_bodies = _read_ctes(tokens, lo, hi, dialect)
+    return _scope_level(tokens, lo, hi, caret, dialect, ctes, parent=None, cte_bodies=cte_bodies)
 
 
 def _scope_level(
@@ -229,8 +230,10 @@ def _scope_level(
     dialect: Dialect,
     ctes: dict[str, Relation],
     parent: Scope | None,
+    cte_bodies: frozenset[tuple[int, int]] = frozenset(),
 ) -> Scope:
     """One query level, recursing into whichever subquery holds the caret."""
+    lo, hi = _branch_at(tokens, lo, hi, caret)
     relations = [_bind(r, ctes) for r in _relations_in(tokens, lo, hi, caret, dialect)]
     for derived_lo, derived_hi, alias in _derived_tables(tokens, lo, hi, dialect):
         projection = select_outputs(tokens, derived_lo, derived_hi, dialect)
@@ -245,8 +248,51 @@ def _scope_level(
 
     for inner_lo, inner_hi in _subquery_bodies(tokens, lo, hi):
         if tokens[inner_lo].start <= caret <= tokens[inner_hi - 1].end:
-            return _scope_level(tokens, inner_lo, inner_hi, caret, dialect, ctes, parent=here)
+            # A CTE body is evaluated on its own: it cannot reference the outer
+            # query's FROM list, nor the CTE being defined. A correlated
+            # subquery can, so only CTE bodies drop the parent link.
+            enclosing = None if (inner_lo, inner_hi) in cte_bodies else here
+            return _scope_level(
+                tokens,
+                inner_lo,
+                inner_hi,
+                caret,
+                dialect,
+                ctes,
+                parent=enclosing,
+                cte_bodies=cte_bodies,
+            )
     return here
+
+
+def _branch_at(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> tuple[int, int]:
+    """
+    The set-operation branch containing the caret.
+
+    Each branch of a UNION, INTERSECT or EXCEPT has its own FROM clause and so
+    its own scope: in `SELECT id FROM auth_user UNION SELECT <caret> FROM orders`
+    only `orders` is in view. Merging the branches would offer columns from a
+    relation the caret's branch cannot reference.
+    """
+    base = _base_depth(tokens, lo, hi)
+    cuts = [
+        index
+        for index in range(lo, hi)
+        if tokens[index].type is TokenType.IDENT
+        and tokens[index].depth == base
+        and tokens[index].value.upper() in _SET_OPERATORS
+    ]
+    start = lo
+    for cut in cuts:
+        if caret <= tokens[cut].start:
+            return start, cut
+        start = cut + 1
+    return start, hi
+
+
+def _base_depth(tokens: Sequence[Token], lo: int, hi: int) -> int:
+    """The shallowest paren depth among the significant tokens in [lo, hi)."""
+    return min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
 
 
 def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> list[tuple[int, int]]:
@@ -560,12 +606,23 @@ def _output_of(
     return None, None
 
 
-def _read_ctes(tokens: Sequence[Token], lo: int, hi: int, dialect: Dialect) -> dict[str, Relation]:
-    """Every relation declared in a leading WITH clause, keyed by name."""
+def _read_ctes(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    dialect: Dialect,
+) -> tuple[dict[str, Relation], frozenset[tuple[int, int]]]:
+    """
+    Every relation declared in a leading WITH clause, keyed by name.
+
+    Also returns each body's token span, because a caret inside one is scoped
+    differently from a caret inside any other parenthesised subquery.
+    """
     start = _after_clause(tokens, lo, hi, 'WITH', dialect)
     if start is None:
-        return {}
+        return {}, frozenset()
     ctes: dict[str, Relation] = {}
+    bodies: list[tuple[int, int]] = []
     index = _skip_forward(tokens, start, hi)
     if index < hi and tokens[index].type is TokenType.IDENT and tokens[index].value.upper() == 'RECURSIVE':
         index = _skip_forward(tokens, index + 1, hi)
@@ -593,12 +650,13 @@ def _read_ctes(tokens: Sequence[Token], lo: int, hi: int, dialect: Dialect) -> d
             Projection(columns=declared) if declared else select_outputs(tokens, body_lo, body_hi, dialect, ctes)
         )
         ctes[name] = Relation(alias=None, path=(name,), source='cte', projection=projection)
+        bodies.append((body_lo, body_hi))
         index = _skip_forward(tokens, body_hi + 1, hi)
         if index < hi and tokens[index].text == ',':
             index += 1
             continue
         break
-    return ctes
+    return ctes, frozenset(bodies)
 
 
 def _read_declared_columns(tokens: Sequence[Token], index: int, hi: int) -> tuple[tuple[str, ...], int]:
