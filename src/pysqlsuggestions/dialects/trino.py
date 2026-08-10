@@ -14,19 +14,30 @@ from pysqlsuggestions.types import Column, Function, Kind, Table
 # need identifier interpolation, and interpolating identifiers from caret context
 # is exactly the thing not to do.
 QUERIES = CatalogQueries(
+    # With three levels, "one level down from nothing" is a catalog, not a schema.
+    # Returning schemas for an empty argument would offer the second level at the
+    # first position — `FROM <caret>` would suggest `public` where `postgresql`
+    # belongs.
     schemas=Query(
         sql="""
-            SELECT table_schem FROM system.jdbc.schemas
-            WHERE ($1 = '' OR table_catalog = $1)
+            SELECT table_cat AS name FROM system.jdbc.catalogs
+            WHERE $1 = '' AND table_cat <> 'system'
+            UNION ALL
+            SELECT table_schem AS name FROM system.jdbc.schemas
+            WHERE $1 <> '' AND table_catalog = $1
               AND table_schem NOT IN ('information_schema', 'jdbc', 'metadata', 'runtime')
-            ORDER BY table_schem
+            ORDER BY name
         """,
         row=lambda row: str(row[0]),
     ),
+    # Deliberately empty for an unqualified position. With three levels there is
+    # no useful "visible by default" set — a bare `FROM <caret>` in Trino wants
+    # catalogs, which `schemas` supplies. Enumerating every table in every
+    # catalog would also mean scanning each connector's metadata on a keystroke.
     tables=Query(
         sql="""
             SELECT table_schem, table_name, table_type FROM system.jdbc.tables
-            WHERE ($1 = '' OR table_schem = $1)
+            WHERE $1 <> '' AND table_schem = $1
               AND table_schem NOT IN ('information_schema', 'jdbc', 'metadata', 'runtime')
             ORDER BY table_schem, table_name
         """,

@@ -53,6 +53,18 @@ def test_postgres_schema_qualifier(postgres_catalog: DbapiCatalog) -> None:
     assert '"MonthlyTotals"' in found
 
 
+def test_postgres_unqualified_position_hides_the_system_catalog(postgres_catalog: DbapiCatalog) -> None:
+    """pg_table_is_visible is true for pg_catalog, so `FROM <caret>` would open with pg_aggregate."""
+    found = suggest('SELECT * FROM ⌶', POSTGRES, postgres_catalog)
+    assert 'reports_report' in found
+    assert not [name for name in found if name.startswith('pg_')]
+
+
+def test_postgres_system_schema_still_reachable_when_named(postgres_catalog: DbapiCatalog) -> None:
+    """Hiding it by default must not make it unreachable."""
+    assert 'pg_class' in [t.name for t in postgres_catalog.tables('pg_catalog')]
+
+
 def test_postgres_search_path_relation(postgres_catalog: DbapiCatalog) -> None:
     """An unqualified relation resolves through pg_table_is_visible."""
     columns = postgres_catalog.columns(None, 'reports_report')
@@ -75,6 +87,14 @@ def test_postgres_join_across_the_real_foreign_key(postgres_catalog: DbapiCatalo
     )
     assert 'title' in found
     assert 'executions' not in found
+
+
+def test_postgres_schemas_survive_the_literal_percent(postgres_catalog: DbapiCatalog) -> None:
+    r"""The schemas query filters with LIKE 'pg\_%', which psycopg2 would misread unescaped."""
+    found = postgres_catalog.schemas()
+    assert 'public' in found
+    assert 'billing' in found
+    assert not [name for name in found if name.startswith('pg_')]
 
 
 def test_postgres_functions(postgres_catalog: DbapiCatalog) -> None:
@@ -138,6 +158,20 @@ def test_trino_catalog_qualifier_yields_schemas(trino_catalog: DbapiCatalog) -> 
     found = suggest('SELECT * FROM clickhouse.⌶', TRINO, trino_catalog)
     assert 'analytics' in found
     assert 'staging' in found
+
+
+def test_trino_unqualified_position_offers_catalogs_not_schemas(trino_catalog: DbapiCatalog) -> None:
+    """
+    With three levels, the first thing to write is a catalog.
+
+    Offering schemas here would put the second level in the first position, and
+    enumerating every table in every catalog would scan each connector's metadata
+    on a keystroke.
+    """
+    found = suggest('SELECT * FROM ⌶', TRINO, trino_catalog)
+    assert 'postgresql' in found
+    assert 'clickhouse' in found
+    assert 'reports_report' not in found
 
 
 def test_the_first_qualifier_segment_means_a_different_level_per_dialect(

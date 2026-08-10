@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pysqlsuggestions</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #1c1b1a; --muted: #6b6862;
+    --line: #e4e1db; --accent: #3b5bdb; --accent-soft: #eaeeff;
+    --column: #2b7a4b; --table: #9a5b18; --schema: #7048a8; --function: #1b6f8a;
+    --keyword: #8a1b4b; --alias: #6b6862;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16161a; --panel: #1e1e24; --ink: #e8e6e3; --muted: #9b9791;
+      --line: #33333c; --accent: #8098f9; --accent-soft: #26263a;
+      --column: #6bcf94; --table: #e0a566; --schema: #c0a0f0; --function: #6cc5de;
+      --keyword: #f091b8; --alias: #9b9791;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    padding: 20px 24px 0; max-width: 1180px; margin: 0 auto;
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0 0 18px; font-size: 14px; max-width: 62ch; }
+  main {
+    max-width: 1180px; margin: 0 auto; padding: 0 24px 48px;
+    display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 20px;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tab {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    padding: 7px 13px; border-radius: 7px; cursor: pointer; font: inherit; font-size: 13.5px;
+  }
+  .tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .tab[disabled] { opacity: 0.42; cursor: not-allowed; }
+  .tab .lv { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .tab[aria-selected="true"] .lv { color: var(--accent); }
+
+  .editor-wrap { position: relative; }
+  textarea {
+    width: 100%; min-height: 190px; padding: 14px; resize: vertical;
+    font: 14px/1.65 var(--mono); tab-size: 2;
+    color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+
+  .hint { color: var(--muted); font-size: 12.5px; margin: 8px 2px 0; display: flex; gap: 14px; flex-wrap: wrap; }
+  kbd {
+    font: 11px/1 var(--mono); border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 4px; padding: 3px 5px; background: var(--panel);
+  }
+
+  .pop {
+    position: absolute; z-index: 20; min-width: 340px; max-width: 560px;
+    max-height: 320px; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.16); padding: 4px;
+  }
+  .pop[hidden] { display: none; }
+  .item {
+    display: flex; align-items: baseline; gap: 9px; padding: 6px 9px;
+    border-radius: 6px; cursor: pointer; font: 13px/1.4 var(--mono);
+  }
+  .item[aria-selected="true"] { background: var(--accent-soft); }
+  .item .txt { font-weight: 600; white-space: nowrap; }
+  .item .det { color: var(--muted); font-size: 11.5px; margin-left: auto; text-align: right;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+  .k { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; min-width: 58px; }
+  .k-column { color: var(--column); } .k-table { color: var(--table); }
+  .k-schema { color: var(--schema); } .k-function { color: var(--function); }
+  .k-keyword { color: var(--keyword); } .k-alias { color: var(--alias); }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .panel h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--muted); margin: 0 0 12px; font-weight: 700;
+  }
+  .panel + .panel { margin-top: 16px; }
+  dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 14px; align-items: baseline; }
+  dt { color: var(--muted); font-size: 12.5px; }
+  dd { margin: 0; font: 13px/1.4 var(--mono); word-break: break-word; }
+  .none { color: var(--muted); font-style: italic; font-family: inherit; }
+  .chips { display: flex; gap: 5px; flex-wrap: wrap; }
+  .chip {
+    font: 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+    border: 1px solid currentColor; border-radius: 999px; padding: 4px 7px;
+  }
+  .rel { font: 12.5px/1.5 var(--mono); padding: 7px 0; border-top: 1px solid var(--line); }
+  .rel:first-of-type { border-top: 0; padding-top: 0; }
+  .rel .src { color: var(--muted); font-size: 11px; }
+  .rel .proj { color: var(--muted); font-size: 11.5px; }
+  .stat { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .warn {
+    background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent);
+    padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 14px;
+  }
+  .warn[hidden] { display: none; }
+  code { font: 12.5px var(--mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>pysqlsuggestions</h1>
+  <p class="lede">
+    Context-aware SQL completion, running against real PostgreSQL, ClickHouse and Trino.
+    The panel on the right shows what the pure stages decided <em>before</em> anything was fetched.
+  </p>
+</header>
+
+<main>
+  <section>
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <div class="warn" id="warn" hidden></div>
+
+    <div class="editor-wrap">
+      <textarea id="sql" spellcheck="false" autocomplete="off"
+                aria-label="SQL editor" placeholder="Start typing SQL…"></textarea>
+      <div class="pop" id="pop" role="listbox" hidden></div>
+    </div>
+
+    <p class="hint">
+      <span><kbd>Ctrl</kbd>+<kbd>Space</kbd> suggest</span>
+      <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+      <span><kbd>Tab</kbd> / <kbd>Enter</kbd> accept</span>
+      <span><kbd>Esc</kbd> dismiss</span>
+    </p>
+  </section>
+
+  <aside>
+    <div class="panel">
+      <h2>Request — pure, no catalog</h2>
+      <dl>
+        <dt>clause</dt><dd id="r-clause"></dd>
+        <dt>prefix</dt><dd id="r-prefix"></dd>
+        <dt>qualifier</dt><dd id="r-qual"></dd>
+        <dt>replaces</dt><dd id="r-span"></dd>
+        <dt>kinds</dt><dd><div class="chips" id="r-kinds"></div></dd>
+      </dl>
+      <p class="stat" id="stat"></p>
+    </div>
+
+    <div class="panel">
+      <h2>Scope — from the whole statement</h2>
+      <div id="r-rels"></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const sql = $('sql'), pop = $('pop'), tabs = $('tabs'), warn = $('warn');
+
+let backend = 'postgres';
+let items = [];
+let active = -1;
+let timer = null;
+let seq = 0;
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function loadBackends() {
+  const data = await (await fetch('/api/backends')).json();
+  tabs.innerHTML = '';
+  data.backends.forEach((b, i) => {
+    const el = document.createElement('button');
+    el.className = 'tab';
+    el.role = 'tab';
+    el.disabled = !b.available;
+    el.innerHTML = `${esc(b.label)} <span class="lv">${esc(b.levels.join('.'))}</span>`;
+    el.title = b.available ? b.note : 'not reachable — start docker/docker-compose.yml';
+    el.onclick = () => select(b);
+    tabs.appendChild(el);
+    if (b.available && !document.querySelector('[aria-selected="true"]')) select(b, el);
+    else if (i === 0 && !b.available) el.setAttribute('aria-selected', 'false');
+  });
+  const anyUp = data.backends.some((b) => b.available);
+  warn.hidden = anyUp;
+  if (!anyUp) {
+    warn.textContent = 'No backend reachable. Run: docker compose -f docker/docker-compose.yml up -d --wait';
+  }
+}
+
+function select(b, el) {
+  backend = b.key;
+  [...tabs.children].forEach((t) => t.setAttribute('aria-selected', 'false'));
+  const target = el || [...tabs.children].find((t) => t.textContent.trim().startsWith(b.label));
+  if (target) target.setAttribute('aria-selected', 'true');
+  if (!sql.value.trim() || sql.dataset.example === 'yes') {
+    sql.value = b.example;
+    sql.dataset.example = 'yes';
+    sql.setSelectionRange(sql.value.length, sql.value.length);
+  }
+  sql.focus();
+  request();
+}
+
+function request() {
+  clearTimeout(timer);
+  timer = setTimeout(fire, 55);
+}
+
+async function fire() {
+  const mine = ++seq;
+  const body = JSON.stringify({
+    sql: sql.value, caret: sql.selectionStart, backend, limit: 25,
+  });
+  const res = await fetch('/api/suggest', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body,
+  });
+  if (mine !== seq) return;
+  const data = await res.json();
+  if (data.error) return;
+  paintRequest(data);
+  items = data.suggestions;
+  active = items.length ? 0 : -1;
+  paintPopup();
+}
+
+function paintRequest(d) {
+  const r = d.request;
+  $('r-clause').innerHTML = r.clause ? esc(r.clause) : '<span class="none">none</span>';
+  $('r-prefix').innerHTML = r.prefix ? esc(r.prefix) : '<span class="none">empty</span>';
+  $('r-qual').innerHTML = r.qualifier.length
+    ? esc(r.qualifier.join('.')) + '.'
+    : '<span class="none">none</span>';
+  $('r-span').textContent = `[${r.replace_span[0]}, ${r.replace_span[1]})`;
+  $('r-kinds').innerHTML = r.kinds.length
+    ? r.kinds.map((k) => `<span class="chip k-${k}">${esc(k)}</span>`).join('')
+    : '<span class="none">nothing here</span>';
+
+  $('stat').textContent =
+    `${d.suggestions.length} suggestions in ${d.elapsed_ms} ms` +
+    (d.available ? '' : ' — backend unreachable, query-only mode');
+
+  const rels = r.relations;
+  $('r-rels').innerHTML = rels.length
+    ? rels.map((rel) => {
+        const path = rel.path.length ? rel.path.join('.') : '(derived)';
+        let proj = '';
+        if (rel.projection) {
+          const cols = rel.projection.columns.join(', ') || '—';
+          const stars = rel.projection.stars.length
+            ? ` + * from ${rel.projection.stars.join(', ')}` : '';
+          proj = `<div class="proj">describes: ${esc(cols)}${esc(stars)}</div>`;
+        } else {
+          proj = '<div class="proj">from the catalog</div>';
+        }
+        return `<div class="rel"><strong>${esc(rel.label)}</strong> → ${esc(path)}
+                <span class="src">${esc(rel.source)}</span>${proj}</div>`;
+      }).join('')
+    : '<p class="none" style="margin:0">no relations in scope</p>';
+}
+
+function paintPopup() {
+  if (!items.length) { pop.hidden = true; return; }
+  pop.innerHTML = items.map((s, i) => `
+    <div class="item" role="option" data-i="${i}" aria-selected="${i === active}">
+      <span class="k k-${s.kind}">${esc(s.kind)}</span>
+      <span class="txt">${esc(s.text)}</span>
+      <span class="det">${esc(s.detail || '')}</span>
+    </div>`).join('');
+  pop.hidden = false;
+  place();
+  [...pop.children].forEach((el) => {
+    el.onmousedown = (e) => { e.preventDefault(); accept(Number(el.dataset.i)); };
+  });
+}
+
+function place() {
+  // Position under the caret line: measure by counting newlines before it.
+  const before = sql.value.slice(0, sql.selectionStart);
+  const line = before.split('\n').length;
+  const col = before.length - before.lastIndexOf('\n') - 1;
+  const cs = getComputedStyle(sql);
+  const lh = parseFloat(cs.lineHeight) || 22;
+  const ch = 8.4;
+  pop.style.top = `${14 + line * lh - sql.scrollTop}px`;
+  pop.style.left = `${Math.min(14 + col * ch, sql.clientWidth - 340)}px`;
+}
+
+function accept(i) {
+  const s = items[i];
+  if (!s) return;
+  const [from, to] = s.replace_span;
+  const insert = s.kind === 'function' ? `${s.text}()` : s.text;
+  sql.value = sql.value.slice(0, from) + insert + sql.value.slice(to);
+  const caret = from + insert.length - (s.kind === 'function' ? 1 : 0);
+  sql.setSelectionRange(caret, caret);
+  sql.dataset.example = 'no';
+  pop.hidden = true;
+  items = [];
+  sql.focus();
+  request();
+}
+
+function move(delta) {
+  if (!items.length) return;
+  active = (active + delta + items.length) % items.length;
+  [...pop.children].forEach((el, i) => el.setAttribute('aria-selected', String(i === active)));
+  const el = pop.children[active];
+  if (el) el.scrollIntoView({block: 'nearest'});
+}
+
+sql.addEventListener('input', () => { sql.dataset.example = 'no'; request(); });
+sql.addEventListener('click', request);
+sql.addEventListener('keydown', (e) => {
+  const open = !pop.hidden && items.length;
+  if (e.key === 'ArrowDown' && open) { e.preventDefault(); move(1); }
+  else if (e.key === 'ArrowUp' && open) { e.preventDefault(); move(-1); }
+  else if ((e.key === 'Enter' || e.key === 'Tab') && open) { e.preventDefault(); accept(active); }
+  else if (e.key === 'Escape') { pop.hidden = true; }
+  else if (e.key === ' ' && e.ctrlKey) { e.preventDefault(); fire(); }
+  else if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { setTimeout(request, 0); }
+});
+sql.addEventListener('blur', () => setTimeout(() => { pop.hidden = true; }, 120));
+
+loadBackends();
+</script>
+</body>
+</html>

@@ -51,9 +51,15 @@ def render(sql: str, values: Sequence[str], paramstyle: str) -> tuple[str, Any]:
         order.append(int(match.group(1)) - 1)
         return token
 
+    # The %-based styles read `%` as the start of a placeholder, so a literal one
+    # in the query text has to be doubled. Introspection SQL is full of them —
+    # `nspname NOT LIKE 'pg\_%'` is the obvious case — and forgetting this raises
+    # an opaque IndexError from inside the driver rather than anything readable.
+    escaped = sql.replace('%', '%%') if paramstyle in ('format', 'pyformat') else sql
+
     if paramstyle in ('qmark', 'format'):
         token = '?' if paramstyle == 'qmark' else '%s'
-        rendered = _MARKER.sub(lambda m: positional(m, token), sql)
+        rendered = _MARKER.sub(lambda m: positional(m, token), escaped)
         return rendered, tuple(values[index] for index in order)
 
     if paramstyle == 'numeric':
@@ -61,7 +67,7 @@ def render(sql: str, values: Sequence[str], paramstyle: str) -> tuple[str, Any]:
 
     if paramstyle in ('named', 'pyformat'):
         template = ':p{}' if paramstyle == 'named' else '%(p{})s'
-        rendered = _MARKER.sub(lambda m: template.format(m.group(1)), sql)
+        rendered = _MARKER.sub(lambda m: template.format(m.group(1)), escaped)
         return rendered, {f'p{index + 1}': value for index, value in enumerate(values)}
 
     message = f'unsupported paramstyle: {paramstyle!r}'

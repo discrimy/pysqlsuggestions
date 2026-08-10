@@ -54,6 +54,22 @@ def test_repeated_marker_in_a_named_style_is_bound_once() -> None:
     assert params == {'p1': 'a'}
 
 
+def test_literal_percent_is_escaped_for_percent_based_styles() -> None:
+    r"""
+    Introspection SQL contains literal `%` — `NOT LIKE 'pg\_%'` — which psycopg2
+    would otherwise read as a placeholder and fail on with an opaque IndexError.
+    """
+    sql, params = render(r"SELECT 1 WHERE n NOT LIKE 'pg\_%' AND s = $1", ('public',), 'format')
+    assert sql == r"SELECT 1 WHERE n NOT LIKE 'pg\_%%' AND s = %s"
+    assert params == ('public',)
+
+
+def test_literal_percent_is_left_alone_for_other_styles() -> None:
+    """qmark and numeric have no quarrel with a percent sign."""
+    sql, _ = render(r"SELECT 1 WHERE n NOT LIKE 'pg\_%' AND s = $1", ('public',), 'qmark')
+    assert sql == r"SELECT 1 WHERE n NOT LIKE 'pg\_%' AND s = ?"
+
+
 def test_unknown_paramstyle_is_rejected_loudly() -> None:
     """Silently emitting the wrong placeholder would produce valid-but-wrong SQL."""
     with pytest.raises(ValueError, match='unsupported paramstyle'):

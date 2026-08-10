@@ -35,6 +35,10 @@ QUERIES = CatalogQueries(
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
               AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
+              -- pg_table_is_visible is true for pg_catalog, so an unqualified
+              -- position would otherwise open with pg_aggregate. Naming a system
+              -- schema explicitly still works.
+              AND ($1 <> '' OR n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema')
             ORDER BY n.nspname, c.relname
         """,
         row=lambda row: Table(schema=str(row[0]), name=str(row[1]), kind=_RELKIND.get(str(row[2]), 'table')),
