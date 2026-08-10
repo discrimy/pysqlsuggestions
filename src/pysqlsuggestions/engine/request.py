@@ -13,6 +13,7 @@ from typing import Literal
 
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.engine.analyse import (
+    after_operand,
     clause_at,
     in_literal,
     qualifier_and_prefix,
@@ -42,7 +43,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
     return Request(
-        kinds=_kinds_for(clause, qualifier, scope, dialect),
+        kinds=_kinds_for(clause, qualifier, scope, dialect, after_operand(tokens, caret, dialect)),
         prefix=prefix,
         replace_span=span,
         qualifier=qualifier,
@@ -79,36 +80,47 @@ def _kinds_for(
     qualifier: tuple[str, ...],
     scope: Scope | None,
     dialect: Dialect,
+    operand_complete: bool,
 ) -> tuple[Kind, ...]:
     """What the caret position admits, narrowed by any qualifier."""
     if not qualifier:
-        return _clause_kinds(clause, scope, dialect)
+        return _clause_kinds(clause, scope, dialect, operand_complete)
     return _qualified_kinds(qualifier, scope, dialect)
 
 
-def _clause_kinds(clause: str | None, scope: Scope | None, dialect: Dialect) -> tuple[Kind, ...]:
+def _clause_kinds(
+    clause: str | None,
+    scope: Scope | None,
+    dialect: Dialect,
+    operand_complete: bool,
+) -> tuple[Kind, ...]:
     """
     The kinds the governing clause admits.
 
     Once the clause has an item, what usually comes *next* is offered too: after
     `FROM auth_user ` the useful answer is WHERE or JOIN, not another table.
 
-    Only relation positions qualify. There, "the clause has an item" is exactly
-    "a relation was read into scope" — precise and cheap. In an expression
-    clause it would mean "a complete predicate was written", which needs
-    expression analysis this stage does not do, and guessing turns `WHERE a AND
-    <caret>` into a list of keywords where columns belong.
+    In a relation position "the clause has an item" is exactly "a relation was
+    read into scope", and tables stay on offer because a comma may still bring
+    another.
+
+    In an expression position it is "an operand was just completed", and there
+    the keywords *replace* the columns rather than joining them: after
+    `WHERE r.id ` another column name would not be valid SQL, so offering one is
+    worse than offering nothing.
     """
     if clause is None:
         return (Kind.KEYWORD,)
     found = dialect.clauses.get(clause)
     if found is None:
         return (Kind.KEYWORD,)
+
     kinds = found.suggests
-    offers_relations = Kind.TABLE in kinds
-    if not found.followed_by or not offers_relations or not (scope and scope.relations):
+    if not found.followed_by:
         return kinds
-    return (*kinds, Kind.KEYWORD)
+    if Kind.TABLE in kinds:
+        return (*kinds, Kind.KEYWORD) if (scope and scope.relations) else kinds
+    return (Kind.KEYWORD,) if operand_complete else kinds
 
 
 def _qualified_kinds(

@@ -71,6 +71,49 @@ def test_alias_beats_a_schema_of_the_same_name() -> None:
     assert result.kinds == (Kind.COLUMN,)
 
 
+def test_a_completed_operand_wants_an_operator_not_another_column() -> None:
+    """`WHERE r.id ` cannot take another column: two names in a row is not valid SQL."""
+    assert request('SELECT * FROM users r WHERE r.id ⌶').kinds == (Kind.KEYWORD,)
+
+
+def test_an_operator_reopens_the_operand_position() -> None:
+    """`= ` and `AND ` both expect a value, so columns come back."""
+    assert request('SELECT * FROM users r WHERE r.id = ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+    assert request('SELECT * FROM users r WHERE r.id = 1 AND ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+
+
+def test_a_half_typed_word_is_mid_operand_not_after_one() -> None:
+    """`WHERE na` is still naming a column, so it must not switch to keywords."""
+    assert request('SELECT * FROM users r WHERE na⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+
+
+def test_the_start_of_a_clause_expects_an_operand() -> None:
+    """A clause keyword opens the position rather than closing one."""
+    assert request('SELECT * FROM users r WHERE ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+    assert request('SELECT * FROM users r GROUP BY ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+
+
+def test_a_comma_reopens_the_operand_position() -> None:
+    """`GROUP BY a, ` wants another expression."""
+    assert request('SELECT * FROM users r GROUP BY id, ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+
+
+def test_a_closing_paren_completes_an_operand() -> None:
+    """`WHERE count(*) ` is a finished expression."""
+    assert request('SELECT * FROM users r WHERE count(*) ⌶').kinds == (Kind.KEYWORD,)
+
+
+def test_a_literal_completes_an_operand() -> None:
+    """So does a string or a number."""
+    assert request("SELECT * FROM users r WHERE r.name = 'x' ⌶").kinds == (Kind.KEYWORD,)
+    assert request('SELECT * FROM users r WHERE r.id = 1 ⌶').kinds == (Kind.KEYWORD,)
+
+
+def test_a_completed_select_item_wants_as_or_from() -> None:
+    """The same rule in the select list."""
+    assert request('SELECT r.name ⌶ FROM users r').kinds == (Kind.KEYWORD,)
+
+
 def test_caret_in_a_literal_offers_nothing() -> None:
     """Suggesting identifiers inside a string is worse than suggesting nothing."""
     result = request("SELECT * FROM t WHERE name = 'ab⌶")

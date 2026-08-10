@@ -112,6 +112,38 @@ def qualifier_and_prefix(
     return tuple(reversed(segments)), prefix, span
 
 
+def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool:
+    """
+    Whether an operand was just completed, so an operator or keyword comes next.
+
+    `WHERE r.id <caret>` cannot take another column: two names in a row is not
+    valid SQL. `WHERE r.id = <caret>` and `WHERE r.id = 1 AND <caret>` can, and
+    must.
+
+    One token decides it, which is why this needs no expression analysis. A
+    name, a literal or a closing paren ends an operand; an operator, a comma, an
+    opening paren or a keyword opens the next one. A caret still inside a word
+    is mid-operand, not after one.
+    """
+    index = _index_before(tokens, caret)
+    if index < 0:
+        return False
+    if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
+        return False
+
+    index = _skip_back(tokens, index)
+    if index < 0:
+        return False
+    token = tokens[index]
+    if token.type in (TokenType.NUMBER, TokenType.STRING):
+        return True
+    if token.type is TokenType.PUNCT:
+        return token.text == ')'
+    if token.type is TokenType.IDENT:
+        return token.quoted or token.value.upper() not in dialect.keywords
+    return False
+
+
 def clause_at(
     tokens: Sequence[Token],
     lo: int,
