@@ -89,6 +89,24 @@ QUERIES = CatalogQueries(
         """,
         row=lambda row: Function(schema=str(row[0]), name=str(row[1]), args=str(row[2]), result=str(row[3])),
     ),
+    # Planner statistics, not a table read. `most_common_vals` is an anyarray
+    # ordered by frequency, so WITH ORDINALITY is what keeps that order through
+    # the unnest. pg_stats already restricts itself to what the connected role
+    # may read, which is the privilege check this would otherwise have to make.
+    values=Query(
+        sql="""
+            SELECT v.value
+            FROM pg_stats s
+            JOIN pg_class c ON c.relname = s.tablename
+            JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s.schemaname
+            CROSS JOIN LATERAL unnest(s.most_common_vals::text::text[]) WITH ORDINALITY AS v(value, ord)
+            WHERE s.tablename = $2 AND s.attname = $3
+              AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
+            ORDER BY v.ord
+            LIMIT 50
+        """,
+        row=lambda row: str(row[0]),
+    ),
 )
 
 RESERVED = ANSI_RESERVED | frozenset(

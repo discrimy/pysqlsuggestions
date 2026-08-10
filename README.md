@@ -83,6 +83,26 @@ uv run uvicorn demo.app:app --port 8000
 Completion against real PostgreSQL, ClickHouse and Trino, with a panel showing
 the derived `Request` as you type. See `demo/README.md` for what to try.
 
+## Value suggestions
+
+Right of a comparison, a literal is usually what is wanted, so `WHERE type = `
+offers the values that column actually holds:
+
+```python
+complete("SELECT * FROM reports_database d WHERE d.type = ", 48, POSTGRES, catalog)
+# [Suggestion(text="'postgres'", kind=Kind.VALUE, ...), ...]
+```
+
+They come from the planner statistics the backend already keeps — Postgres's
+`pg_stats.most_common_vals` — never from reading the table: a completion engine
+may not start a scan, and `pg_stats` is already filtered to what the connected
+role may read. They appear once `ANALYZE` has run, and only for columns whose
+values repeat.
+
+It is a capability (`SupportsColumnValues`), so a catalog that cannot answer
+simply offers columns and functions there instead. Only the Postgres dialect
+ships a query; ClickHouse and Trino keep no comparable statistics.
+
 ## Design
 
 See `docs/request-pipeline.md` for how the stages fit together,

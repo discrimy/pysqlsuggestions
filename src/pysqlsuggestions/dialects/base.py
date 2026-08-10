@@ -254,6 +254,8 @@ class CatalogQueries:
     tables: Query | None = None
     columns: Query | None = None
     functions: Query | None = None
+    values: Query | None = None
+    """Frequent values of one column, from the backend's own planner statistics."""
 
 
 @dataclass(frozen=True, slots=True)

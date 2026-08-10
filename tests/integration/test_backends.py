@@ -246,3 +246,38 @@ def test_trino_functions_are_introspected(trino_catalog: DbapiCatalog) -> None:
     found = trino_catalog.functions()
     assert found, 'no functions came back'
     assert any(f.name == 'lower' for f in found), sorted({f.name for f in found})[:20]
+
+
+def test_postgres_offers_values_from_planner_statistics(postgres_catalog: DbapiCatalog) -> None:
+    """
+    `WHERE is_staff = ⌶` answers from `pg_stats.most_common_vals`.
+
+    A boolean, so the literals go in bare. Nothing is read from the table: the
+    values are the ones the planner already recorded, which is also why they
+    are only there once ANALYZE has run.
+    """
+    postgres_catalog.columns('public', 'auth_user')  # ensure the relation is reachable at all
+    values = postgres_catalog.common_values('public', 'auth_user', 'is_staff', 30)
+    if not values:
+        pytest.skip('no statistics yet: the database has not been ANALYZEd')
+    assert set(values) <= {'t', 'f'}
+
+    found = suggest(
+        'SELECT * FROM auth_user u WHERE u.is_staff = ⌶',
+        POSTGRES,
+        postgres_catalog,
+    )
+    assert found[0] in {'t', 'f'}, found[:5]
+
+
+def test_postgres_asks_the_statistics_view_not_the_table(postgres_catalog: DbapiCatalog) -> None:
+    """
+    The whole point: a completion engine may not start a scan.
+
+    `pg_stat_statements` is not installed here, so the check is the query text
+    itself — it must name `pg_stats` and no user relation.
+    """
+    query = POSTGRES.catalog_queries.values
+    assert query is not None
+    assert 'pg_stats' in query.sql
+    assert 'auth_user' not in query.sql

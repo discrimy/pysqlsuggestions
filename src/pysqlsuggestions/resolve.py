@@ -17,10 +17,12 @@ from typing import TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Dialect
 from pysqlsuggestions.engine import datatypes
-from pysqlsuggestions.ports import Cache, Catalog, SupportsColumnSearch, SupportsKeywords
+from pysqlsuggestions.ports import Cache, Catalog, SupportsColumnSearch, SupportsColumnValues, SupportsKeywords
 from pysqlsuggestions.types import Candidate, Column, Function, Kind, Projection, Relation, Request, Scope, Table
 
 _DEFAULT_SEARCH_LIMIT = 200
+_MAX_VALUES = 30
+"""How many frequent values are worth offering. `pg_stats` keeps up to a hundred."""
 
 _T = TypeVar('_T')
 
@@ -139,6 +141,21 @@ class _Reader:
             return everything
         return self._catalog.search_columns(prefix, limit)
 
+    def common_values(self, schema: str | None, table: str, column: str) -> Sequence[str]:
+        """
+        Frequent values of one column, from the backend's planner statistics.
+
+        Degrades to nothing when the catalog cannot answer, which is the
+        documented behaviour when SupportsColumnValues is absent. Cached like
+        everything else, keyed by the column: statistics change when ANALYZE
+        runs, not between keystrokes.
+        """
+        catalog = self._catalog
+        if not isinstance(catalog, SupportsColumnValues):
+            return ()
+        key = self._key(schema or '', table, f'\x00values:{column}')
+        return self._read(key, lambda: catalog.common_values(schema, table, column, _MAX_VALUES))
+
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords when available, otherwise the dialect's shipped set."""
         if isinstance(self._catalog, SupportsKeywords):
@@ -179,6 +196,9 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     """No dot typed: everything the clause admits, from whatever is in scope."""
     candidates: list[Candidate] = []
     scope = request.scope
+
+    if Kind.VALUE in request.kinds:
+        candidates += _values(request, reader)
 
     if Kind.COLUMN in request.kinds:
         relations = scope.visible() if scope else ()
@@ -312,6 +332,56 @@ def _unchosen(words: tuple[str, ...], written: frozenset[str]) -> tuple[str, ...
         for group in sequence[: max(made) + 1] if made else ():
             settled |= group
     return tuple(word for word in words if word not in settled)
+
+
+def _values(request: Request, reader: _Reader) -> list[Candidate]:
+    """
+    Literals the compared column actually holds.
+
+    `WHERE type = ` is the one position where a column name is rarely the
+    answer. The values come from statistics the backend already keeps, so this
+    costs a catalog read of the same shape as any other — never a scan.
+    """
+    scope, path = request.scope, request.comparand
+    if scope is None or not path:
+        return []
+    relation = _find_relation(path[0], scope) if len(path) > 1 else None
+    relations = [relation] if relation is not None else list(scope.visible())
+    for candidate in relations:
+        if candidate is None or candidate.projection is not None:
+            continue
+        schema, table = _split_path(candidate.path)
+        if not table:
+            continue
+        column = next((c for c in reader.columns(schema, table) if c.name == path[-1]), None)
+        if column is None:
+            continue
+        values = reader.common_values(schema, table, column.name)
+        return [
+            Candidate(
+                text=_as_literal(value, column.type, dialect_quote="'"),
+                kind=Kind.VALUE,
+                detail=f'frequent value of {table}.{column.name}',
+                position=index,
+                origin='catalog',
+                literal=True,
+            )
+            for index, value in enumerate(values)
+        ]
+    return []
+
+
+def _as_literal(value: str, type_text: str, dialect_quote: str) -> str:
+    """
+    Spell `value` the way the column's type wants it written.
+
+    A number and a boolean go bare; everything else is a string literal, which
+    is also the safe reading of a type this engine does not recognise — every
+    backend here will coerce a quoted literal, and none will accept a bare word.
+    """
+    if datatypes.family(type_text) in ('numeric', 'boolean'):
+        return value
+    return f'{dialect_quote}{value.replace(dialect_quote, dialect_quote * 2)}{dialect_quote}'
 
 
 def _operators(clause: object, dialect: Dialect) -> tuple[str, ...]:

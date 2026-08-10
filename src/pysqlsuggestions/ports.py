@@ -85,6 +85,30 @@ class SupportsColumnSearch(Protocol):
 
 
 @runtime_checkable
+class SupportsColumnValues(Protocol):
+    """
+    The values a column frequently holds, for the right side of a comparison.
+
+    Absent: that position offers columns and functions but no literals.
+
+    Meant to be answered from whatever statistics the backend already keeps for
+    its planner, never by reading the table — `SELECT DISTINCT` on a large
+    column is a scan, and a completion engine may not start one. Postgres has
+    `pg_stats.most_common_vals`, which is also filtered by what the connected
+    role may read; a backend without an equivalent should not implement this.
+    """
+
+    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[str]:
+        """
+        Up to `limit` frequent values of one column, most frequent first, as text.
+
+        Rendering is the engine's problem: it knows the column's type and so
+        whether the literal needs quotes.
+        """
+        ...
+
+
+@runtime_checkable
 class SupportsKeywords(Protocol):
     """
     Keywords from the server rather than the shipped set.

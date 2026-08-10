@@ -28,6 +28,7 @@ from pysqlsuggestions.engine.analyse import (
     scope_of,
     statement_at,
     statement_form,
+    string_under,
     words_in_item,
 )
 from pysqlsuggestions.engine.lex import Token, TokenType, lex
@@ -56,18 +57,19 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     clause = clause_at(tokens, lo, hi, caret, dialect.clauses)
     scope = scope_of(tokens, lo, hi, caret, dialect) if tokens else None
 
+    comparand, comparand_type = comparand_at(tokens, caret, dialect)
     if in_literal(tokens, caret):
-        return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
+        return _inside_a_literal(tokens, caret, clause, scope, comparand)
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
     continues, only = _continues(tokens, lo, hi, caret, dialect)
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
-    comparand, comparand_type = comparand_at(tokens, caret, dialect)
     return Request(
         kinds=_continued_kinds(
             continues,
             only,
-            _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
+            _values_first(comparand, expecting, qualifier)
+            + _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
         ),
         prefix=prefix,
         replace_span=span,
@@ -82,6 +84,37 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         statement=statement_form(tokens, lo, hi, caret, dialect),
         written=clauses_written(tokens, lo, hi, caret, dialect),
         keyword_case=_keyword_case(tokens, caret, dialect),
+    )
+
+
+def _inside_a_literal(
+    tokens: Sequence[Token],
+    caret: int,
+    clause: str | None,
+    scope: Scope | None,
+    comparand: tuple[str, ...],
+) -> Request:
+    """
+    What a caret inside a literal or a comment admits.
+
+    Nothing, except in the one place a literal is being written *as* a value:
+    `WHERE type = 'clic<caret>` is asking which values that column holds, and
+    going silent the moment the opening quote is typed makes the feature look
+    broken. The span covers the literal, so the answer replaces it rather than
+    nesting inside it.
+    """
+    written = string_under(tokens, caret)
+    if written is None or not comparand:
+        return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
+    quote = written.text[0]
+    typed = written.text[1 : caret - written.start]
+    return Request(
+        kinds=(Kind.VALUE,),
+        prefix=typed.replace(quote * 2, quote),
+        replace_span=(written.start, written.end if written.terminated else caret),
+        clause=clause,
+        scope=scope,
+        comparand=comparand,
     )
 
 
@@ -124,6 +157,18 @@ _CASE_CONTINUATIONS = {
     'then': ('WHEN', 'ELSE', 'END'),
     'else': ('END',),
 }
+
+
+def _values_first(comparand: tuple[str, ...], expecting: str, qualifier: tuple[str, ...]) -> tuple[Kind, ...]:
+    """
+    Whether a literal belongs here, and it leads when it does.
+
+    Only right of a comparison whose left side names a column, and only before
+    a dot is typed: `= d.<caret>` is reaching for another column, not a value.
+    Right of an operator a concrete value is what is usually wanted, so it goes
+    above the columns rather than beside them.
+    """
+    return (Kind.VALUE,) if comparand and expecting == 'operand' and not qualifier else ()
 
 
 def _continued_kinds(continues: tuple[str, ...], only: bool, otherwise: tuple[Kind, ...]) -> tuple[Kind, ...]:

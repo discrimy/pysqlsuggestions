@@ -200,10 +200,11 @@ CASES: tuple[GoldenRequest, ...] = (
     # --- literals and comments suppress everything ---------------------------
     GoldenRequest(
         sql="SELECT * FROM t WHERE name = 'ab⌶",
-        kinds=(),
+        kinds=('value',),
+        prefix='ab',
         clause='WHERE',
         relations=(':t',),
-        note='inside an unterminated literal: offer nothing',
+        note='inside a literal being written as a value: offer the values that column holds',
     ),
     GoldenRequest(
         sql="SELECT * FROM t WHERE name LIKE '%smith%⌶'",

@@ -10,6 +10,7 @@
     --line: #e4e1db; --accent: #3b5bdb; --accent-soft: #eaeeff;
     --column: #2b7a4b; --table: #9a5b18; --schema: #7048a8; --function: #1b6f8a;
     --keyword: #8a1b4b; --alias: #6b6862; --cte: #2f6f6f; --operator: #6b6862;
+    --value: #a8501b; --type: #7048a8; --snippet: #2f6f6f;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
@@ -18,6 +19,7 @@
       --line: #33333c; --accent: #8098f9; --accent-soft: #26263a;
       --column: #6bcf94; --table: #e0a566; --schema: #c0a0f0; --function: #6cc5de;
       --keyword: #f091b8; --alias: #9b9791; --cte: #7fd0d0; --operator: #9b9791;
+      --value: #e8a271; --type: #c0a0f0; --snippet: #7fd0d0;
     }
   }
   * { box-sizing: border-box; }
@@ -81,6 +83,8 @@
   .k-schema { color: var(--schema); } .k-function { color: var(--function); }
   .k-keyword { color: var(--keyword); } .k-alias { color: var(--alias); }
   .k-cte { color: var(--cte); } .k-operator { color: var(--operator); }
+  .k-value { color: var(--value); } .k-type { color: var(--type); }
+  .k-snippet { color: var(--snippet); }
 
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
   .panel h2 {

@@ -91,6 +91,22 @@ def in_literal(tokens: Sequence[Token], caret: int) -> bool:
     return False
 
 
+def string_under(tokens: Sequence[Token], caret: int) -> Token | None:
+    """
+    The string literal the caret is inside, if it is inside one.
+
+    Separate from `in_literal`, which also answers for comments: a half-typed
+    literal is a position with an answer — the values that column holds — where
+    a comment is a position with none.
+    """
+    for token in tokens:
+        if token.type is not TokenType.STRING:
+            continue
+        if token.start < caret < token.end or (caret == token.end and not token.terminated):
+            return token
+    return None
+
+
 def statement_at(tokens: Sequence[Token], caret: int) -> tuple[int, int]:
     """
     The index range [lo, hi) of the statement containing `caret`.
@@ -336,7 +352,7 @@ def comparand_at(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple
     index = _index_before(tokens, caret)
     if index < 0:
         return (), None
-    if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
+    if tokens[index].type in (TokenType.IDENT, TokenType.STRING) and tokens[index].end >= caret:
         index -= 1
 
     # Step back over whatever is being typed on the *right*. A qualifier is part

@@ -38,6 +38,7 @@ class MemoryCatalog:
         *,
         functions: Iterable[Function] = (),
         keywords: Iterable[tuple[str, str]] = (),
+        values: Mapping[tuple[str, str, str], Sequence[str]] | None = None,
         table_kinds: Mapping[tuple[str, str], str] | None = None,
         oversized: bool = False,
     ) -> None:
@@ -60,6 +61,7 @@ class MemoryCatalog:
         )
         self._functions = tuple(functions)
         self._keywords = tuple(keywords)
+        self._values = dict(values or {})
         self._oversized = oversized
         self.calls: list[tuple[str, ...]] = []
         """Recorded call names, so tests can assert a CTE cost no catalog reads."""
@@ -119,6 +121,17 @@ class MemoryCatalog:
         ]
         found.sort(key=lambda column: (not column.name.lower().startswith(folded), len(column.name), column.name))
         return found[:limit]
+
+    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[str]:
+        """Frequent values, when the fixture supplied any. Keyed (schema, table, column)."""
+        self.calls.append(('common_values', schema or '', table, column))
+        if schema is not None:
+            return self._values.get((schema, table, column), ())[:limit]
+        for (candidate_schema, candidate_table, candidate_column), found in self._values.items():
+            if candidate_table == table and candidate_column == column:
+                del candidate_schema
+                return found[:limit]
+        return ()
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords, when the fixture supplied any."""

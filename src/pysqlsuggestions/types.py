@@ -29,6 +29,8 @@ class Kind(Enum):
     """A data type name, wanted after a cast: `'7 days'::interval`."""
     SNIPPET = 'snippet'
     """A whole statement shape with places to fill in, offered where one can start."""
+    VALUE = 'value'
+    """A literal the compared column actually holds: `WHERE type = 'postgres'`."""
     """`=`, `<>`, `>=`. Separate from KEYWORD because it has no case to follow."""
 
 

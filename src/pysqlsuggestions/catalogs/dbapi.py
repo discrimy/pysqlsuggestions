@@ -118,3 +118,8 @@ class DbapiCatalog:
         """Functions, aggregates and window functions."""
         rows = self._rows(self._dialect.catalog_queries.functions, schema or '')
         return [row for row in rows if isinstance(row, Function)]
+
+    def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[str]:
+        """Frequent values of one column, from the dialect's statistics query."""
+        rows = self._rows(self._dialect.catalog_queries.values, schema or '', table, column)
+        return [row for row in rows if isinstance(row, str)][:limit]

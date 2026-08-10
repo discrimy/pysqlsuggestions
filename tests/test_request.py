@@ -85,8 +85,11 @@ def test_a_completed_operand_wants_an_operator_not_another_column() -> None:
 
 
 def test_an_operator_reopens_the_operand_position() -> None:
-    """`= ` and `AND ` both expect a value, so columns come back."""
-    assert request('SELECT * FROM users r WHERE r.id = ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
+    """
+    `= ` and `AND ` both expect a value, so columns come back — and right of a
+    comparison a literal comes back first, since that is usually what is wanted.
+    """
+    assert request('SELECT * FROM users r WHERE r.id = ⌶').kinds == (Kind.VALUE, Kind.COLUMN, Kind.FUNCTION)
     assert request('SELECT * FROM users r WHERE r.id = 1 AND ⌶').kinds == (Kind.COLUMN, Kind.FUNCTION)
 
 
@@ -184,11 +187,20 @@ def test_a_completed_select_item_wants_as_or_from() -> None:
     assert request('SELECT r.name ⌶ FROM users r').kinds == (Kind.KEYWORD,)
 
 
-def test_caret_in_a_literal_offers_nothing() -> None:
-    """Suggesting identifiers inside a string is worse than suggesting nothing."""
+def test_caret_in_a_literal_offers_only_what_a_literal_can_be() -> None:
+    """
+    Never an identifier — suggesting one inside a string is worse than
+    suggesting nothing. A literal being written as a value is the exception:
+    there the question is which values the column holds, and the half-typed
+    text narrows them.
+    """
     result = request("SELECT * FROM t WHERE name = 'ab⌶")
-    assert result.kinds == ()
-    assert result.prefix == ''
+    assert result.kinds == (Kind.VALUE,)
+    assert result.prefix == 'ab'
+
+    elsewhere = request("SELECT 'ab⌶ FROM t")
+    assert elsewhere.kinds == ()
+    assert elsewhere.prefix == ''
 
 
 def test_caret_in_a_comment_offers_nothing() -> None:
