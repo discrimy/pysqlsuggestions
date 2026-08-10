@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pysqlsuggestions.dialects.base import ClauseModel
 from pysqlsuggestions.engine.lex import Token, TokenType
 
 _SKIP = (TokenType.WHITESPACE, TokenType.COMMENT)
@@ -100,6 +101,82 @@ def qualifier_and_prefix(
         cursor = _skip_back(tokens, cursor - 1)
 
     return tuple(reversed(segments)), prefix, span
+
+
+def clause_at(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    clauses: ClauseModel,
+) -> str | None:
+    """
+    The nearest clause keyword governing the caret.
+
+    Scans back over tokens at the caret's own depth. A subquery that closed
+    before the caret sits at a deeper level and is skipped, so
+    `SELECT a, (SELECT b FROM t2), <caret>` is still the outer SELECT.
+
+    When the caret's depth holds no clause keyword — `WHERE (a AND <caret>)`,
+    `SELECT sum(<caret>` — the search widens to the enclosing depth.
+    """
+    words = clauses.names()
+    if not words:
+        return None
+    depth = depth_at(tokens, caret)
+    while depth >= 0:
+        found = _scan_for_clause(tokens, lo, hi, caret, words, depth)
+        if found is not None:
+            return found
+        depth -= 1
+    return None
+
+
+def _scan_for_clause(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    words: tuple[str, ...],
+    depth: int,
+) -> str | None:
+    """
+    The clause name ending nearest to the left of `caret` at exactly `depth`.
+
+    Ranked by (end offset, word count), so `DELETE FROM <caret>` answers
+    'DELETE FROM' rather than the bare 'FROM' that ends at the same token.
+    """
+    best: tuple[int, int, str] | None = None
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type is not TokenType.IDENT or token.depth != depth or token.end >= caret:
+            continue
+        for name in words:
+            parts = name.split()
+            run = _ident_run(tokens, index, hi, len(parts))
+            if run is None or [t.value.upper() for t in run] != parts or run[-1].end >= caret:
+                continue
+            candidate = (run[-1].end, len(parts), name)
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+            break
+    return best[2] if best is not None else None
+
+
+def _ident_run(tokens: Sequence[Token], start: int, hi: int, count: int) -> list[Token] | None:
+    """`count` consecutive IDENT tokens beginning at `start`, ignoring whitespace and comments."""
+    run: list[Token] = []
+    index = start
+    while index < hi and len(run) < count:
+        token = tokens[index]
+        if token.type in _SKIP:
+            index += 1
+            continue
+        if token.type is not TokenType.IDENT:
+            return None
+        run.append(token)
+        index += 1
+    return run if len(run) == count else None
 
 
 def _skip_back(tokens: Sequence[Token], index: int) -> int:
