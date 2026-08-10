@@ -144,8 +144,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     if Kind.TABLE in request.kinds:
         candidates += [_table_candidate(table) for table in reader.tables(None)]
         candidates += [
-            Candidate(text=name, kind=Kind.TABLE, detail='cte', origin='local')
-            for name in (scope.ctes if scope else {})
+            Candidate(text=name, kind=Kind.CTE, detail='cte', origin='local') for name in (scope.ctes if scope else {})
         ]
 
     if Kind.SCHEMA in request.kinds:
@@ -172,26 +171,36 @@ def _find_relation(label: str, scope: Scope) -> Relation | None:
     return scope.ctes.get(label)
 
 
-def _columns_of(relation: Relation, reader: _Reader, seen: set[tuple[str, ...]]) -> list[Candidate]:
+def _columns_of(
+    relation: Relation,
+    reader: _Reader,
+    seen: set[tuple[str, ...]],
+    label: str | None = None,
+) -> list[Candidate]:
     """
     The columns a relation offers.
 
     A relation the statement described itself needs no catalog call at all —
     which is the whole point of carrying projections through the pure stages.
     `seen` guards against a CTE that refers to itself.
+
+    `label` is the name the *user* wrote. When a CTE's star is expanded through
+    the table behind it, the detail should read `a.email`, not `auth_user.email`:
+    `a` is what they can type.
     """
     key = (relation.label, *relation.path)
     if key in seen:
         return []
     seen.add(key)
+    shown = label or relation.label
 
     if relation.projection is None:
         schema, table = _split_path(relation.path)
         if table is None:
             return []
-        return [_column_candidate(column) for column in reader.columns(schema, table)]
+        return [_column_candidate(column, shown) for column in reader.columns(schema, table)]
 
-    return _from_projection(relation.projection, relation.label, reader, seen)
+    return _from_projection(relation.projection, shown, reader, seen)
 
 
 def _from_projection(
@@ -202,11 +211,11 @@ def _from_projection(
 ) -> list[Candidate]:
     """Named outputs need no fetch; unresolved stars are expanded against their sources."""
     candidates = [
-        Candidate(text=name, kind=Kind.COLUMN, detail=f'{label} (derived)', position=index, origin='local')
+        Candidate(text=name, kind=Kind.COLUMN, detail=f'{label}.{name}', position=index, origin='local')
         for index, name in enumerate(projection.columns)
     ]
     for star in projection.stars:
-        candidates += _columns_of(star, reader, seen)
+        candidates += _columns_of(star, reader, seen, label=label)
     return candidates
 
 
@@ -224,11 +233,11 @@ def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
     return path[-2], path[-1]
 
 
-def _column_candidate(column: Column) -> Candidate:
+def _column_candidate(column: Column, label: str | None = None) -> Candidate:
     return Candidate(
         text=column.name,
         kind=Kind.COLUMN,
-        detail=f'{column.table}.{column.name} :: {column.type}',
+        detail=f'{label or column.table}.{column.name} :: {column.type}',
         position=column.position,
     )
 

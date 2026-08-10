@@ -11,7 +11,7 @@ from pysqlsuggestions.types import Kind, Projection, Relation, Request, Scope
 
 def test_kind_values_are_json_ready_strings() -> None:
     """Consumers serialise `kind` straight into JSON; auto() integers would be meaningless."""
-    assert [k.value for k in Kind] == ['column', 'table', 'schema', 'function', 'alias', 'keyword']
+    assert [k.value for k in Kind] == ['column', 'table', 'cte', 'schema', 'function', 'alias', 'keyword']
 
 
 def test_request_defaults() -> None:

@@ -18,6 +18,8 @@ class Kind(Enum):
 
     COLUMN = 'column'
     TABLE = 'table'
+    CTE = 'cte'
+    """A relation the statement defined itself. Distinct from TABLE so a UI can say so."""
     SCHEMA = 'schema'
     FUNCTION = 'function'
     ALIAS = 'alias'

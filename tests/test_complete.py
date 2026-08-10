@@ -94,12 +94,23 @@ def test_a_word_match_scores_below_a_real_prefix() -> None:
     assert score_of('SELECT * FROM data⌶') < score_of('SELECT * FROM reports⌶')
 
 
-def test_mid_word_fragments_still_do_not_match() -> None:
+def test_mid_word_fragments_match_but_rank_last() -> None:
     """
-    `atabas` is a substring but not a word — the old helper matched it, and that
-    is the looseness plan.md §6 rejects.
+    `atabas` is a substring, not a word. The helper this supersedes matched it,
+    and its users rely on that — `mail` finding `email` is the same rule — so
+    substring is the weakest tier rather than no tier at all.
     """
-    assert texts('SELECT * FROM atabas⌶') == []
+    assert texts('SELECT * FROM atabas⌶') == ['reports_database']
+
+
+def test_substring_matches_columns_too() -> None:
+    """`mail` finds `email`. The helper this supersedes did this, and its users rely on it."""
+    assert texts('SELECT * FROM auth_user u WHERE u.mail⌶') == ['email']
+
+
+def test_a_prefix_hit_outranks_a_substring_hit() -> None:
+    """`e` prefixes email and sits mid-word in username; the prefix wins."""
+    assert texts('SELECT * FROM auth_user u WHERE u.e⌶') == ['email', 'username']
 
 
 def test_tables_in_from_clause() -> None:

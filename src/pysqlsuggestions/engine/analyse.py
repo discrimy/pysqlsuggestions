@@ -20,6 +20,7 @@ _JOIN_QUALIFIERS = frozenset(
     LEFT RIGHT FULL INNER OUTER CROSS NATURAL LATERAL ANTI SEMI ASOF GLOBAL ANY ALL
     """.split(),
 )
+_CTE_MODIFIERS = frozenset({'MATERIALIZED', 'NOT'})
 
 
 def _index_before(tokens: Sequence[Token], caret: int) -> int:
@@ -438,6 +439,7 @@ def select_outputs(
     lo: int,
     hi: int,
     dialect: Dialect,
+    ctes: dict[str, Relation] | None = None,
 ) -> Projection:
     """
     The output columns of the select body spanning [lo, hi).
@@ -446,7 +448,7 @@ def select_outputs(
     `t.*` cannot be expanded here — the catalog holds that answer — so the
     relation it refers to is recorded in `stars` for resolve to finish.
     """
-    body_relations = _relations_in(tokens, lo, hi, -1, dialect)
+    body_relations = [_bind(r, ctes or {}) for r in _relations_in(tokens, lo, hi, -1, dialect)]
     base = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
     start = _after_clause(tokens, lo, hi, 'SELECT', dialect, depth=base)
     if start is None:
@@ -578,11 +580,18 @@ def _read_ctes(tokens: Sequence[Token], lo: int, hi: int, dialect: Dialect) -> d
         if index >= hi or tokens[index].value.upper() != 'AS':
             break
         index = _skip_forward(tokens, index + 1, hi)
+        # `AS MATERIALIZED (...)` and `AS NOT MATERIALIZED (...)` are both legal.
+        while index < hi and tokens[index].type is TokenType.IDENT and tokens[index].value.upper() in _CTE_MODIFIERS:
+            index = _skip_forward(tokens, index + 1, hi)
         if index >= hi or tokens[index].text != '(':
             break
         body_lo = index + 1
         body_hi = _matching_paren(tokens, index, hi)
-        projection = Projection(columns=declared) if declared else select_outputs(tokens, body_lo, body_hi, dialect)
+        # Earlier CTEs are in scope inside this one's body, so `WITH a AS (...),
+        # b AS (SELECT * FROM a)` can resolve b's star against a's projection.
+        projection = (
+            Projection(columns=declared) if declared else select_outputs(tokens, body_lo, body_hi, dialect, ctes)
+        )
         ctes[name] = Relation(alias=None, path=(name,), source='cte', projection=projection)
         index = _skip_forward(tokens, body_hi + 1, hi)
         if index < hi and tokens[index].text == ',':

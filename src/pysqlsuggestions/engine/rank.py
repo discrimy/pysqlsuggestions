@@ -22,6 +22,8 @@ _EXACT_PREFIX = 100.0
 _FOLDED_PREFIX = 70.0
 _WORD_PREFIX = 55.0
 _WORD_BOUNDARY = 40.0
+_SUBSTRING = 25.0
+_SUBSTRING_POSITION_WEIGHT = 0.5
 
 _KIND_STEP = 5.0
 _LOCAL_BONUS = 15.0
@@ -30,8 +32,10 @@ _LOCAL_BONUS = 15.0
 _MAX_POSITION_PENALTY = 50
 _POSITION_WEIGHT = 0.1
 
-_PLAIN_LOWER = re.compile(r'[a-z_][a-z0-9_$]*\Z')
-_PLAIN_ANY_CASE = re.compile(r'[A-Za-z_][A-Za-z0-9_$]*\Z')
+# Non-ASCII letters are legal unquoted in every backend here, so a Cyrillic
+# column must not come back wrapped in quotes it never needed.
+_PLAIN_LOWER = re.compile(r'[a-z_-￿][\w$-￿]*\Z')
+_PLAIN_ANY_CASE = re.compile(r'[A-Za-z_-￿][\w$-￿]*\Z')
 
 
 def rank(
@@ -45,7 +49,7 @@ def rank(
     scored: list[tuple[float, str, Suggestion]] = []
 
     for candidate in candidates:
-        strength = _match_strength(candidate.text, request.prefix)
+        strength = _match_strength(candidate.text, request.prefix, candidate.kind)
         if strength is None:
             continue
         score = strength + _kind_bonus(candidate.kind, kind_rank, len(request.kinds))
@@ -72,30 +76,47 @@ def rank(
     return ordered[:limit] if limit is not None else ordered
 
 
-def _match_strength(text: str, prefix: str) -> float | None:
+def _match_strength(text: str, prefix: str, kind: Kind = Kind.COLUMN) -> float | None:
     """
     How well `text` matches `prefix`, or None when it does not match at all.
 
-    Four tiers, all anchored to a word boundary. Snake_case names bury the
-    meaningful word — nobody types `reports_` to reach `reports_database`, they
-    type `data` — so a prefix of any word component counts, while a fragment
-    starting mid-word (`atabas`) does not. That is the line plan.md §6 draws:
-    looser matching demos well and then degrades badly, because on a 400-table
-    schema a three-character prefix matching sixty things is worse than matching
-    nothing.
+    Five tiers, weakest last:
+
+    1. exact-case prefix
+    2. case-insensitive prefix
+    3. prefix of any word component — `data` finds `reports_database`, because
+       snake_case buries the meaningful word and nobody types `reports_`
+    4. initials of the words — `oi` finds `order_items`
+    5. substring, scored down by how late the match starts
+
+    Tier 5 is what the helper this supersedes did for every identifier, so its
+    users already rely on `mail` finding `email`. It is contiguous and
+    position-ranked, which makes it considerably tighter than the subsequence
+    fuzzy matching plan.md §6 rejects — the failure mode there is a
+    three-character prefix matching sixty unrelated things, and a contiguous
+    match ranked below four stronger tiers does not do that.
+
+    Keywords stay prefix-only. There are a few hundred of them and they are not
+    what the user is hunting for; `her` should not offer WHERE.
     """
     if not prefix:
         return _EXACT_PREFIX
     if text.startswith(prefix):
         return _EXACT_PREFIX
     folded = prefix.lower()
-    if text.lower().startswith(folded):
+    lowered = text.lower()
+    if lowered.startswith(folded):
         return _FOLDED_PREFIX
+    if kind is Kind.KEYWORD:
+        return None
     words = _words(text)
     if any(word.startswith(folded) for word in words):
         return _WORD_PREFIX
     if ''.join(word[0] for word in words).startswith(folded):
         return _WORD_BOUNDARY
+    found = lowered.find(folded)
+    if found >= 0:
+        return _SUBSTRING - found * _SUBSTRING_POSITION_WEIGHT
     return None
 
 
@@ -132,8 +153,15 @@ def _initials(text: str) -> str:
 
 
 def _kind_bonus(kind: Kind, kind_rank: dict[Kind, int], total: int) -> float:
-    """Kinds earlier in `request.kinds` are more relevant here."""
+    """
+    Kinds earlier in `request.kinds` are more relevant here.
+
+    A CTE occupies a relation position, so it scores as one: `kinds` names TABLE
+    where a relation belongs, and a CTE is the statement's own relation.
+    """
     index = kind_rank.get(kind)
+    if index is None and kind is Kind.CTE:
+        index = kind_rank.get(Kind.TABLE)
     return 0.0 if index is None else (total - index) * _KIND_STEP
 
 
@@ -176,9 +204,9 @@ def _needs_quoting(name: str, dialect: Dialect) -> bool:
     return name != name.lower() or _PLAIN_LOWER.match(name) is None
 
 
-def matches(text: str, prefix: str) -> bool:
+def matches(text: str, prefix: str, kind: Kind = Kind.COLUMN) -> bool:
     """Whether `text` would survive ranking for `prefix`. Exposed for callers that pre-filter."""
-    return _match_strength(text, prefix) is not None
+    return _match_strength(text, prefix, kind) is not None
 
 
 def kinds_present(suggestions: Sequence[Suggestion]) -> tuple[Kind, ...]:
