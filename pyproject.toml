@@ -51,6 +51,9 @@ ignore = [
     'SIM905',
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ['pysqlsuggestions', 'tests']
+
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = 'single'
 
