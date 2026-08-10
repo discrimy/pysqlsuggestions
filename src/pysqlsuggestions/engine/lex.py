@@ -13,6 +13,7 @@ consults the dialect's vocabulary. That keeps this module dependent on dialect
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 
@@ -63,7 +64,10 @@ def _is_ident_start(ch: str) -> bool:
 
 
 def _is_ident_char(ch: str) -> bool:
-    return ch.isalnum() or ch in '_$'
+    # A combining mark is not alphanumeric but belongs to the letter before it:
+    # `café` typed on macOS arrives as `cafe` plus U+0301, and splitting there
+    # loses the half of the name the user has typed.
+    return ch.isalnum() or ch in '_$' or unicodedata.combining(ch) != 0
 
 
 def _fold(value: str, syntax: Syntax) -> str:
@@ -115,12 +119,18 @@ def _match_operator(src: str, pos: int, syntax: Syntax) -> str | None:
     return src[pos] if src[pos] in _OPERATOR_CHARS else None
 
 
-def _scan_string(src: str, pos: int, syntax: Syntax) -> tuple[int, bool]:
-    """Scan a single-quoted literal from its opening quote. Returns (end, terminated)."""
+def _scan_string(src: str, pos: int, syntax: Syntax, *, escapes: bool = False) -> tuple[int, bool]:
+    """
+    Scan a single-quoted literal from its opening quote. Returns (end, terminated).
+
+    `escapes` forces backslash handling on for a prefixed literal, whatever the
+    dialect's default: Postgres processes escapes inside `E'...'` however
+    `standard_conforming_strings` is set.
+    """
     i = pos + 1
     while i < len(src):
         ch = src[i]
-        if ch == '\\' and syntax.string_escape_backslash:
+        if ch == '\\' and (escapes or syntax.string_escape_backslash):
             i += 2
             continue
         if ch == "'":
@@ -168,6 +178,12 @@ def _scan_dollar_quote(src: str, pos: int) -> tuple[int, bool] | None:
     return (len(src), False) if end == -1 else (end + len(tag), True)
 
 
+def _opens_escape_string(src: str, pos: int, syntax: Syntax) -> bool:
+    r"""Whether an escape-string prefix sits at `pos`, as in Postgres `E'a\nb'`."""
+    prefix = syntax.escape_string_prefix
+    return bool(prefix) and src[pos].upper() == prefix and src.startswith("'", pos + 1)
+
+
 def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
     """Tokenize `src`. Total, never raises, and preserves every offset."""
     tokens: list[Token] = []
@@ -203,10 +219,12 @@ def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
             pos = end
             continue
 
-        if ch == "'":
-            end, terminated = _scan_string(src, pos, syntax)
+        if ch == "'" or _opens_escape_string(src, pos, syntax):
+            start = pos
+            escaped = ch != "'"
+            end, terminated = _scan_string(src, start + (1 if escaped else 0), syntax, escapes=escaped)
             tokens.append(
-                Token(TokenType.STRING, pos, end, src[pos:end], src[pos:end], terminated=terminated, depth=depth),
+                Token(TokenType.STRING, start, end, src[start:end], src[start:end], terminated=terminated, depth=depth),
             )
             pos = end
             continue

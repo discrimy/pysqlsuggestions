@@ -8,6 +8,7 @@ Nothing performs I/O, and nothing knows what a catalog is.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from functools import cache
 
 from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
@@ -33,6 +34,16 @@ _COMPARISONS = frozenset({'=', '<', '>', '<=', '>=', '<>', '!='})
 _PREDICATE_KEYWORDS = frozenset({'IS', 'IN', 'LIKE', 'ILIKE', 'BETWEEN', 'SIMILAR', 'EXISTS'})
 _CONNECTIVES = frozenset({'AND', 'OR'})
 _SET_OPERATORS = frozenset({'UNION', 'INTERSECT', 'EXCEPT'})
+
+_MAX_NESTING = 64
+"""
+How many levels of subquery the scope chain will descend.
+
+Nobody writes sixty-four, but a code generator does, and the recursion that
+follows the caret down reaches Python's stack limit before it reaches anything
+interesting — a RecursionError arrives at the editor as a crash rather than as
+a slightly-less-precise list.
+"""
 
 
 def _index_before(tokens: Sequence[Token], caret: int) -> int:
@@ -469,12 +480,11 @@ def clause_at(
     When the caret's depth holds no clause keyword — `WHERE (a AND <caret>)`,
     `SELECT sum(<caret>` — the search widens to the enclosing depth.
     """
-    words = clauses.names()
-    if not words:
+    if not clauses.clauses:
         return None
     depth = depth_at(tokens, caret)
     while depth >= 0:
-        found = _scan_for_clause(tokens, lo, hi, caret, words, depth)
+        found = _scan_for_clause(tokens, lo, hi, caret, clauses, depth)
         if found is not None:
             return found
         depth -= 1
@@ -486,7 +496,7 @@ def _scan_for_clause(
     lo: int,
     hi: int,
     caret: int,
-    words: tuple[str, ...],
+    clauses: ClauseModel,
     depth: int,
 ) -> str | None:
     """
@@ -498,28 +508,32 @@ def _scan_for_clause(
     best: tuple[int, int, str] | None = None
     for index in range(lo, hi):
         token = tokens[index]
-        if token.type is not TokenType.IDENT or token.depth != depth or token.end >= caret:
+        if token.type is not TokenType.IDENT or token.quoted or token.depth != depth or token.end >= caret:
             continue
-        for name in words:
-            parts = name.split()
-            run = _ident_run(tokens, index, hi, len(parts))
-            if run is None or [t.value.upper() for t in run] != parts or run[-1].end >= caret:
-                continue
-            candidate = (run[-1].end, len(parts), name)
-            if best is None or candidate[:2] > best[:2]:
-                best = candidate
-            break
+        matched = _clause_starting_at(tokens, index, hi, clauses)
+        if matched is None:
+            continue
+        name = matched[0]
+        last = tokens[matched[1] - 1]
+        if last.end >= caret:
+            continue
+        candidate = (last.end, len(name.split()), name)
+        if best is None or candidate[:2] > best[:2]:
+            best = candidate
     return best[2] if best is not None else None
 
 
-def _ident_run(tokens: Sequence[Token], start: int, hi: int, count: int) -> list[Token] | None:
+def _ident_run(tokens: Sequence[Token], start: int, hi: int, count: int) -> tuple[list[Token], int] | None:
     """
-    `count` consecutive unquoted IDENT tokens beginning at `start`.
+    `count` consecutive unquoted IDENT tokens from `start`, and where they end.
 
     Whitespace and comments are skipped. Quoting is how SQL says "this is a
     name, not syntax", so a quoted word never spells a clause: `FROM "limit"`
     is a relation called `limit`, and reading it as the LIMIT clause loses the
     relation along with the clause.
+
+    The end index comes back with the run because the caller wants it and is
+    the only one who can cheaply know it.
     """
     run: list[Token] = []
     index = start
@@ -532,7 +546,7 @@ def _ident_run(tokens: Sequence[Token], start: int, hi: int, count: int) -> list
             return None
         run.append(token)
         index += 1
-    return run if len(run) == count else None
+    return (run, index) if len(run) == count else None
 
 
 def _skip_back(tokens: Sequence[Token], index: int) -> int:
@@ -588,6 +602,7 @@ def _scope_level(
     ctes: dict[str, Relation],
     parent: Scope | None,
     cte_scopes: Mapping[tuple[int, int], dict[str, Relation]] | None = None,
+    remaining: int = _MAX_NESTING,
 ) -> Scope:
     """One query level, recursing into whichever subquery holds the caret."""
     cte_scopes = cte_scopes if cte_scopes is not None else {}
@@ -606,7 +621,7 @@ def _scope_level(
     )
     opaque = {(body_lo, body_hi) for body_lo, body_hi, _ in derived if not _is_lateral(tokens, body_lo, dialect)}
 
-    for inner_lo, inner_hi in _subquery_bodies(tokens, lo, hi):
+    for inner_lo, inner_hi in _subquery_bodies(tokens, lo, hi) if remaining > 0 else ():
         if tokens[inner_lo].start <= caret <= tokens[inner_hi - 1].end:
             # Three kinds of nested query, and they see three different things.
             # A CTE body sees the CTEs written before it and nothing of the outer
@@ -623,6 +638,7 @@ def _scope_level(
                 ctes if declared is None else declared,
                 parent=None if opaque_here else here,
                 cte_scopes=cte_scopes,
+                remaining=remaining - 1,
             )
     return here
 
@@ -744,7 +760,7 @@ def _relations_in(
         if token.depth - shelter(index) > tokens[lo].depth:
             index += 1
             continue
-        matched = _clause_starting_at(tokens, index, hi, dialect)
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is None or matched[0] not in _RELATION_CLAUSES:
             index += 1
             continue
@@ -775,7 +791,7 @@ def clauses_written(
         if tokens[index].type in _SKIP or tokens[index].depth != depth:
             index += 1
             continue
-        matched = _clause_starting_at(tokens, index, hi, dialect)
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is None:
             index += 1
             continue
@@ -862,7 +878,7 @@ def _unclosed_call_depth(
 
 def _opens_a_query(tokens: Sequence[Token], index: int, hi: int, dialect: Dialect) -> bool:
     """Whether the group opening at `index` begins with a word that starts a statement."""
-    matched = _clause_starting_at(tokens, index + 1, hi, dialect)
+    matched = _clause_starting_at(tokens, index + 1, hi, dialect.clauses)
     return matched is not None and matched[0] in dialect.statement_start
 
 
@@ -870,23 +886,35 @@ def _clause_starting_at(
     tokens: Sequence[Token],
     index: int,
     hi: int,
-    dialect: Dialect,
+    clauses: ClauseModel,
 ) -> tuple[str, int] | None:
-    """(clause name, index just past it) when a clause name starts at `index`."""
-    for name in dialect.clauses.names():
+    """
+    (clause name, index just past it) when a clause name starts at `index`.
+
+    Only the clauses whose first word is the word actually written are tried,
+    and the run reports where it ended. Trying all thirty and then hunting the
+    stream for the matched token made this quadratic in the length of the
+    query — and a query long enough to matter is exactly the one worth
+    completing.
+    """
+    first = tokens[index] if index < len(tokens) else None
+    if first is None or first.type is not TokenType.IDENT or first.quoted:
+        return None
+    for name in _by_first_word(clauses).get(first.value.upper(), ()):
         parts = name.split()
         run = _ident_run(tokens, index, hi, len(parts))
-        if run is not None and [t.value.upper() for t in run] == parts:
-            return name, _index_of(tokens, run[-1]) + 1
+        if run is not None and [t.value.upper() for t in run[0]] == parts:
+            return name, run[1]
     return None
 
 
-def _index_of(tokens: Sequence[Token], token: Token) -> int:
-    """The position of `token` in `tokens`, located by its start offset."""
-    for index, candidate in enumerate(tokens):
-        if candidate.start == token.start:
-            return index
-    raise ValueError('token not in stream')
+@cache
+def _by_first_word(clauses: ClauseModel) -> dict[str, tuple[str, ...]]:
+    """Clause names grouped by their first word, longest first so `GROUP BY` beats `GROUP`."""
+    grouped: dict[str, list[str]] = {}
+    for name in clauses.names():
+        grouped.setdefault(name.split()[0], []).append(name)
+    return {word: tuple(names) for word, names in grouped.items()}
 
 
 def _read_relation_list(
@@ -900,7 +928,7 @@ def _read_relation_list(
     """Read comma-separated relation references until the next clause keyword."""
     while index < hi:
         index = _skip_forward(tokens, index, hi)
-        if index >= hi or _clause_starting_at(tokens, index, hi, dialect) is not None:
+        if index >= hi or _clause_starting_at(tokens, index, hi, dialect.clauses) is not None:
             break
         token = tokens[index]
         if token.type is TokenType.PUNCT and token.text == ',':
@@ -970,7 +998,7 @@ def _read_alias(
             return None, index
         return tokens[probe].value, probe + 1
     word = tokens[probe].value.upper()
-    if word in dialect.reserved_upper or _clause_starting_at(tokens, probe, hi, dialect) is not None:
+    if word in dialect.reserved_upper or _clause_starting_at(tokens, probe, hi, dialect.clauses) is not None:
         return None, index
     return tokens[probe].value, probe + 1
 
@@ -1027,7 +1055,7 @@ def _after_clause(
         token = tokens[index]
         if token.type is not TokenType.IDENT or (depth is not None and token.depth != depth):
             continue
-        matched = _clause_starting_at(tokens, index, hi, dialect)
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is not None and matched[0] == name:
             return matched[1]
     return None
@@ -1045,7 +1073,7 @@ def _next_clause_at_depth(
     for index in range(lo, hi):
         if tokens[index].type is not TokenType.IDENT or tokens[index].depth != depth:
             continue
-        matched = _clause_starting_at(tokens, index, hi, dialect)
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is not None and matched[0] in names:
             return index
     return hi

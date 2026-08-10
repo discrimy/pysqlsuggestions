@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from pysqlsuggestions.api import derive_request
 from pysqlsuggestions.dialects.base import Syntax
+from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.lex import TokenType, lex
 
 PG = Syntax(dollar_quoting=True, nested_block_comments=True, cast_operator='::')
@@ -92,3 +94,44 @@ def test_depth_ignores_parens_inside_literals() -> None:
     """A paren in a string must not shift depth for the rest of the statement."""
     tokens = [t for t in lex("SELECT '(' , a FROM t", Syntax()) if t.type is not TokenType.WHITESPACE]
     assert all(t.depth == 0 for t in tokens)
+
+
+def test_a_postgres_escape_string_honours_its_backslashes() -> None:
+    r"""
+    `E'a\'b'` is one literal. Postgres processes backslash escapes inside an
+    `E''` string whatever `standard_conforming_strings` says, so reading the
+    escaped quote as the closing one opens a second literal that swallows the
+    rest of the statement.
+    """
+    tokens = [t for t in lex(r"SELECT E'a\'b', x FROM t", POSTGRES.syntax) if t.type is not TokenType.WHITESPACE]
+    assert [(t.type, t.text) for t in tokens][:2] == [
+        (TokenType.IDENT, 'SELECT'),
+        (TokenType.STRING, r"E'a\'b'"),
+    ]
+    assert all(t.terminated for t in tokens)
+
+
+def test_the_rest_of_the_statement_survives_an_escape_string() -> None:
+    r"""The symptom that made it worth finding: everything after went dark."""
+    sql = r"SELECT E'a\'b' FROM t WHERE "
+    assert derive_request(sql, len(sql), POSTGRES).clause == 'WHERE'
+
+
+def test_a_plain_string_still_ends_at_a_backslashed_quote_in_postgres() -> None:
+    r"""Without the `E`, `standard_conforming_strings` means `\` is just a character."""
+    tokens = [t for t in lex(r"SELECT 'a\'", POSTGRES.syntax) if t.type is TokenType.STRING]
+    assert tokens[0].text == r"'a\'"
+
+
+def test_a_combining_mark_belongs_to_the_word_it_marks() -> None:
+    """
+    `café` typed on macOS arrives decomposed: `cafe` followed by U+0301.
+
+    `str.isalnum` is False for a combining mark, so the name split in two and
+    the prefix was lost — the caret ended up in an empty span after the mark,
+    and accepting a suggestion inserted rather than replaced.
+    """
+    decomposed = 'café'
+    tokens = [t for t in lex(f'SELECT * FROM {decomposed}', POSTGRES.syntax) if t.type is not TokenType.WHITESPACE]
+    assert tokens[-1].type is TokenType.IDENT
+    assert tokens[-1].text == decomposed

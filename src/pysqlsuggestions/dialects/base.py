@@ -28,6 +28,15 @@ class Syntax:
     unquoted_case: Literal['lower', 'upper', 'preserve'] = 'lower'
     dollar_quoting: bool = False
     cast_operator: str | None = None
+    escape_string_prefix: str = ''
+    """
+    A letter that turns the literal after it into an escape string.
+
+    Postgres `E'a\\'b'` processes backslash escapes however
+    `standard_conforming_strings` is set, so the escaped quote is not the
+    closing one — reading it as one opens a second literal that swallows the
+    rest of the statement.
+    """
     unquoted_extra: str = ''
     """
     Characters legal inside an unquoted identifier beyond letters, digits and `_`.
@@ -188,16 +197,16 @@ class ClauseModel:
 
 
 EXCLUSIVE = (
-    frozenset({'ASC', 'DESC'}),
-    frozenset({'NULLS FIRST', 'NULLS LAST'}),
-    frozenset({'DISTINCT', 'ALL'}),
+    (frozenset({'ASC', 'DESC'}), frozenset({'NULLS FIRST', 'NULLS LAST'})),
+    (frozenset({'DISTINCT', 'ALL'}),),
 )
 """
-Words that are one choice, offered together and picked once per item.
+Choices made once per list item, each sequence written in the order SQL takes it.
 
 Not clauses, so the once-per-branch rule does not reach them, and `ORDER BY id
-ASC ` was still offering both `ASC` and `DESC`. A new item after a comma gets
-the choice back.
+ASC ` was still offering `DESC`. Making a later choice settles the earlier ones
+too: a direction precedes a nulls placement, so `NULLS LAST ` cannot be followed
+by `ASC`. A new item after a comma gets every choice back.
 """
 
 

@@ -133,6 +133,7 @@ POSTGRES = replace(
         unquoted_case='lower',
         dollar_quoting=True,
         cast_operator='::',
+        escape_string_prefix='E',
         unquoted_extra='$',
         unquoted_non_ascii=True,
     ),

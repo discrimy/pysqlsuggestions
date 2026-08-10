@@ -297,10 +297,14 @@ def _unchosen(words: tuple[str, ...], written: frozenset[str]) -> tuple[str, ...
     if not written:
         return words
     settled: set[str] = set()
-    for group in EXCLUSIVE:
+    for sequence in EXCLUSIVE:
         # A choice counts as made when every word of any of its options is there:
-        # `NULLS LAST` is two tokens and both have to have been typed.
-        if any(set(choice.split()) <= written for choice in group):
+        # `NULLS LAST` is two tokens and both have to have been typed. The last
+        # one made settles everything before it, because SQL writes them in order.
+        made = [
+            index for index, group in enumerate(sequence) if any(set(choice.split()) <= written for choice in group)
+        ]
+        for group in sequence[: max(made) + 1] if made else ():
             settled |= group
     return tuple(word for word in words if word not in settled)
 
