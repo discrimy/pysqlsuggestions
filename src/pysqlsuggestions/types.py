@@ -93,6 +93,18 @@ class Relation:
         """The name this relation answers to: its alias, else the last path segment."""
         return self.alias or (self.path[-1] if self.path else '')
 
+    @property
+    def declared_name(self) -> str:
+        """
+        What this relation actually is, ignoring any alias.
+
+        The counterpart to `label`. `FROM auth_user u` answers to `u` but *is*
+        `auth_user`, and a suggestion's detail should say the latter — the alias
+        is already visible in the text being inserted. A derived table has no
+        name of its own, so it falls back to whatever it was aliased as.
+        """
+        return self.path[-1] if self.path else (self.alias or '')
+
 
 @dataclass(frozen=True, slots=True)
 class Scope:

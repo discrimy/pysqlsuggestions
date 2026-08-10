@@ -103,6 +103,37 @@ def test_mid_word_fragments_match_but_rank_last() -> None:
     assert texts('SELECT * FROM atabas⌶') == ['reports_database']
 
 
+def details(marked: str) -> dict[str, str]:
+    """Suggestion text -> detail."""
+    sql, caret = split_caret(marked)
+    return {s.text: s.detail or '' for s in complete(sql, caret, POSTGRES, catalog())}
+
+
+def test_the_detail_names_the_table_not_the_alias() -> None:
+    """`u.id` inserts the alias; the detail should say what the alias stands for."""
+    found = details('SELECT * FROM auth_user u WHERE u.⌶')
+    assert found['id'].startswith('auth_user.id')
+
+
+def test_the_detail_names_the_table_when_columns_are_qualified() -> None:
+    """Both halves at once: insert `u.username`, describe it as `auth_user.username`."""
+    found = details('SELECT * FROM auth_user u JOIN reports_report r ON r.author_id = u.id WHERE ⌶')
+    assert found['u.username'].startswith('auth_user.username')
+    assert found['r.name'].startswith('reports_report.name')
+
+
+def test_a_cte_describes_itself_by_its_own_name() -> None:
+    """`a` is not an alias for auth_user — it is the relation's name."""
+    found = details('WITH a AS (SELECT * FROM auth_user) SELECT * FROM a WHERE a.⌶')
+    assert found['email'].startswith('a.email')
+
+
+def test_a_derived_table_falls_back_to_its_alias() -> None:
+    """It has no name of its own, so the alias is the only thing to call it."""
+    found = details('SELECT * FROM (SELECT id FROM auth_user) d WHERE d.⌶')
+    assert found['id'].startswith('d.id')
+
+
 def test_one_relation_needs_no_qualifier() -> None:
     """A bare name is unambiguous here, and shorter."""
     assert texts('SELECT * FROM auth_user WHERE ⌶')[:3] == ['id', 'username', 'email']

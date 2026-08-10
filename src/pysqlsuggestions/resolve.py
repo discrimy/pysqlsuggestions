@@ -217,15 +217,20 @@ def _columns_of(
     which is the whole point of carrying projections through the pure stages.
     `seen` guards against a CTE that refers to itself.
 
-    `label` is the name the *user* wrote. When a CTE's star is expanded through
-    the table behind it, the detail should read `a.email`, not `auth_user.email`:
-    `a` is what they can type.
+    `label` names the relation in the detail text. It is the relation's own
+    declared name rather than its alias — `FROM auth_user u` inserts `u.id` but
+    describes it as `auth_user.id`, because the alias is already visible in the
+    text being inserted and the table name is the part you cannot see.
+
+    It is threaded down through star expansion so a CTE keeps its own name: the
+    columns of `WITH a AS (SELECT * FROM auth_user)` describe as `a.email`, not
+    `auth_user.email`, because `a` is what that relation is.
     """
     key = (relation.label, *relation.path)
     if key in seen:
         return []
     seen.add(key)
-    shown = label or relation.label
+    shown = label or relation.declared_name
 
     if relation.projection is None:
         schema, table = _split_path(relation.path)
