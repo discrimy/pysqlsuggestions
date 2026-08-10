@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
-from pysqlsuggestions.types import Relation, Scope
+from pysqlsuggestions.types import Projection, Relation, Scope
 
 _SKIP = (TokenType.WHITESPACE, TokenType.COMMENT)
 _RELATION_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO'})
@@ -214,7 +214,24 @@ def scope_of(
     Reading only the text left of the caret cannot work: in `SELECT na<caret>
     FROM users u` the relation that answers the question sits to the right.
     """
-    return Scope(relations=tuple(_relations_in(tokens, lo, hi, caret, dialect)))
+    ctes = _read_ctes(tokens, lo, hi, dialect)
+    relations = [_bind(relation, ctes) for relation in _relations_in(tokens, lo, hi, caret, dialect)]
+    return Scope(relations=tuple(relations), ctes=ctes)
+
+
+def _bind(relation: Relation, ctes: dict[str, Relation]) -> Relation:
+    """Rebind a reference to a declared CTE, so resolve never asks the catalog for it."""
+    if len(relation.path) != 1:
+        return relation
+    declared = ctes.get(relation.path[0])
+    if declared is None:
+        return relation
+    return Relation(
+        alias=relation.alias,
+        path=relation.path,
+        source='cte',
+        projection=declared.projection,
+    )
 
 
 def _relations_in(
@@ -339,3 +356,173 @@ def _read_alias(
 def _covers_caret(path: Sequence[Token], caret: int) -> bool:
     """Whether the caret sits inside this reference — a half-typed name is not a relation."""
     return any(token.covers(caret) for token in path)
+
+
+def select_outputs(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    dialect: Dialect,
+) -> Projection:
+    """
+    The output columns of the select body spanning [lo, hi).
+
+    Explicit names and aliases go into `columns`. A bare `*` or a qualified
+    `t.*` cannot be expanded here — the catalog holds that answer — so the
+    relation it refers to is recorded in `stars` for resolve to finish.
+    """
+    body_relations = _relations_in(tokens, lo, hi, -1, dialect)
+    start = _after_clause(tokens, lo, hi, 'SELECT', dialect)
+    if start is None:
+        return Projection()
+    end = _next_clause_at_depth(tokens, start, hi, dialect, tokens[start].depth, {'FROM'})
+    columns: list[str] = []
+    stars: list[Relation] = []
+    for item_lo, item_hi in _split_items(tokens, start, end):
+        name, star_for = _output_of(tokens, item_lo, item_hi, body_relations, dialect)
+        if star_for is not None:
+            stars.extend(star_for)
+        elif name is not None:
+            columns.append(name)
+    return Projection(columns=tuple(columns), stars=tuple(stars))
+
+
+def _after_clause(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    name: str,
+    dialect: Dialect,
+) -> int | None:
+    """Index just past the first occurrence of clause `name`."""
+    for index in range(lo, hi):
+        if tokens[index].type is not TokenType.IDENT:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect)
+        if matched is not None and matched[0] == name:
+            return matched[1]
+    return None
+
+
+def _next_clause_at_depth(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    dialect: Dialect,
+    depth: int,
+    names: set[str],
+) -> int:
+    """Index of the next clause in `names` at `depth`, or `hi`."""
+    for index in range(lo, hi):
+        if tokens[index].type is not TokenType.IDENT or tokens[index].depth != depth:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect)
+        if matched is not None and matched[0] in names:
+            return index
+    return hi
+
+
+def _split_items(tokens: Sequence[Token], lo: int, hi: int) -> list[tuple[int, int]]:
+    """Split [lo, hi) on commas at the shallowest depth present."""
+    if lo >= hi:
+        return []
+    depths = [t.depth for t in tokens[lo:hi] if t.type not in _SKIP]
+    if not depths:
+        return []
+    base = min(depths)
+    items, start = [], lo
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type is TokenType.PUNCT and token.text == ',' and token.depth == base:
+            items.append((start, index))
+            start = index + 1
+    items.append((start, hi))
+    return [(a, b) for a, b in items if a < b]
+
+
+def _output_of(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    relations: Sequence[Relation],
+    dialect: Dialect,
+) -> tuple[str | None, list[Relation] | None]:
+    """(output name, star sources). At most one of the two is not None."""
+    significant = [t for t in tokens[lo:hi] if t.type not in _SKIP]
+    if not significant:
+        return None, None
+
+    if significant[-1].type is TokenType.OPERATOR and significant[-1].text == '*':
+        if len(significant) >= 3 and significant[-2].text == '.':
+            label = significant[-3].value
+            return None, [r for r in relations if r.label == label]
+        return None, list(relations)
+
+    if len(significant) >= 2 and significant[-2].value.upper() == 'AS':
+        return significant[-1].value, None
+
+    if len(significant) == 1 and significant[0].type is TokenType.IDENT:
+        return significant[0].value, None
+
+    if len(significant) >= 2 and significant[-1].type is TokenType.IDENT:
+        if significant[-2].text == '.':
+            return significant[-1].value, None
+        word = significant[-1].value.upper()
+        if word not in dialect.reserved_upper and significant[-2].type is not TokenType.PUNCT:
+            return significant[-1].value, None
+
+    return None, None
+
+
+def _read_ctes(tokens: Sequence[Token], lo: int, hi: int, dialect: Dialect) -> dict[str, Relation]:
+    """Every relation declared in a leading WITH clause, keyed by name."""
+    start = _after_clause(tokens, lo, hi, 'WITH', dialect)
+    if start is None:
+        return {}
+    ctes: dict[str, Relation] = {}
+    index = _skip_forward(tokens, start, hi)
+    if index < hi and tokens[index].type is TokenType.IDENT and tokens[index].value.upper() == 'RECURSIVE':
+        index = _skip_forward(tokens, index + 1, hi)
+    while index < hi:
+        index = _skip_forward(tokens, index, hi)
+        if index >= hi or tokens[index].type is not TokenType.IDENT:
+            break
+        name = tokens[index].value
+        index += 1
+        declared, index = _read_declared_columns(tokens, index, hi)
+        index = _skip_forward(tokens, index, hi)
+        if index >= hi or tokens[index].value.upper() != 'AS':
+            break
+        index = _skip_forward(tokens, index + 1, hi)
+        if index >= hi or tokens[index].text != '(':
+            break
+        body_lo = index + 1
+        body_hi = _matching_paren(tokens, index, hi)
+        projection = Projection(columns=declared) if declared else select_outputs(tokens, body_lo, body_hi, dialect)
+        ctes[name] = Relation(alias=None, path=(name,), source='cte', projection=projection)
+        index = _skip_forward(tokens, body_hi + 1, hi)
+        if index < hi and tokens[index].text == ',':
+            index += 1
+            continue
+        break
+    return ctes
+
+
+def _read_declared_columns(tokens: Sequence[Token], index: int, hi: int) -> tuple[tuple[str, ...], int]:
+    """Read an optional `(x, y)` column list following a CTE name."""
+    probe = _skip_forward(tokens, index, hi)
+    if probe >= hi or tokens[probe].text != '(':
+        return (), index
+    close = _matching_paren(tokens, probe, hi)
+    names = tuple(t.value for t in tokens[probe + 1 : close] if t.type is TokenType.IDENT)
+    return names, close + 1
+
+
+def _matching_paren(tokens: Sequence[Token], index: int, hi: int) -> int:
+    """Index of the `)` closing the `(` at `index`, or `hi`."""
+    depth = tokens[index].depth
+    for probe in range(index + 1, hi):
+        token = tokens[probe]
+        if token.type is TokenType.PUNCT and token.text == ')' and token.depth == depth:
+            return probe
+    return hi
