@@ -7,7 +7,7 @@ Nothing performs I/O, and nothing knows what a catalog is.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
@@ -210,21 +210,41 @@ def after_as(tokens: Sequence[Token], caret: int) -> bool:
 
 def after_cast(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool:
     """
-    Whether the caret is naming the target of a cast: `'7 days'::<caret>`.
+    Whether the caret is naming the target of a cast.
 
-    Only where the dialect has a cast operator at all — strict ANSI writes
-    `CAST(x AS interval)` and has none.
+    Both spellings: the operator `'7 days'::<caret>`, which not every dialect
+    has, and the call `CAST(x AS <caret>)`, which every one does — it is the
+    only cast strict ANSI knows. The `AS` inside a CAST names a type, so it has
+    to be told apart from the `AS` that names an alias.
     """
-    marker = dialect.syntax.cast_operator
-    if not marker:
-        return False
     index = _index_before(tokens, caret)
     if index < 0:
         return False
     if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
         index -= 1
     index = _skip_back(tokens, index)
-    return index >= 0 and tokens[index].type is TokenType.OPERATOR and tokens[index].text == marker
+    if index < 0:
+        return False
+    marker = dialect.syntax.cast_operator
+    if marker and tokens[index].type is TokenType.OPERATOR and tokens[index].text == marker:
+        return True
+    if tokens[index].type is not TokenType.IDENT or tokens[index].value.upper() != 'AS':
+        return False
+    return _enclosing_call(tokens, index) == 'CAST'
+
+
+def _enclosing_call(tokens: Sequence[Token], index: int) -> str | None:
+    """The uppercased name of the function whose argument list encloses `index`, if any."""
+    wanted = tokens[index].depth - 1
+    for candidate in range(index - 1, -1, -1):
+        token = tokens[candidate]
+        if token.type is not TokenType.PUNCT or token.text != '(' or token.depth != wanted:
+            continue
+        before = _skip_back(tokens, candidate - 1)
+        if before < 0 or tokens[before].type is not TokenType.IDENT:
+            return None
+        return tokens[before].value.upper()
+    return None
 
 
 def comparand_at(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple[tuple[str, ...], str | None]:
@@ -245,7 +265,15 @@ def comparand_at(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple
     if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
         index -= 1
 
+    # Step back over whatever is being typed on the *right*. A qualifier is part
+    # of that: `> r.<caret>` and `> r.d<caret>` are the same comparison as `> `,
+    # and reading only the half-typed word leaves the caret sitting on the dot.
     index = _skip_back(tokens, index)
+    while index >= 0 and tokens[index].type is TokenType.PUNCT and tokens[index].text == '.':
+        index = _skip_back(tokens, index - 1)
+        if index >= 0 and tokens[index].type is TokenType.IDENT:
+            index = _skip_back(tokens, index - 1)
+
     if index < 0 or tokens[index].type is not TokenType.OPERATOR or tokens[index].text not in _COMPARISONS:
         return (), None
 
@@ -567,6 +595,7 @@ def _relations_in(
 ) -> list[Relation]:
     """Every table reference introduced between `lo` and `hi`."""
     relations: list[Relation] = []
+    shelter = _unclosed_call_depth(tokens, lo, hi, dialect)
     index = lo
     while index < hi:
         token = tokens[index]
@@ -575,7 +604,7 @@ def _relations_in(
             continue
         # Relations belong to the level that declared them; a nested subquery's
         # FROM is private to it and is picked up by that level's own scope.
-        if token.depth > tokens[lo].depth:
+        if token.depth - shelter(index) > tokens[lo].depth:
             index += 1
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect)
@@ -584,6 +613,46 @@ def _relations_in(
             continue
         index = _read_relation_list(tokens, matched[1], hi, caret, dialect, relations)
     return relations
+
+
+def _unclosed_call_depth(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    dialect: Dialect,
+) -> Callable[[int], int]:
+    """
+    How much of a token's depth comes from a group the author has not closed yet.
+
+    `SELECT count(<caret> FROM t` puts the FROM textually inside the argument
+    list, but the closing paren is simply unwritten and the clause belongs to
+    the outer query. A group whose first word *starts a query* is a genuine
+    subquery — `FROM (SELECT <caret> FROM t` — and keeps its depth however
+    unfinished it is, because its FROM really is private to it.
+
+    Returns a lookup rather than a list so the common case, a statement with no
+    dangling paren, costs one scan and no allocation.
+    """
+    open_groups: list[int] = []
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type is not TokenType.PUNCT:
+            continue
+        if token.text == '(':
+            open_groups.append(index)
+        elif token.text == ')' and open_groups:
+            open_groups.pop()
+
+    starts = tuple(index for index in open_groups if not _opens_a_query(tokens, index, hi, dialect))
+    if not starts:
+        return lambda _: 0
+    return lambda index: sum(1 for start in starts if start < index)
+
+
+def _opens_a_query(tokens: Sequence[Token], index: int, hi: int, dialect: Dialect) -> bool:
+    """Whether the group opening at `index` begins with a word that starts a statement."""
+    matched = _clause_starting_at(tokens, index + 1, hi, dialect)
+    return matched is not None and matched[0] in dialect.statement_start
 
 
 def _clause_starting_at(

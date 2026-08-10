@@ -28,6 +28,23 @@ class Syntax:
     unquoted_case: Literal['lower', 'upper', 'preserve'] = 'lower'
     dollar_quoting: bool = False
     cast_operator: str | None = None
+    unquoted_extra: str = ''
+    """
+    Characters legal inside an unquoted identifier beyond letters, digits and `_`.
+
+    Postgres allows `$` after the first character; Trino allows nothing extra
+    and rejects `a$b` outright.
+    """
+    unquoted_non_ascii: bool = False
+    """
+    Whether a non-ASCII letter may go unquoted.
+
+    Only Postgres reads `отчёты` back as written. ClickHouse answers
+    `Unrecognized token` and Trino `mismatched input`, so a suggestion inserted
+    bare there produces a query that does not run — which a Russian-language
+    schema discovers on its first column. Off by default: quoting a name that
+    did not need it still runs.
+    """
 
 
 @dataclass(frozen=True, slots=True)

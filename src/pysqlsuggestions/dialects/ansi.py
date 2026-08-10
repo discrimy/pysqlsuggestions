@@ -148,6 +148,29 @@ CLAUSES = ClauseModel(
 
 STATEMENT_START = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
 
+TYPES = (
+    'varchar',
+    'char',
+    'integer',
+    'bigint',
+    'smallint',
+    'decimal',
+    'numeric',
+    'real',
+    'double precision',
+    'boolean',
+    'date',
+    'time',
+    'timestamp',
+    'interval',
+)
+"""
+The standard's own type names, which every dialect here also accepts.
+
+Needed rather than optional: `CAST(x AS <caret>)` is the only cast strict ANSI
+has, so an empty list makes that position a dead end.
+"""
+
 TEMPLATES = (
     Template(
         label='SELECT … FROM … AS …',
@@ -170,4 +193,5 @@ ANSI = Dialect(
     reserved=RESERVED,
     statement_start=STATEMENT_START,
     templates=TEMPLATES,
+    types=TYPES,
 )

@@ -24,7 +24,9 @@ def local_candidates(request: Request) -> list[Candidate]:
     if not request.kinds or request.scope is None:
         return []
     if request.expecting == 'alias':
-        return _alias_suggestions(request)
+        # Only where a relation was just named. The `AS` in `count(*) AS ` names
+        # an output column, and a relation's initials are no answer to that.
+        return _alias_suggestions(request) if request.clause in _ALIAS_CLAUSES else []
     if request.clause in _SELECT_LIST_CLAUSES:
         return _select_list(request)
     if request.clause in _ALIAS_CLAUSES:

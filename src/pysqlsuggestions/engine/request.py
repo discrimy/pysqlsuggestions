@@ -85,10 +85,12 @@ def _expecting(
     BY — so a completed item there goes straight to 'connective', where its
     `followed_by` list lives.
     """
-    if after_as(tokens, caret):
-        return 'alias'
+    # A cast reads first: `CAST(x AS <caret>)` is spelled with the same `AS` that
+    # introduces an alias, and only the enclosing call tells them apart.
     if after_cast(tokens, caret, dialect):
         return 'type'
+    if after_as(tokens, caret):
+        return 'alias'
     if not after_operand(tokens, caret, dialect):
         return 'operand'
     found = dialect.clauses.get(clause) if clause else None

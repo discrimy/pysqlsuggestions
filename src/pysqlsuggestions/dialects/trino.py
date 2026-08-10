@@ -59,13 +59,18 @@ QUERIES = CatalogQueries(
         ),
     ),
     functions=Query(
-        sql="""
-            SELECT function_name, argument_types, return_type FROM system.metadata.table_functions
-            WHERE $1 = $1
-            ORDER BY function_name
-            LIMIT 2000
-        """,
-        row=lambda row: Function(schema=None, name=str(row[0]), args=str(row[1]), result=str(row[2])),
+        # `SHOW FUNCTIONS` rather than a system table: `system.metadata` has no
+        # functions relation, and `table_functions` — which does not exist on
+        # 468 either — would have listed polymorphic table functions, not `abs`.
+        # It takes no parameters, so the schema argument goes unused; Trino's
+        # built-ins are not per-schema anyway.
+        #
+        # Columns are (name, return type, argument types, kind, deterministic,
+        # description). An overloaded name appears once per signature and the
+        # zero-argument overload spells its arguments `''`, which is exactly the
+        # distinction `Function.takes_arguments` reads.
+        sql='SHOW FUNCTIONS',
+        row=lambda row: Function(schema=None, name=str(row[0]), args=str(row[2]), result=str(row[1])),
     ),
 )
 

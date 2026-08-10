@@ -437,3 +437,55 @@ def test_namespace_depth_changes_what_a_qualifier_yields(dialect: Dialect, expec
     found = complete(sql, caret, dialect, catalog())
     assert found
     assert {s.kind for s in found} == {expected}
+
+
+def test_an_unclosed_call_does_not_hide_the_from_clause() -> None:
+    """
+    `SELECT count(⌶ FROM t` is what the author has typed one keystroke into a
+    call. The closing paren is missing, so every later token is textually inside
+    the argument list — but the FROM plainly belongs to the outer query, and
+    losing it means falling back to every column in the database.
+    """
+    assert texts('SELECT count(⌶ FROM reports_report r') == [
+        'id',
+        'name',
+        'database_id',
+        'text',
+        'executions',
+        'is_archived',
+        'dt_created',
+    ]
+    assert texts('SELECT count(r.⌶ FROM reports_report r')[:2] == ['id', 'name']
+
+
+def test_an_unclosed_subquery_still_keeps_its_own_scope() -> None:
+    """The counterpart: a group that opens a query is a real level, closed or not."""
+    found = texts('SELECT * FROM (SELECT ⌶ FROM auth_user')
+    assert any(t.endswith('username') for t in found)
+    assert not any(t.endswith('title') for t in found), 'the level has a FROM of its own to answer from'
+
+
+def test_a_comparison_narrows_through_a_qualifier() -> None:
+    """
+    `WHERE r.dt_created > r.⌶` compares against a timestamp just as the
+    unqualified form does. Typing the alias and the dot must not lose the type
+    that was already established on the left.
+    """
+    assert texts('SELECT * FROM reports_report r WHERE r.dt_created > r.⌶') == ['dt_created']
+    assert texts('SELECT * FROM reports_report r WHERE r.dt_created > r.d⌶') == ['dt_created']
+
+
+def test_a_cast_written_as_a_call_offers_types() -> None:
+    """
+    `CAST(x AS ⌶)` is the only cast strict ANSI has, and the `AS` there names a
+    type rather than an alias.
+    """
+    assert 'interval' in texts('SELECT CAST(r.id AS ⌶) FROM reports_report r')
+    assert 'bigint' in texts('SELECT CAST(r.id AS ⌶) FROM reports_report r', ANSI)
+    assert texts('SELECT CAST(r.id AS ⌶) FROM reports_report r', TRINO) != []
+
+
+def test_an_alias_after_as_is_still_an_alias() -> None:
+    """The cast reading must not swallow the ordinary one."""
+    assert texts('SELECT * FROM auth_user AS ⌶') == ['au', 'a', 'aut']
+    assert texts('SELECT count(*) AS ⌶ FROM auth_user') == []

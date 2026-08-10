@@ -133,6 +133,8 @@ POSTGRES = replace(
         unquoted_case='lower',
         dollar_quoting=True,
         cast_operator='::',
+        unquoted_extra='$',
+        unquoted_non_ascii=True,
     ),
     namespace=Namespace(levels=('schema', 'table')),
     clauses=ANSI.clauses.extend(

@@ -10,6 +10,7 @@ from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
 from pysqlsuggestions.engine.lex import TokenType, lex
+from pysqlsuggestions.engine.rank import quote_if_needed
 
 ALL = [ANSI, POSTGRES, CLICKHOUSE, TRINO]
 
@@ -66,3 +67,24 @@ def test_ansi_has_no_cast_operator() -> None:
     assert POSTGRES.syntax.cast_operator == '::'
     assert CLICKHOUSE.syntax.cast_operator == '::'
     assert TRINO.syntax.cast_operator == '::'
+
+
+@pytest.mark.parametrize(
+    ('dialect', 'expected'),
+    [(POSTGRES, 'отчёты'), (CLICKHOUSE, '"отчёты"'), (TRINO, '"отчёты"'), (ANSI, '"отчёты"')],
+)
+def test_non_ascii_names_are_quoted_where_the_backend_demands_it(dialect: Dialect, expected: str) -> None:
+    """
+    Only Postgres reads a Cyrillic name back unquoted.
+
+    ClickHouse answers `Unrecognized token` and Trino `mismatched input`, so a
+    suggestion inserted bare there produces a query that does not run — and a
+    Russian-language schema hits this on the first column.
+    """
+    assert quote_if_needed('отчёты', dialect) == expected
+
+
+@pytest.mark.parametrize(('dialect', 'expected'), [(POSTGRES, 'a$b'), (TRINO, '"a$b"')])
+def test_a_dollar_in_a_name_follows_the_same_rule(dialect: Dialect, expected: str) -> None:
+    """Postgres allows `$` after the first character; Trino does not allow it at all."""
+    assert quote_if_needed('a$b', dialect) == expected

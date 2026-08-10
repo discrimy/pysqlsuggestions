@@ -79,14 +79,19 @@ def test_postgres_views_are_relations_too(postgres_catalog: DbapiCatalog) -> Non
 
 
 def test_postgres_join_across_the_real_foreign_key(postgres_catalog: DbapiCatalog) -> None:
-    """The ON clause narrows to the joined relation's columns."""
+    """
+    The ON clause narrows to the joined relation's columns, and then to the
+    ones that can face a bigint: `d.title = r.database_id` does not typecheck
+    in Postgres any more than `d.title > 1` does.
+    """
     found = suggest(
         'SELECT * FROM reports_report r JOIN reports_database d ON r.database_id = d.⌶',
         POSTGRES,
         postgres_catalog,
     )
-    assert 'title' in found
-    assert 'executions' not in found
+    assert 'id' in found
+    assert 'title' not in found, 'varchar cannot be compared with the bigint on the left'
+    assert 'executions' not in found, 'that column belongs to r, not d'
 
 
 def test_postgres_schemas_survive_the_literal_percent(postgres_catalog: DbapiCatalog) -> None:
@@ -230,3 +235,14 @@ def test_trino_columns_have_positions(trino_catalog: DbapiCatalog) -> None:
     """ordinal_position from system.jdbc.columns, so ranking keeps declaration order."""
     columns = trino_catalog.columns('public', 'reports_database')
     assert [c.name for c in columns][:4] == ['id', 'dt_created', 'dt_modified', 'title']
+
+
+def test_trino_functions_are_introspected(trino_catalog: DbapiCatalog) -> None:
+    """
+    Trino has no `system.metadata.table_functions`, so asking for one raises
+    rather than degrading — and every other Trino test uses a position that
+    never wants a function, which is how that stayed invisible.
+    """
+    found = trino_catalog.functions()
+    assert found, 'no functions came back'
+    assert any(f.name == 'lower' for f in found), sorted({f.name for f in found})[:20]

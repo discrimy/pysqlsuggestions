@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
+from functools import cache
 
-from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.dialects.base import Dialect, Syntax
 from pysqlsuggestions.types import Candidate, Kind, Request, Suggestion
 
 _EXACT_PREFIX = 100.0
@@ -39,10 +40,11 @@ _POSITION_WEIGHT = 0.1
 
 _PLACEHOLDER = re.compile(r'\$(\d+)')
 
-# Non-ASCII letters are legal unquoted in every backend here, so a Cyrillic
-# column must not come back wrapped in quotes it never needed.
-_PLAIN_LOWER = re.compile(r'[a-z_-￿][\w$-￿]*\Z')
-_PLAIN_ANY_CASE = re.compile(r'[A-Za-z_-￿][\w$-￿]*\Z')
+# The unquoted-identifier grammar, which is not the same in all four dialects:
+# Postgres reads `отчёты` and `a$b` back as written, Trino rejects both.
+_ASCII_LETTERS = 'A-Za-z'
+_ASCII = 'A-Za-z0-9_'
+_NON_ASCII = '\u0080-\uffff'
 
 
 def rank(
@@ -261,11 +263,30 @@ def _needs_quoting(name: str, dialect: Dialect) -> bool:
         return True
     if name.lower() in dialect.reserved:
         return True
-    if dialect.syntax.unquoted_case == 'preserve':
-        return _PLAIN_ANY_CASE.match(name) is None
-    if dialect.syntax.unquoted_case == 'upper':
-        return name != name.upper() or _PLAIN_ANY_CASE.match(name) is None
-    return name != name.lower() or _PLAIN_LOWER.match(name) is None
+    case = dialect.syntax.unquoted_case
+    plain = _plain_identifier(dialect.syntax, first_case='lower' if case == 'lower' else 'any')
+    if case == 'preserve':
+        return plain.match(name) is None
+    if case == 'upper':
+        return name != name.upper() or plain.match(name) is None
+    return name != name.lower() or plain.match(name) is None
+
+
+@cache
+def _plain_identifier(syntax: Syntax, first_case: str) -> re.Pattern[str]:
+    """
+    The pattern a name must match to survive unquoted in this dialect.
+
+    Built from the `Syntax` record rather than hardcoded, because the legal
+    character set is a real difference between backends: Postgres accepts a
+    Cyrillic name and a `$` bare, Trino accepts neither and ClickHouse rejects
+    the first. Quoting one that did not need it still runs; leaving one bare
+    that did need it does not.
+    """
+    extra = re.escape(syntax.unquoted_extra)
+    tail_non_ascii = _NON_ASCII if syntax.unquoted_non_ascii else ''
+    head = 'a-z' if first_case == 'lower' else _ASCII_LETTERS
+    return re.compile(f'[{head}_{tail_non_ascii}][{_ASCII}{extra}{tail_non_ascii}]*\\Z')
 
 
 def matches(text: str, prefix: str, kind: Kind = Kind.COLUMN) -> bool:

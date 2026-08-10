@@ -91,6 +91,13 @@ GAPS = {
     'keyword case is decided in the suggestion here, not at insertion': [
         'keywords_stay_prefix_only',
     ],
+    # Not a gap: a deliberate difference. Their engine offers every column of the
+    # qualified relation; this one drops the ones that cannot face the operand on
+    # the left, so `u.id = o.<caret>` withholds `o.created`. Asked for directly:
+    # "Do not suggest columns of incompatible types".
+    'a comparison narrows by type here, and their engine did not narrow at all': [
+        'outer_qualifier_inside_an_exists_subquery',
+    ],
     'LATERAL subqueries are not read as relations': [
         'lateral_subquery_columns',
     ],
