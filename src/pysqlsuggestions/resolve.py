@@ -153,6 +153,13 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     if Kind.FUNCTION in request.kinds:
         candidates += [_function_candidate(function) for function in reader.functions()]
 
+    if Kind.OPERATOR in request.kinds:
+        clause = dialect.clauses.get(request.clause) if request.clause else None
+        candidates += [
+            Candidate(text=operator, kind=Kind.OPERATOR, detail='operator', position=index, origin='keyword')
+            for index, operator in enumerate(clause.operators if clause else ())
+        ]
+
     if Kind.KEYWORD in request.kinds:
         candidates += _keywords(request, reader, dialect)
 

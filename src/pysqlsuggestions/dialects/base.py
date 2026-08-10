@@ -60,6 +60,14 @@ class Clause:
     per-clause table the helper this supersedes carried, kept as dialect data so
     ClickHouse can add PREWHERE after FROM without touching the engine.
     """
+    operators: tuple[str, ...] = ()
+    """
+    Operators that may follow a completed operand here.
+
+    Kept apart from `followed_by` rather than inferred from the spelling: these
+    are emitted as Kind.OPERATOR, which is never case-folded or quoted, and a
+    dialect may add its own — ClickHouse's `::`, Postgres's `~`.
+    """
 
 
 @dataclass(frozen=True, slots=True)

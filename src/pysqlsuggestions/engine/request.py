@@ -120,7 +120,10 @@ def _clause_kinds(
         return kinds
     if Kind.TABLE in kinds:
         return (*kinds, Kind.KEYWORD) if (scope and scope.relations) else kinds
-    return (Kind.KEYWORD,) if operand_complete else kinds
+    if not operand_complete:
+        return kinds
+    # An operator is the likeliest next token after `WHERE r.id `, so it leads.
+    return (Kind.OPERATOR, Kind.KEYWORD) if found.operators else (Kind.KEYWORD,)
 
 
 def _qualified_kinds(

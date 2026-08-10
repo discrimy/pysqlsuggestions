@@ -185,7 +185,7 @@ def _kind_bonus(kind: Kind, kind_rank: dict[Kind, int], total: int) -> float:
 
 def _render(candidate: Candidate, request: Request, dialect: Dialect) -> str:
     """The text to insert: quoted if it must be, cased to match what the user is typing."""
-    if candidate.literal:
+    if candidate.literal or candidate.kind is Kind.OPERATOR:
         return candidate.text
     if candidate.kind is Kind.KEYWORD:
         return candidate.text.lower() if _typing_lowercase(request) else candidate.text.upper()

@@ -103,6 +103,13 @@ def test_mid_word_fragments_match_but_rank_last() -> None:
     assert texts('SELECT * FROM atabas⌶') == ['reports_database']
 
 
+def test_operators_are_offered_after_a_completed_operand() -> None:
+    """The likeliest next token leads, and none of them is case-folded or quoted."""
+    found = texts('SELECT * FROM auth_user u WHERE u.id ⌶')
+    assert found[:6] == ['=', '<>', '<', '<=', '>', '>=']
+    assert 'AND' in found
+
+
 def test_substring_matches_columns_too() -> None:
     """`mail` finds `email`. The helper this supersedes did this, and its users rely on it."""
     assert texts('SELECT * FROM auth_user u WHERE u.mail⌶') == ['email']

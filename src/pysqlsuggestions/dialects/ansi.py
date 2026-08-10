@@ -32,6 +32,8 @@ _AFTER_RELATION = (
     'AS',
 )
 _AFTER_PREDICATE = ('AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS NULL', 'IS NOT NULL')
+_COMPARISON = ('=', '<>', '<', '<=', '>', '>=')
+"""Ordered by how often they are what you meant, not alphabetically."""
 
 CLAUSES = ClauseModel(
     clauses=(
@@ -67,12 +69,14 @@ CLAUSES = ClauseModel(
             follows=frozenset({'JOIN'}),
             suggests=COLUMN_EXPRESSION,
             followed_by=('AND', 'OR', 'JOIN', 'LEFT JOIN', 'WHERE', 'GROUP BY', 'ORDER BY'),
+            operators=_COMPARISON,
         ),
         Clause(name='USING', follows=frozenset({'JOIN'}), suggests=(Kind.COLUMN,), followed_by=('WHERE', 'JOIN')),
         Clause(
             name='WHERE',
             suggests=COLUMN_EXPRESSION,
             followed_by=(*_AFTER_PREDICATE, 'GROUP BY', 'ORDER BY', 'LIMIT', 'OFFSET', 'RETURNING'),
+            operators=_COMPARISON,
         ),
         Clause(
             name='GROUP BY',
@@ -85,6 +89,7 @@ CLAUSES = ClauseModel(
             follows=frozenset({'GROUP BY'}),
             suggests=COLUMN_EXPRESSION,
             followed_by=('AND', 'OR', 'ORDER BY', 'LIMIT'),
+            operators=_COMPARISON,
         ),
         Clause(name='WINDOW', suggests=COLUMN_EXPRESSION, followed_by=('ORDER BY', 'LIMIT')),
         Clause(
@@ -101,6 +106,7 @@ CLAUSES = ClauseModel(
             follows=frozenset({'UPDATE'}),
             suggests=(Kind.COLUMN,),
             followed_by=('WHERE', 'FROM', 'RETURNING'),
+            operators=('=',),
         ),
         Clause(name='VALUES', suggests=COLUMN_EXPRESSION, followed_by=('RETURNING', 'ON CONFLICT')),
         Clause(name='RETURNING', suggests=COLUMN_EXPRESSION),

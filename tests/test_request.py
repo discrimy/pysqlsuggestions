@@ -73,7 +73,7 @@ def test_alias_beats_a_schema_of_the_same_name() -> None:
 
 def test_a_completed_operand_wants_an_operator_not_another_column() -> None:
     """`WHERE r.id ` cannot take another column: two names in a row is not valid SQL."""
-    assert request('SELECT * FROM users r WHERE r.id ⌶').kinds == (Kind.KEYWORD,)
+    assert request('SELECT * FROM users r WHERE r.id ⌶').kinds == (Kind.OPERATOR, Kind.KEYWORD)
 
 
 def test_an_operator_reopens_the_operand_position() -> None:
@@ -100,13 +100,18 @@ def test_a_comma_reopens_the_operand_position() -> None:
 
 def test_a_closing_paren_completes_an_operand() -> None:
     """`WHERE count(*) ` is a finished expression."""
-    assert request('SELECT * FROM users r WHERE count(*) ⌶').kinds == (Kind.KEYWORD,)
+    assert request('SELECT * FROM users r WHERE count(*) ⌶').kinds == (Kind.OPERATOR, Kind.KEYWORD)
 
 
 def test_a_literal_completes_an_operand() -> None:
     """So does a string or a number."""
-    assert request("SELECT * FROM users r WHERE r.name = 'x' ⌶").kinds == (Kind.KEYWORD,)
-    assert request('SELECT * FROM users r WHERE r.id = 1 ⌶').kinds == (Kind.KEYWORD,)
+    assert request("SELECT * FROM users r WHERE r.name = 'x' ⌶").kinds == (Kind.OPERATOR, Kind.KEYWORD)
+    assert request('SELECT * FROM users r WHERE r.id = 1 ⌶').kinds == (Kind.OPERATOR, Kind.KEYWORD)
+
+
+def test_a_clause_without_operators_offers_only_keywords() -> None:
+    """`SELECT r.name ` takes AS or FROM; no comparison belongs in a select list."""
+    assert request('SELECT r.name ⌶ FROM users r').kinds == (Kind.KEYWORD,)
 
 
 def test_a_completed_select_item_wants_as_or_from() -> None:

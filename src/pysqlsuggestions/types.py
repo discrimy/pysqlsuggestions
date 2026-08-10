@@ -24,6 +24,8 @@ class Kind(Enum):
     FUNCTION = 'function'
     ALIAS = 'alias'
     KEYWORD = 'keyword'
+    OPERATOR = 'operator'
+    """`=`, `<>`, `>=`. Separate from KEYWORD because it has no case to follow."""
 
 
 @dataclass(frozen=True, slots=True)
