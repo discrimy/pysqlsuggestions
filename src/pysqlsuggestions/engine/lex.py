@@ -115,6 +115,58 @@ def _match_operator(src: str, pos: int, syntax: Syntax) -> str | None:
     return src[pos] if src[pos] in _OPERATOR_CHARS else None
 
 
+def _scan_string(src: str, pos: int, syntax: Syntax) -> tuple[int, bool]:
+    """Scan a single-quoted literal from its opening quote. Returns (end, terminated)."""
+    i = pos + 1
+    while i < len(src):
+        ch = src[i]
+        if ch == '\\' and syntax.string_escape_backslash:
+            i += 2
+            continue
+        if ch == "'":
+            if i + 1 < len(src) and src[i + 1] == "'":
+                i += 2
+                continue
+            return i + 1, True
+        i += 1
+    return len(src), False
+
+
+def _scan_line_comment(src: str, pos: int) -> int:
+    end = src.find('\n', pos)
+    return len(src) if end == -1 else end
+
+
+def _scan_block_comment(src: str, pos: int, syntax: Syntax) -> tuple[int, bool]:
+    """Scan from '/*'. Returns (end, terminated), honouring nesting when supported."""
+    i, level = pos + 2, 1
+    while i < len(src):
+        if syntax.nested_block_comments and src.startswith('/*', i):
+            level += 1
+            i += 2
+            continue
+        if src.startswith('*/', i):
+            level -= 1
+            i += 2
+            if level == 0:
+                return i, True
+            continue
+        i += 1
+    return len(src), False
+
+
+def _scan_dollar_quote(src: str, pos: int) -> tuple[int, bool] | None:
+    """Scan a $tag$...$tag$ literal. Returns None when `pos` does not open one."""
+    close = src.find('$', pos + 1)
+    if close == -1:
+        return None
+    tag = src[pos : close + 1]
+    if not all(_is_ident_char(c) for c in tag[1:-1]):
+        return None
+    end = src.find(tag, close + 1)
+    return (len(src), False) if end == -1 else (end + len(tag), True)
+
+
 def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
     """Tokenize `src`. Total, never raises, and preserves every offset."""
     tokens: list[Token] = []
@@ -130,6 +182,41 @@ def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
             tokens.append(Token(TokenType.WHITESPACE, pos, end, src[pos:end], src[pos:end], depth=depth))
             pos = end
             continue
+
+        # Delimiter handling comes first: '--' and '#' are otherwise operator
+        # characters, and a literal's contents must never reach the scanner below.
+        comment_marker = next((m for m in syntax.line_comments if src.startswith(m, pos)), None)
+        if comment_marker is not None:
+            end = _scan_line_comment(src, pos)
+            tokens.append(Token(TokenType.COMMENT, pos, end, src[pos:end], src[pos:end], depth=depth))
+            pos = end
+            continue
+
+        if src.startswith('/*', pos):
+            end, terminated = _scan_block_comment(src, pos, syntax)
+            tokens.append(
+                Token(TokenType.COMMENT, pos, end, src[pos:end], src[pos:end], terminated=terminated, depth=depth),
+            )
+            pos = end
+            continue
+
+        if ch == "'":
+            end, terminated = _scan_string(src, pos, syntax)
+            tokens.append(
+                Token(TokenType.STRING, pos, end, src[pos:end], src[pos:end], terminated=terminated, depth=depth),
+            )
+            pos = end
+            continue
+
+        if ch == '$' and syntax.dollar_quoting:
+            scanned = _scan_dollar_quote(src, pos)
+            if scanned is not None:
+                end, terminated = scanned
+                tokens.append(
+                    Token(TokenType.STRING, pos, end, src[pos:end], src[pos:end], terminated=terminated, depth=depth),
+                )
+                pos = end
+                continue
 
         if ch in syntax.identifier_quotes:
             end, value, terminated = _scan_quoted_ident(src, pos, ch)
