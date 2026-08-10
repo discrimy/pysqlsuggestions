@@ -68,3 +68,15 @@ def test_function_call_parens_fall_back_too() -> None:
 def test_clause_ignores_the_word_being_typed() -> None:
     """A half-typed `fro` is not the FROM clause."""
     assert clause('SELECT a fro⌶') == 'SELECT'
+
+
+def test_a_quoted_name_is_never_a_clause_word() -> None:
+    """
+    `FROM "limit" ⌶` is in the FROM clause; `limit` there is a table.
+
+    Quoting is how you say "this is a name, not syntax", and reading it as a
+    clause loses the relation as well as the clause.
+    """
+    assert clause('SELECT * FROM "limit" ⌶') == 'FROM'
+    assert clause('SELECT ⌶ FROM "limit"') == 'SELECT'
+    assert clause('SELECT * FROM "values" v ⌶') == 'FROM'

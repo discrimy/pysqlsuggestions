@@ -232,3 +232,31 @@ def test_readme_dialect_example_is_accurate() -> None:
     sql = 'SELECT * FROM analytics.'
     assert derive_request(sql, len(sql), POSTGRES).kinds == (Kind.TABLE,)
     assert derive_request(sql, len(sql), TRINO).kinds == (Kind.SCHEMA,)
+
+
+def test_a_statement_that_is_only_its_first_keyword() -> None:
+    """
+    `SELECT` with nothing after it is what the editor holds mid-keystroke.
+
+    The select list is empty rather than absent, and an empty list has no
+    outputs — reading one must not run off the end of the token stream. The
+    word is still being typed, so it is not yet a clause: what belongs here is
+    the offer to finish `SELECT` itself.
+    """
+    for marked in ('SELECT⌶', 'select⌶', 'SELECT 1; SELECT⌶', 'SELECT * FROM t WHERE x = (SELECT⌶'):
+        assert request(marked).prefix == 'select', marked
+    assert Kind.KEYWORD in request('SELECT⌶').kinds
+    assert request('SELECT ⌶').clause == 'SELECT'
+
+
+def test_a_caret_outside_the_text_is_pulled_back_into_it() -> None:
+    """
+    A span must always index the string it came from.
+
+    A negative caret otherwise reaches `replace_span=(-1, -1)`, and splicing
+    there wraps around to the end of the query rather than failing loudly.
+    """
+    sql = 'SELECT * FROM auth_user u WHERE u.'
+    for caret in (-1, -1000, len(sql) + 5):
+        span = derive_request(sql, caret, POSTGRES).replace_span
+        assert 0 <= span[0] <= span[1] <= len(sql), f'caret={caret} gave {span}'

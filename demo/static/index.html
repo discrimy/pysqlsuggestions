@@ -323,6 +323,12 @@ function accept(i) {
   const [from, to] = s.replace_span;
   const tail = sql.value.slice(to);
   let insert = s.text, caret = null;
+  // Mirrors api._separated: with nothing being replaced, butting a name against
+  // the character before it merges two tokens. `id > 1` accepting `AND` must
+  // give `1 AND` — Postgres reads `1AND` as junk after a numeric literal.
+  if (from === to && from > 0 && /[\w$"`']/.test(sql.value[from - 1]) && /[\w$"`]/.test(insert[0])) {
+    insert = ' ' + insert;
+  }
   if (s.kind === 'function' && !tail.trimStart().startsWith('(')) {
     insert += '()';
     // Only park inside when there is an argument to type. `now()` is finished.

@@ -104,3 +104,30 @@ def test_depth_at() -> None:
     """The caret's paren depth drives clause matching."""
     sql, caret = split_caret('SELECT * FROM (SELECT ⌶)')
     assert depth_at(lex(sql, POSTGRES.syntax), caret) == 1
+
+
+def test_a_finished_quoted_name_is_replaced_whole() -> None:
+    """
+    A quoted identifier is one token; half of it is not a valid identifier.
+
+    Ending the span at the caret would leave the closing quote stranded after
+    the replacement, so the whole token goes — the only span that can produce
+    balanced quotes.
+    """
+    assert at('SELECT * FROM "auth_u⌶ser"') == ((), 'auth_u', (14, 25))
+    assert at('SELECT * FROM "auth_user"⌶') == ((), 'auth_user', (14, 25))
+
+
+def test_a_closing_quote_is_not_part_of_the_prefix() -> None:
+    """`"Period"` has been typed in full; the prefix is what was quoted, not the quotes."""
+    assert at('SELECT m."Period"⌶')[1] == 'Period'
+
+
+def test_a_doubled_quote_is_unescaped_in_the_prefix() -> None:
+    """The lexer collapses `""` when reading the value; matching must see the same text."""
+    assert at('SELECT "has""q⌶')[1] == 'has"q'
+
+
+def test_an_unfinished_quoted_name_still_ends_at_the_caret() -> None:
+    """With no closing quote there is nothing to strand, and the text right of the caret is not ours."""
+    assert at('SELECT * FROM "auth_u⌶') == ((), 'auth_u', (14, 21))

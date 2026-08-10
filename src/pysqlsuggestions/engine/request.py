@@ -36,7 +36,15 @@ _NAMESPACE_KINDS = {
 
 
 def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
-    """What should be suggested at `caret`, decided without touching a catalog."""
+    """
+    What should be suggested at `caret`, decided without touching a catalog.
+
+    A caret outside the text is clamped rather than rejected. Editors do send
+    stale offsets, and every span this returns indexes `sql` — a negative one
+    would splice through Python's wrap-around into the middle of the query
+    instead of failing where a caller could see it.
+    """
+    caret = max(0, min(caret, len(sql)))
     tokens = lex(sql, dialect.syntax)
     lo, hi = statement_at(tokens, caret)
     clause = clause_at(tokens, lo, hi, caret, dialect.clauses)

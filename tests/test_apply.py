@@ -146,3 +146,39 @@ def test_keyword_case_follows_the_last_keyword_when_nothing_is_typed() -> None:
     ]
     assert all(s.text.islower() for s in lower if s.kind is Kind.KEYWORD)
     assert all(s.text.isupper() for s in upper if s.kind is Kind.KEYWORD)
+
+
+def test_a_quoted_name_is_replaced_without_stranding_its_quote() -> None:
+    """Completing inside `"…"` must not leave an odd number of quotes behind."""
+    sql = 'SELECT * FROM "auth_u"'
+    found = complete(sql, 21, POSTGRES, catalog())
+    text, _ = apply_suggestion(sql, found[0])
+    assert text == 'SELECT * FROM auth_user'
+    assert text.count('"') % 2 == 0
+
+
+def test_a_keyword_is_not_glued_onto_a_literal() -> None:
+    """
+    `... > 1` then AND must not produce `1AND`.
+
+    Nothing is being replaced there, so insertion has to supply the separator
+    the author has not typed yet. Postgres rejects `1AND` outright.
+    """
+    sql = 'SELECT * FROM orders WHERE id > 1'
+    found = [s for s in complete(sql, len(sql), POSTGRES, catalog()) if s.kind is Kind.KEYWORD]
+    text, caret = apply_suggestion(sql, found[0])
+    assert text == f'SELECT * FROM orders WHERE id > 1 {found[0].text}'
+    assert caret == len(text)
+
+
+def test_a_keyword_is_not_glued_onto_a_string_literal() -> None:
+    """The same rule, with a closing quote rather than a digit before the caret."""
+    sql = "SELECT * FROM auth_user WHERE username = 'x'"
+    found = [s for s in complete(sql, len(sql), POSTGRES, catalog()) if s.kind is Kind.KEYWORD]
+    assert apply_suggestion(sql, found[0])[0] == f'{sql} {found[0].text}'
+
+
+def test_a_separator_is_not_invented_where_one_would_break_the_text() -> None:
+    """A dot, an open paren and a space all already separate; only a name-to-name join needs help."""
+    assert accept_first('SELECT * FROM auth_user u WHERE u.')[0].startswith('SELECT * FROM auth_user u WHERE u.')
+    assert accept_first('SELECT count(')[0].startswith('SELECT count(')

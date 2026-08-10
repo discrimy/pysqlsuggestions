@@ -113,7 +113,7 @@ def apply_suggestion(
     would mean typing past a bracket that is already correct.
     """
     start, end = suggestion.replace_span
-    text = suggestion.text
+    text = _separated(sql, start, end, suggestion.text)
     tail = sql[end:]
     caret: int | None = None
 
@@ -128,6 +128,24 @@ def apply_suggestion(
             caret = start + len(text) - 1
 
     return sql[:start] + text + tail, caret if caret is not None else start + len(text)
+
+
+def _separated(sql: str, start: int, end: int, text: str) -> str:
+    """
+    A leading space when butting `text` against the character before it would
+    merge two tokens into one.
+
+    Only when nothing is being replaced. `WHERE id > 1<caret>` accepting `AND`
+    must give `1 AND`, not `1AND` — this library's own lexer reads that as two
+    tokens, so nothing downstream notices, but Postgres rejects it as trailing
+    junk after a numeric literal. A span that *does* cover something ends where
+    its own token ends, and a dot, a paren or a space already separates.
+    """
+    if start != end or start == 0 or not text:
+        return text
+    before = sql[start - 1]
+    merges = (before.isalnum() or before in '_$"`\'') and (text[0].isalnum() or text[0] in '_$"`')
+    return f' {text}' if merges else text
 
 
 __all__ = ['DEFAULT_LIMIT', 'apply_suggestion', 'complete', 'derive_request']

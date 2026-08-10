@@ -96,8 +96,13 @@ def qualifier_and_prefix(
     """
     The dotted path and half-typed word immediately left of the caret.
 
-    Returns (qualifier segments, prefix, replace_span). The span always ends at
-    the caret, so choosing a suggestion replaces what was typed and nothing more.
+    Returns (qualifier segments, prefix, replace_span). The span ends at the
+    caret, so choosing a suggestion replaces what was typed and nothing more.
+
+    A closed quoted name is the exception: it is one token and half of it is not
+    an identifier, so the span takes all of it. Stopping at the caret would leave
+    `"auth_u<caret>ser"` with a stranded `ser"` after the replacement, and the
+    odd quote left behind swallows the rest of the statement.
     """
     index = _index_before(tokens, caret)
     prefix, span, cursor = '', (caret, caret), index
@@ -106,7 +111,7 @@ def qualifier_and_prefix(
         token = tokens[index]
         typed = token.text[: caret - token.start]
         prefix = _value_of(typed, token)
-        span = (token.start, caret)
+        span = (token.start, token.end if token.quoted and token.terminated else caret)
         cursor = index - 1
     elif index >= 0 and tokens[index].type in _SKIP:
         cursor = index
@@ -360,7 +365,14 @@ def _scan_for_clause(
 
 
 def _ident_run(tokens: Sequence[Token], start: int, hi: int, count: int) -> list[Token] | None:
-    """`count` consecutive IDENT tokens beginning at `start`, ignoring whitespace and comments."""
+    """
+    `count` consecutive unquoted IDENT tokens beginning at `start`.
+
+    Whitespace and comments are skipped. Quoting is how SQL says "this is a
+    name, not syntax", so a quoted word never spells a clause: `FROM "limit"`
+    is a relation called `limit`, and reading it as the LIMIT clause loses the
+    relation along with the clause.
+    """
     run: list[Token] = []
     index = start
     while index < hi and len(run) < count:
@@ -368,7 +380,7 @@ def _ident_run(tokens: Sequence[Token], start: int, hi: int, count: int) -> list
         if token.type in _SKIP:
             index += 1
             continue
-        if token.type is not TokenType.IDENT:
+        if token.type is not TokenType.IDENT or token.quoted:
             return None
         run.append(token)
         index += 1
@@ -383,9 +395,19 @@ def _skip_back(tokens: Sequence[Token], index: int) -> int:
 
 
 def _value_of(typed: str, token: Token) -> str:
-    """Fold a partially typed identifier the same way the lexer folded the whole one."""
+    """
+    Fold a partially typed identifier the same way the lexer folded the whole one.
+
+    A quoted name that has been typed in full already has its value on the
+    token; before that the closing quote has not been reached, so only the
+    opening one and any doubled pair need undoing.
+    """
     if token.quoted:
-        return typed.lstrip('"`')
+        if len(typed) >= len(token.text):
+            return token.value
+        quote = token.text[0]
+        body = typed[1:] if typed.startswith(quote) else typed
+        return body.replace(quote * 2, quote)
     folded = token.value
     return folded[: len(typed)] if len(folded) == len(token.text) else typed.lower()
 
@@ -690,7 +712,9 @@ def select_outputs(
     body_relations = [_bind(r, ctes or {}) for r in _relations_in(tokens, lo, hi, -1, dialect)]
     base = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
     start = _after_clause(tokens, lo, hi, 'SELECT', dialect, depth=base)
-    if start is None:
+    if start is None or start >= hi:
+        # `SELECT` with nothing after it: an empty select list, which is what the
+        # editor holds for the instant between the keyword and the first item.
         return Projection()
     end = _next_clause_at_depth(tokens, start, hi, dialect, tokens[start].depth, {'FROM'})
     columns: list[str] = []
