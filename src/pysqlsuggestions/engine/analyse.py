@@ -615,6 +615,59 @@ def _relations_in(
     return relations
 
 
+def clauses_written(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> frozenset[str]:
+    """
+    Clause names already present in the caret's branch, at the caret's own depth.
+
+    Both sides of the caret count: `SELECT id <caret> FROM t` already has its
+    FROM, and offering another one there is what produces `FROM FROM t`. Each
+    branch of a set operation is counted separately, because the second branch
+    brings its own SELECT and FROM.
+    """
+    lo, hi = _branch_at(tokens, lo, hi, caret)
+    depth = depth_at(tokens, caret)
+    found: set[str] = set()
+    index = lo
+    while index < hi:
+        if tokens[index].type in _SKIP or tokens[index].depth != depth:
+            index += 1
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect)
+        if matched is None:
+            index += 1
+            continue
+        found.add(matched[0])
+        index = matched[1]
+    return frozenset(found)
+
+
+def statement_form(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> str | None:
+    """
+    Which kind of statement the caret is in: SELECT, UPDATE, INSERT INTO...
+
+    Read from the words that can start one, at the caret's depth. `WITH` yields
+    to whatever it introduces — `WITH x AS (...) SELECT` is a SELECT, and the
+    CTE body sits a level deeper where this does not reach.
+    """
+    written = clauses_written(tokens, lo, hi, caret, dialect)
+    starts = [name for name in dialect.statement_start if name in written]
+    if not starts:
+        return None
+    return next((name for name in starts if name != 'WITH'), starts[0])
+
+
 def _unclosed_call_depth(
     tokens: Sequence[Token],
     lo: int,

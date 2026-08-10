@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from pysqlsuggestions.dialects.ansi import ANSI
+from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Query, Syntax
 from pysqlsuggestions.types import Column, Function, Kind, Table
@@ -140,7 +140,21 @@ POSTGRES = replace(
     clauses=ANSI.clauses.extend(
         Clause(name='LATERAL', follows=frozenset({'FROM', 'JOIN'}), suggests=(Kind.TABLE, Kind.FUNCTION)),
         Clause(name='DISTINCT ON', follows=frozenset({'SELECT'}), suggests=(Kind.COLUMN, Kind.FUNCTION)),
-        Clause(name='ON CONFLICT', follows=frozenset({'INSERT INTO', 'VALUES'}), suggests=(Kind.COLUMN,)),
+        Clause(
+            name='ON CONFLICT',
+            follows=frozenset({'INSERT INTO', 'VALUES'}),
+            statements=frozenset({'INSERT INTO'}),
+            suggests=(Kind.COLUMN,),
+        ),
+        # Not in the ANSI base: ClickHouse and Trino have no RETURNING at all,
+        # and it is a syntax error in a SELECT even here. Declaring where it may
+        # follow is the whole of what this dialect has to say about it.
+        Clause(
+            name='RETURNING',
+            follows=frozenset({'DELETE FROM', 'INSERT INTO', 'UPDATE', 'SET', 'WHERE', 'VALUES', 'ON CONFLICT'}),
+            statements=frozenset({'DELETE FROM', 'INSERT INTO', 'UPDATE'}),
+            suggests=COLUMN_EXPRESSION,
+        ),
     ),
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,

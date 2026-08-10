@@ -184,6 +184,21 @@ class Request:
     a clause's `after_operand` and `followed_by` lists, and resolve has no
     tokens to work it out for itself.
     """
+    statement: str | None = None
+    """
+    Which kind of statement this is: SELECT, UPDATE, INSERT INTO...
+
+    A clause is one entry shared by every form that uses it — WHERE belongs to
+    three — so this is what tells `RETURNING` it has no business after a
+    SELECT's WHERE.
+    """
+    written: frozenset[str] = frozenset()
+    """
+    Clause names already present in this branch, on both sides of the caret.
+
+    A clause that appears once is not offered twice: `SELECT id <caret> FROM t`
+    has its FROM, and accepting another gives `FROM FROM t`.
+    """
     keyword_case: Literal['lower', 'upper'] | None = None
     """
     How the author has been writing keywords, from the last one they typed.

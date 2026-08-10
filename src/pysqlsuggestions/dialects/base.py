@@ -65,7 +65,31 @@ class Clause:
     name: str
     """Uppercased. May contain single spaces: 'GROUP BY', 'ARRAY JOIN'."""
     follows: frozenset[str] = frozenset()
-    """Clauses this one may appear after. Empty means unconstrained."""
+    """
+    Clauses this one may appear after. Empty means unconstrained.
+
+    Read backwards by `ClauseModel.continuations`: declaring it here is how a
+    clause gets itself offered, and it is the only declaration a dialect needs
+    to make. Not used as a filter — these sets say where a clause is *typical*,
+    not everywhere it is legal, and `HAVING` after a bare `FROM` is valid SQL
+    however unusual.
+    """
+    statements: frozenset[str] = frozenset()
+    """
+    Statement forms this clause belongs to. Empty means every form.
+
+    `RETURNING` after a SELECT's WHERE is a syntax error, but the clause model
+    is otherwise blind to which statement it is inside: WHERE is one entry
+    shared by SELECT, UPDATE and DELETE.
+    """
+    repeats: bool = False
+    """
+    Whether the clause may appear more than once in a query branch.
+
+    A join follows a join, and each branch of a set operation brings its own
+    SELECT and FROM. Everything else appears once, so offering it again after
+    it has been written produces `SELECT id FROM FROM events`.
+    """
     suggests: tuple[Kind, ...] = ()
     """Most relevant first."""
     followed_by: tuple[str, ...] = ()
@@ -73,9 +97,9 @@ class Clause:
     What usually comes next, once this clause has an item.
 
     Offering the whole reserved-word list after `FROM auth_user ` is useless —
-    there are hundreds and only a handful can legally follow. This is the same
-    per-clause table the helper this supersedes carried, kept as dialect data so
-    ClickHouse can add PREWHERE after FROM without touching the engine.
+    there are hundreds and only a handful can legally follow. Holds the words
+    that are not clauses in their own right — `AS`, `AND`, `ASC` — plus the
+    canonical clause order; anything a dialect adds arrives through `follows`.
     """
     operators: tuple[str, ...] = ()
     """
@@ -106,8 +130,16 @@ class ClauseModel:
     clauses: tuple[Clause, ...] = ()
 
     def extend(self, *clauses: Clause) -> ClauseModel:
-        """A new model with `clauses` appended. The receiver is untouched."""
-        return ClauseModel(clauses=self.clauses + clauses)
+        """
+        A new model with `clauses` added. The receiver is untouched.
+
+        A name already present is *replaced* rather than appended: two entries
+        called WHERE would leave the first one answering every lookup, so a
+        dialect refining a shared clause would silently change nothing.
+        """
+        added = {clause.name: clause for clause in clauses}
+        kept = tuple(added.pop(clause.name, clause) for clause in self.clauses)
+        return ClauseModel(clauses=kept + tuple(added.values()))
 
     def get(self, name: str) -> Clause | None:
         """The clause called `name`, or None. Linear scan over a few dozen entries."""
@@ -115,6 +147,40 @@ class ClauseModel:
             if clause.name == name:
                 return clause
         return None
+
+    def continuations(
+        self,
+        name: str,
+        *,
+        statement: str | None = None,
+        used: frozenset[str] = frozenset(),
+    ) -> tuple[str, ...]:
+        """
+        What may be written after clause `name` has an item, most likely first.
+
+        Three sources of truth, combined here so no dialect has to restate any
+        of them: the clause's own `followed_by`, every clause declaring it
+        `follows` this one, and the statement form. `used` names the clauses
+        already written in this branch, which cannot come again unless they
+        repeat.
+        """
+        clause = self.get(name)
+        if clause is None:
+            return ()
+        derived = tuple(
+            other.name for other in self.clauses if name in other.follows and other.name not in clause.followed_by
+        )
+        offered = (*clause.followed_by, *derived)
+        return tuple(word for word in offered if self._admits(word, statement, used))
+
+    def _admits(self, word: str, statement: str | None, used: frozenset[str]) -> bool:
+        """Whether `word` can be written here. A word that is not a clause is always allowed."""
+        found = self.get(word)
+        if found is None:
+            return True
+        if found.statements and statement is not None and statement not in found.statements:
+            return False
+        return found.repeats or word not in used
 
     def names(self) -> tuple[str, ...]:
         """Clause names ordered longest first, so greedy matching tries 'GROUP BY' before 'BY'."""

@@ -245,6 +245,10 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
     A clause that declares what follows it offers only those: after
     `FROM auth_user ` there are about ten legal continuations, and burying them
     in six hundred reserved words is the same as not offering them.
+
+    `position` carries the declared order through to ranking. Without it every
+    continuation ties and the tiebreak sorts them by name length, which puts
+    `OR` before `AND` and `FETCH` before `WHERE`.
     """
     clause = dialect.clauses.get(request.clause) if request.clause else None
     if clause is None and dialect.statement_start:
@@ -253,11 +257,23 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
             Candidate(text=word, kind=Kind.KEYWORD, detail='starts a statement', position=index, origin='keyword')
             for index, word in enumerate(dialect.statement_start)
         ]
-    if clause is not None and clause.followed_by:
-        words = clause.after_operand if request.expecting == 'operator' else clause.followed_by
-        return [
-            Candidate(text=word, kind=Kind.KEYWORD, detail=f'after {clause.name}', origin='keyword') for word in words
-        ]
+    if clause is not None:
+        words = (
+            clause.after_operand
+            if request.expecting == 'operator'
+            else dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written)
+        )
+        if words:
+            return [
+                Candidate(
+                    text=word,
+                    kind=Kind.KEYWORD,
+                    detail=f'after {clause.name}',
+                    position=index,
+                    origin='keyword',
+                )
+                for index, word in enumerate(words)
+            ]
     return [
         Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
         for word, description in reader.keywords()

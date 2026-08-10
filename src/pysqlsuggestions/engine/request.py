@@ -17,12 +17,14 @@ from pysqlsuggestions.engine.analyse import (
     after_cast,
     after_operand,
     clause_at,
+    clauses_written,
     comparand_at,
     in_literal,
     predicate_complete,
     qualifier_and_prefix,
     scope_of,
     statement_at,
+    statement_form,
 )
 from pysqlsuggestions.engine.lex import Token, TokenType, lex
 from pysqlsuggestions.types import Kind, Request, Scope
@@ -66,6 +68,8 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         comparand=comparand,
         comparand_type=comparand_type,
         expecting=expecting,
+        statement=statement_form(tokens, lo, hi, caret, dialect),
+        written=clauses_written(tokens, lo, hi, caret, dialect),
         keyword_case=_keyword_case(tokens, caret, dialect),
     )
 
@@ -176,7 +180,10 @@ def _clause_kinds(
         return (Kind.KEYWORD,)
 
     kinds = found.suggests
-    if not found.followed_by:
+    # Whether anything at all may follow this clause, before the caret's own
+    # statement form and history narrow it. A clause with no continuations —
+    # RETURNING, FETCH — ends the statement, so no keyword belongs after it.
+    if not dialect.clauses.continuations(found.name):
         return kinds
     if Kind.TABLE in kinds:
         return (*kinds, Kind.KEYWORD) if (scope and scope.relations) else kinds

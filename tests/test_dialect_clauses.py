@@ -72,8 +72,23 @@ def test_a_clause_does_not_offer_itself_or_anything_earlier() -> None:
 
 
 def test_extending_did_not_disturb_ansi() -> None:
-    """ANSI is shared by all three; extend() must never mutate it."""
-    assert len(ANSI.clauses.clauses) == 24
+    """
+    ANSI is shared by all three; extend() must never mutate it.
+
+    Asserted against the names each dialect adds rather than a count, so that
+    moving a clause out of the base — RETURNING, which ClickHouse and Trino do
+    not have — is not mistaken for a leak.
+    """
+    base = {clause.name for clause in ANSI.clauses.clauses}
+    assert 'PREWHERE' not in base
+    assert 'RETURNING' not in base
+    assert {clause.name for clause in POSTGRES.clauses.clauses} - base == {
+        'LATERAL',
+        'DISTINCT ON',
+        'ON CONFLICT',
+        'RETURNING',
+    }
+    assert {clause.name for clause in ANSI.clauses.clauses} == base
 
 
 def test_array_join_suggests_columns() -> None:
