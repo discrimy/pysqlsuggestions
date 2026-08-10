@@ -27,6 +27,7 @@ from pysqlsuggestions.engine.analyse import (
     scope_of,
     statement_at,
     statement_form,
+    words_in_item,
 )
 from pysqlsuggestions.engine.lex import Token, TokenType, lex
 from pysqlsuggestions.types import Kind, Request, Scope
@@ -72,6 +73,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         comparand=comparand,
         comparand_type=comparand_type,
         expecting=expecting,
+        item_words=words_in_item(tokens, caret),
         statement=statement_form(tokens, lo, hi, caret, dialect),
         written=clauses_written(tokens, lo, hi, caret, dialect),
         keyword_case=_keyword_case(tokens, caret, dialect),

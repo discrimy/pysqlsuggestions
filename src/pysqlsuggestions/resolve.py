@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TypeVar
 
-from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.dialects.base import EXCLUSIVE, Dialect
 from pysqlsuggestions.engine import datatypes
 from pysqlsuggestions.ports import Cache, Catalog, SupportsColumnSearch, SupportsKeywords
 from pysqlsuggestions.types import Candidate, Column, Function, Kind, Projection, Relation, Request, Scope, Table
@@ -265,7 +265,10 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         words = (
             clause.after_operand
             if request.expecting == 'operator'
-            else dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written)
+            else _unchosen(
+                dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
+                request.item_words,
+            )
         )
         if words:
             return [
@@ -282,6 +285,24 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
         for word, description in reader.keywords()
     ]
+
+
+def _unchosen(words: tuple[str, ...], written: frozenset[str]) -> tuple[str, ...]:
+    """
+    Drop the alternatives to a choice this item has already made.
+
+    `ORDER BY id ASC ` offered `DESC`, which is not a second modifier but the
+    other half of the same decision.
+    """
+    if not written:
+        return words
+    settled: set[str] = set()
+    for group in EXCLUSIVE:
+        # A choice counts as made when every word of any of its options is there:
+        # `NULLS LAST` is two tokens and both have to have been typed.
+        if any(set(choice.split()) <= written for choice in group):
+            settled |= group
+    return tuple(word for word in words if word not in settled)
 
 
 def _operators(clause: object, dialect: Dialect) -> tuple[str, ...]:

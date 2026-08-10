@@ -115,3 +115,24 @@ def test_a_finished_case_is_a_completed_item() -> None:
     offered = texts("SELECT CASE WHEN id = 1 THEN 'a' END ⌶ FROM events")
     assert 'AS' in offered
     assert 'name' not in offered
+
+
+def test_a_sort_direction_is_not_offered_twice() -> None:
+    """`ORDER BY id ASC ⌶` cannot take `DESC`; the two are one choice, already made."""
+    offered = texts('SELECT * FROM events ORDER BY id ASC ⌶')
+    assert 'ASC' not in offered
+    assert 'DESC' not in offered
+    assert 'NULLS FIRST' in offered
+
+
+def test_the_next_item_gets_the_choice_back() -> None:
+    """A comma starts a new sort item, with its own direction to pick."""
+    assert 'ASC' in texts('SELECT * FROM events ORDER BY id ASC, name ⌶')
+
+
+def test_a_nulls_placement_is_not_offered_twice() -> None:
+    """The same rule for the other pair in an ORDER BY item."""
+    offered = texts('SELECT * FROM events ORDER BY id NULLS LAST ⌶')
+    assert 'NULLS FIRST' not in offered
+    assert 'NULLS LAST' not in offered
+    assert 'LIMIT' in offered

@@ -69,10 +69,17 @@ class SupportsColumnSearch(Protocol):
 
     def search_columns(self, prefix: str, limit: int) -> Sequence[Column]:
         """
-        Columns matching `prefix` across every relation.
+        The `limit` columns matching `prefix` most closely, across every relation.
 
         The fallback for schemas too large to enumerate. Prefix-dependent, so
         unlike everything else on these protocols it does not cache.
+
+        Most closely, not merely the first found: this is the one place where a
+        truncation happens before ranking sees the rows, so an adapter that
+        returns them in storage order can hide the exact match behind three
+        hundred near-misses. Order at least by whether the name starts with
+        `prefix`, then by length. `pysqlsuggestions.engine.rank.matches` is
+        exposed for adapters that want the library's own idea of a match.
         """
         ...
 

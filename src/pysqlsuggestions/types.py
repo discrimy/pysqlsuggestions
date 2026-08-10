@@ -193,6 +193,13 @@ class Request:
     the clause is WHERE or SELECT either way. Non-empty means these words are
     the whole answer.
     """
+    item_words: frozenset[str] = frozenset()
+    """
+    Keywords already written in the caret's own list item.
+
+    Some words are one choice made once — a sort direction, a nulls placement.
+    They are not clauses, so the once-per-branch rule does not reach them.
+    """
     statement: str | None = None
     """
     Which kind of statement this is: SELECT, UPDATE, INSERT INTO...

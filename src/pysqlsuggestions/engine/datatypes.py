@@ -6,44 +6,100 @@ that cannot appear on the other side of the operator wastes the most valuable
 row in the list. Deciding that needs no type system — only whether two types
 belong to the same family.
 
-The families are matched on substrings of the type text the catalog already
-reports, which is what lets one table serve `character varying(150)`,
+Families are matched against the *words* of the type text the catalog reports,
+which is what lets one table serve `character varying(150)`,
 `LowCardinality(String)` and `varchar(256)` without three dialect tables. An
 unrecognised type reports `unknown` and is never filtered out: silence about a
 type is not evidence against it.
+
+Recognised names rather than substrings. Looking for `int` anywhere in the text
+finds it in `endpoint_kind`, and a user's enum column was then compared against
+bigints while the `text` column that belonged there was dropped.
 """
 
 from __future__ import annotations
 
+import re
+
 UNKNOWN = 'unknown'
 
-# Order matters. `interval` contains `int` and `datetime` contains `date`, so
-# temporal has to be decided before numeric, and both before anything looser.
-_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ('temporal', ('timestamp', 'datetime', 'date', 'time', 'interval')),
-    ('boolean', ('bool',)),
-    ('numeric', ('int', 'numeric', 'decimal', 'float', 'double', 'real', 'money', 'serial', 'number')),
-    ('json', ('json',)),
-    ('binary', ('bytea', 'binary', 'blob')),
-    ('uuid', ('uuid',)),
-    ('network', ('inet', 'cidr', 'macaddr')),
-    ('string', ('char', 'text', 'string', 'enum', 'name', 'clob')),
+_WORDS = re.compile(r'[a-z][a-z0-9]*')
+
+_CONTAINERS = frozenset({'array', 'map', 'tuple', 'nested', 'struct', 'row', 'set'})
+"""
+Constructors whose contents are not their own type.
+
+`Map(String, UInt8)` names two types and is neither of them; nothing compares
+it with a scalar. Reading the first element type found makes it numeric, which
+is worse than admitting ignorance.
+"""
+
+_MODIFIERS = frozenset({'nullable', 'lowcardinality', 'simpleaggregatefunction', 'unsigned', 'signed'})
+"""Wrappers that pass their argument's type straight through."""
+
+_FAMILIES: tuple[tuple[str, frozenset[str]], ...] = (
+    (
+        'numeric',
+        frozenset(
+            """
+            int int2 int4 int8 int16 int32 int64 int128 int256 integer smallint bigint tinyint mediumint
+            uint8 uint16 uint32 uint64 uint128 uint256 dec decimal numeric fixed
+            float float4 float8 float32 float64 real double precision money number
+            serial smallserial bigserial serial2 serial4 serial8
+            """.split(),
+        ),
+    ),
+    (
+        'temporal',
+        frozenset('date timestamp timestamptz datetime datetime64 date32 smalldatetime'.split()),
+    ),
+    ('clock', frozenset('time timetz'.split())),
+    ('interval', frozenset({'interval'})),
+    ('boolean', frozenset('bool boolean'.split())),
+    (
+        'string',
+        frozenset(
+            """
+            char varchar character nchar nvarchar text string citext clob name enum enum8 enum16
+            fixedstring longtext mediumtext tinytext
+            """.split(),
+        ),
+    ),
+    ('json', frozenset('json jsonb'.split())),
+    ('binary', frozenset('bytea binary varbinary blob bytes'.split())),
+    ('uuid', frozenset({'uuid'})),
+    ('network', frozenset('inet cidr macaddr macaddr8 ipv4 ipv6'.split())),
 )
+
+_OF_WORD = {word: name for name, words in _FAMILIES for word in words}
 
 
 def family(type_text: str | None) -> str:
     """
     The family `type_text` belongs to, or `unknown`.
 
-    An array reports the family of its element type: `bigint[]` is numeric, and
-    a query comparing it will be doing so element-wise.
+    The first recognised word wins, which is what reads `timestamp with time
+    zone` as temporal rather than as a clock time and `character varying` as a
+    string: SQL writes the head of a type name first. A modifier passes through
+    to what it wraps, and a container reports nothing at all.
+
+    An array is not its element type. Postgres compares `bigint[]` with another
+    array, never with a `bigint`, so claiming the element's family would offer
+    exactly the comparison that does not exist.
     """
     if not type_text:
         return UNKNOWN
-    lowered = type_text.lower()
-    for name, markers in _FAMILIES:
-        if any(marker in lowered for marker in markers):
-            return name
+    if type_text.rstrip().endswith(']'):
+        return UNKNOWN
+    words = _WORDS.findall(type_text.lower())
+    for word in words:
+        if word in _CONTAINERS:
+            return UNKNOWN
+        if word in _MODIFIERS:
+            continue
+        found = _OF_WORD.get(word)
+        if found is not None:
+            return found
     return UNKNOWN
 
 

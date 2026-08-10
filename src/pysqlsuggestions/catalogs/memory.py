@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 
+from pysqlsuggestions.engine import rank
 from pysqlsuggestions.types import Column, Function, Table
 
 ColumnSpec = tuple[str, str] | tuple[str, str, int]
@@ -103,12 +104,20 @@ class MemoryCatalog:
         return None if len(flat) > _MAX_ENUMERABLE_COLUMNS else flat
 
     def search_columns(self, prefix: str, limit: int) -> Sequence[Column]:
-        """Columns whose name starts with `prefix`, across every relation."""
+        """
+        The `limit` columns matching `prefix` most closely, across every relation.
+
+        Ordered before truncating, which is the whole of the port's contract:
+        `limit` rows taken in storage order can leave `created` behind three
+        hundred `created_at_variant_NNN`, and nothing downstream can recover a
+        row that was never fetched.
+        """
         self.calls.append(('search_columns', prefix))
         folded = prefix.lower()
         found = [
-            column for columns in self._columns.values() for column in columns if column.name.lower().startswith(folded)
+            column for columns in self._columns.values() for column in columns if rank.matches(column.name, folded)
         ]
+        found.sort(key=lambda column: (not column.name.lower().startswith(folded), len(column.name), column.name))
         return found[:limit]
 
     def keywords(self) -> Sequence[tuple[str, str]]:

@@ -192,9 +192,17 @@ def test_a_cast_prefix_filters_the_types() -> None:
 
 
 def test_a_cast_names_the_type_of_its_comparison() -> None:
-    """`'7 days'::interval > ` is temporal however the literal is spelled."""
-    found = texts("SELECT * FROM reports_report r WHERE '7 days'::interval > ⌶")
-    assert found == ['dt_created']
+    """
+    `'7 days'::interval > ` is an interval comparison however the literal is
+    spelled, and the bare literal would have said nothing.
+
+    An interval faces an interval: Postgres has no `interval > timestamptz`, so
+    the timestamp column this used to return was never a legal answer.
+    """
+    assert derive_request(*split_caret("SELECT * FROM r WHERE '7 days'::interval > ⌶"), POSTGRES).comparand_type == (
+        'interval'
+    )
+    assert texts("SELECT * FROM reports_report r WHERE '7 days'::interval > ⌶") == []
 
 
 def test_a_cast_on_a_column_overrides_the_column_type() -> None:
@@ -489,3 +497,18 @@ def test_an_alias_after_as_is_still_an_alias() -> None:
     """The cast reading must not swallow the ordinary one."""
     assert texts('SELECT * FROM auth_user AS ⌶') == ['au', 'a', 'aut']
     assert texts('SELECT count(*) AS ⌶ FROM auth_user') == []
+
+
+def test_a_narrow_search_still_finds_the_closest_match() -> None:
+    """
+    On a schema too large to enumerate, the exact match must survive the fetch.
+
+    `search_columns` truncates on the server, so a catalog returning whatever
+    rows come first loses `created` behind three hundred
+    `created_at_variant_NNN`. The port asks for the best matches, not the first
+    ones, and the shipped catalog is where that contract is demonstrated.
+    """
+    wide = {('public', f't{index}'): [(f'created_at_variant_{index:03d}', 'date')] for index in range(300)}
+    wide[('public', 'events')] = [('created', 'date')]
+    found = complete('SELECT crea', 11, POSTGRES, MemoryCatalog(wide, oversized=True))
+    assert [s.text for s in found][0] == 'created'

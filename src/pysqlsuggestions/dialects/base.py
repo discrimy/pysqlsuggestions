@@ -187,6 +187,20 @@ class ClauseModel:
         return tuple(sorted((c.name for c in self.clauses), key=lambda n: (-len(n.split()), -len(n), n)))
 
 
+EXCLUSIVE = (
+    frozenset({'ASC', 'DESC'}),
+    frozenset({'NULLS FIRST', 'NULLS LAST'}),
+    frozenset({'DISTINCT', 'ALL'}),
+)
+"""
+Words that are one choice, offered together and picked once per item.
+
+Not clauses, so the once-per-branch rule does not reach them, and `ORDER BY id
+ASC ` was still offering both `ASC` and `DESC`. A new item after a comma gets
+the choice back.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class Template:
     """
