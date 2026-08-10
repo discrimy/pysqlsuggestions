@@ -141,6 +141,14 @@ class Request:
     clause: str | None = None
     """Nearest clause keyword, uppercased."""
     scope: Scope | None = None
+    comparand: tuple[str, ...] = ()
+    """
+    The reference on the left of the comparison the caret is completing.
+
+    `WHERE r.dt_created > <caret>` records `('r', 'dt_created')`. Analysis can
+    say *what* was compared but not what type it has; resolve looks that up and
+    drops the columns that cannot face it.
+    """
     expecting: Literal['operand', 'operator', 'connective'] = 'operand'
     """
     What the caret position wants next.
@@ -172,6 +180,8 @@ class Candidate:
     """catalog | local | keyword. Ranking treats locally derived candidates differently."""
     literal: bool = False
     """Insert verbatim, never quoted. An ORDER BY ordinal is not an identifier."""
+    type: str | None = None
+    """The backend's type text, for comparison checking. None when there is none to know."""
     qualifier: str | None = None
     """
     Relation label to prefix on insertion, when a bare name would be ambiguous.

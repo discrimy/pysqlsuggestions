@@ -15,6 +15,7 @@ from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.engine.analyse import (
     after_operand,
     clause_at,
+    comparand_at,
     in_literal,
     predicate_complete,
     qualifier_and_prefix,
@@ -51,6 +52,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         qualifier=qualifier,
         clause=clause,
         scope=scope,
+        comparand=comparand_at(tokens, caret),
         expecting=expecting,
         keyword_case=_keyword_case(tokens, caret, dialect),
     )

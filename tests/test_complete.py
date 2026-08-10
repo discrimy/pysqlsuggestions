@@ -21,6 +21,7 @@ SNAPSHOT = {
         ('text', 'text'),
         ('executions', 'bigint'),
         ('is_archived', 'boolean'),
+        ('dt_created', 'timestamp with time zone'),
     ],
     ('public', 'reports_database'): [
         ('id', 'bigint'),
@@ -28,7 +29,12 @@ SNAPSHOT = {
         ('type', 'varchar(256)'),
         ('host', 'varchar(256)'),
     ],
-    ('public', 'auth_user'): [('id', 'bigint'), ('username', 'varchar(150)'), ('email', 'varchar(254)')],
+    ('public', 'auth_user'): [
+        ('id', 'bigint'),
+        ('username', 'varchar(150)'),
+        ('email', 'varchar(254)'),
+        ('date_joined', 'timestamp with time zone'),
+    ],
     ('billing', 'invoices'): [('id', 'bigint'), ('period', 'date'), ('amount', 'numeric')],
     ('billing', 'MonthlyTotals'): [('Period', 'date'), ('Amount', 'numeric')],
 }
@@ -54,6 +60,7 @@ def test_qualified_columns() -> None:
         'text',
         'executions',
         'is_archived',
+        'dt_created',
     ]
 
 
@@ -171,6 +178,41 @@ def test_both_relations_columns_survive_deduplication() -> None:
     assert sorted(t for t in found if t.endswith('.id')) == ['r.id', 'u.id']
 
 
+def test_a_comparison_narrows_to_its_own_type() -> None:
+    """`bigint > timestamp` is an error, so a timestamp comparison offers no bigint."""
+    found = texts('SELECT * FROM reports_report r WHERE r.id > ⌶')
+    assert 'id' in found
+    assert 'database_id' in found
+    assert 'name' not in found, 'varchar cannot face a bigint'
+    assert 'is_archived' not in found, 'boolean cannot either'
+
+
+def test_a_temporal_comparison_offers_only_temporal_columns() -> None:
+    """The reported case."""
+    found = texts('SELECT * FROM reports_report r JOIN auth_user u ON u.id = r.id WHERE r.dt_created > ⌶')
+    assert sorted(found) == ['r.dt_created', 'u.date_joined']
+
+
+def test_an_unqualified_comparand_is_still_resolved() -> None:
+    """`WHERE id > ` finds `id` in whatever relation is in scope."""
+    found = texts('SELECT * FROM reports_report r WHERE id > ⌶')
+    assert 'name' not in found
+    assert 'id' in found
+
+
+def test_a_column_of_unknown_type_is_never_hidden() -> None:
+    """A type the classifier does not recognise must stay reachable."""
+    odd = MemoryCatalog({('public', 't'): [('n', 'bigint'), ('weird', 'tsvector')]})
+    assert 'weird' in texts('SELECT * FROM t WHERE n > ⌶', cat=odd)
+
+
+def test_narrowing_only_applies_to_a_comparison() -> None:
+    """Without one there is nothing to be compatible with."""
+    found = texts('SELECT * FROM reports_report r WHERE ⌶')
+    assert 'name' in found
+    assert 'id' in found
+
+
 def test_operators_are_offered_after_a_completed_operand() -> None:
     """The likeliest next token leads, and none of them is case-folded or quoted."""
     found = texts('SELECT * FROM auth_user u WHERE u.id ⌶')
@@ -193,8 +235,8 @@ def test_substring_matches_columns_too() -> None:
 
 
 def test_a_prefix_hit_outranks_a_substring_hit() -> None:
-    """`e` prefixes email and sits mid-word in username; the prefix wins."""
-    assert texts('SELECT * FROM auth_user u WHERE u.e⌶') == ['email', 'username']
+    """`e` prefixes email and sits mid-word in the others; the prefix wins."""
+    assert texts('SELECT * FROM auth_user u WHERE u.e⌶')[0] == 'email'
 
 
 def test_tables_in_from_clause() -> None:

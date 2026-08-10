@@ -160,6 +160,35 @@ def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool
     return False
 
 
+def comparand_at(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:
+    """
+    The dotted reference on the left of the comparison the caret is completing.
+
+    `WHERE r.dt_created > <caret>` gives `('r', 'dt_created')`, and nothing at
+    all when the caret is not the right-hand side of a comparison. Resolve turns
+    that into a type; this stage only says which reference to look up.
+    """
+    index = _index_before(tokens, caret)
+    if index < 0:
+        return ()
+    if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
+        index -= 1
+
+    index = _skip_back(tokens, index)
+    if index < 0 or tokens[index].type is not TokenType.OPERATOR or tokens[index].text not in _COMPARISONS:
+        return ()
+
+    segments: list[str] = []
+    index = _skip_back(tokens, index - 1)
+    while index >= 0 and tokens[index].type is TokenType.IDENT:
+        segments.append(tokens[index].value)
+        dot = _skip_back(tokens, index - 1)
+        if dot < 0 or tokens[dot].type is not TokenType.PUNCT or tokens[dot].text != '.':
+            break
+        index = _skip_back(tokens, dot - 1)
+    return tuple(reversed(segments))
+
+
 def predicate_complete(
     tokens: Sequence[Token],
     lo: int,

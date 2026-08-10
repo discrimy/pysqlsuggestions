@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.engine import datatypes
 from pysqlsuggestions.ports import Cache, Catalog, SupportsColumnSearch, SupportsKeywords
 from pysqlsuggestions.types import Candidate, Column, Function, Kind, Projection, Relation, Request, Scope, Table
 
@@ -37,9 +38,47 @@ def resolve(
     if not request.kinds:
         return []
     reader = _Reader(catalog, dialect, cache, identity)
-    if request.qualifier:
-        return _qualified(request, reader, dialect, limit)
-    return _unqualified(request, reader, dialect, limit)
+    fetch = _qualified if request.qualifier else _unqualified
+    return _of_comparable_type(fetch(request, reader, dialect, limit), request, reader)
+
+
+def _of_comparable_type(candidates: list[Candidate], request: Request, reader: _Reader) -> list[Candidate]:
+    """
+    Drop what cannot appear opposite the comparison the caret is completing.
+
+    `WHERE r.dt_created > ` accepts a timestamp, a date or a function returning
+    one; a bigint column there is an error, and offering it costs the most
+    valuable row in the list. Anything whose type is unrecognised survives —
+    silence about a type is not evidence against it.
+    """
+    wanted = _comparand_family(request, reader)
+    if wanted is None:
+        return candidates
+    return [c for c in candidates if c.type is None or datatypes.comparable(datatypes.family(c.type), wanted)]
+
+
+def _comparand_family(request: Request, reader: _Reader) -> str | None:
+    """The type family of the reference on the left of the comparison, if it can be found."""
+    path, scope = request.comparand, request.scope
+    if not path or scope is None:
+        return None
+
+    named = _find_relation(path[0], scope) if len(path) > 1 else None
+    relations = [named] if named is not None else list(scope.visible())
+    for relation in relations:
+        for column in _catalog_columns(relation, reader):
+            if column.name == path[-1]:
+                found = datatypes.family(column.type)
+                return None if found == datatypes.UNKNOWN else found
+    return None
+
+
+def _catalog_columns(relation: Relation, reader: _Reader) -> Sequence[Column]:
+    """Typed columns for a relation the catalog knows. A projection carries no types."""
+    if relation.projection is not None:
+        return ()
+    schema, table = _split_path(relation.path)
+    return reader.columns(schema, table) if table else ()
 
 
 class _Reader:
@@ -285,6 +324,7 @@ def _column_candidate(column: Column, label: str | None = None, qualify: str | N
         kind=Kind.COLUMN,
         detail=f'{label or column.table}.{column.name} :: {column.type}',
         position=column.position,
+        type=column.type,
         qualifier=qualify,
     )
 
@@ -299,4 +339,4 @@ def _schema_candidate(name: str) -> Candidate:
 
 def _function_candidate(function: Function) -> Candidate:
     signature = f'{function.name}({function.args}) -> {function.result}'
-    return Candidate(text=function.name, kind=Kind.FUNCTION, detail=signature)
+    return Candidate(text=function.name, kind=Kind.FUNCTION, detail=signature, type=function.result)
