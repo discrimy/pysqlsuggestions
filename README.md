@@ -9,14 +9,40 @@ fallback so an unknown backend degrades instead of failing.
 
 ## Status
 
-The request pipeline is implemented: given SQL and a caret, the library decides
-what should be suggested. Fetching and ranking those suggestions is next.
+The whole pipeline works end to end against real servers: lex, analyse, request,
+resolve, rank. Still to come are the features in `plan.md` §6.2–6.7 — physical
+layout ranking, FK-derived joins, value hints, history ranking — plus the
+`Availability` work in §7 and the syntax extensions in §8.
 
 ## Usage
 
 ```python
-from pysqlsuggestions import derive_request
+from pysqlsuggestions import complete
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
+
+catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint'), ('name', 'text')]})
+
+sql = 'SELECT * FROM users u WHERE u.'
+[s.text for s in complete(sql, len(sql), POSTGRES, catalog)]
+# ['id', 'name']
+```
+
+Any PEP 249 cursor works as a catalog, with no driver imported by the library:
+
+```python
+import psycopg2
+from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
+
+connection = psycopg2.connect(...)
+catalog = DbapiCatalog(connection.cursor, POSTGRES, paramstyle=psycopg2.paramstyle)
+```
+
+The pure half is usable on its own, which is what a caller with no reachable
+catalog wants:
+
+```python
+from pysqlsuggestions import derive_request
 
 request = derive_request('SELECT id, na FROM users u', 13, POSTGRES)
 
@@ -47,14 +73,26 @@ derive_request(sql, len(sql), POSTGRES).kinds  # (Kind.TABLE,)   analytics is a 
 derive_request(sql, len(sql), TRINO).kinds     # (Kind.SCHEMA,)  analytics is a catalog
 ```
 
+## Demo
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --wait
+uv run uvicorn demo.app:app --port 8000
+```
+
+Completion against real PostgreSQL, ClickHouse and Trino, with a panel showing
+the derived `Request` as you type. See `demo/README.md` for what to try.
+
 ## Design
 
-See `docs/request-pipeline.md` for how the stages fit together, and
+See `docs/request-pipeline.md` for how the stages fit together,
+`docker/README.md` for what each fixture exercises, and
 `docs/superpowers/specs/` for the full design.
 
 ## Development
 
 ```bash
 uv sync
-./scripts/check.sh   # ruff format, ruff check, mypy strict, pytest
+./scripts/check.sh                      # ruff format, ruff check, mypy strict, pytest
+uv run pytest -m 'not integration'      # without the docker backends
 ```
