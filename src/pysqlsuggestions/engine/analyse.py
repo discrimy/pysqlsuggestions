@@ -213,10 +213,73 @@ def scope_of(
 
     Reading only the text left of the caret cannot work: in `SELECT na<caret>
     FROM users u` the relation that answers the question sits to the right.
+
+    Returns the innermost scope containing the caret, chained to its parents.
     """
     ctes = _read_ctes(tokens, lo, hi, dialect)
-    relations = [_bind(relation, ctes) for relation in _relations_in(tokens, lo, hi, caret, dialect)]
-    return Scope(relations=tuple(relations), ctes=ctes)
+    return _scope_level(tokens, lo, hi, caret, dialect, ctes, parent=None)
+
+
+def _scope_level(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+    ctes: dict[str, Relation],
+    parent: Scope | None,
+) -> Scope:
+    """One query level, recursing into whichever subquery holds the caret."""
+    relations = [_bind(r, ctes) for r in _relations_in(tokens, lo, hi, caret, dialect)]
+    for derived_lo, derived_hi, alias in _derived_tables(tokens, lo, hi, dialect):
+        projection = select_outputs(tokens, derived_lo, derived_hi, dialect)
+        relations.append(Relation(alias=alias, path=(), source='subquery', projection=projection))
+
+    here = Scope(relations=tuple(relations), ctes=ctes, parent=parent)
+
+    for inner_lo, inner_hi in _subquery_bodies(tokens, lo, hi):
+        if tokens[inner_lo].start <= caret <= tokens[inner_hi - 1].end:
+            return _scope_level(tokens, inner_lo, inner_hi, caret, dialect, ctes, parent=here)
+    return here
+
+
+def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> list[tuple[int, int]]:
+    """Index ranges of parenthesised bodies that begin with SELECT, one level down."""
+    depth = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
+    bodies = []
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type is not TokenType.PUNCT or token.text != '(' or token.depth != depth:
+            continue
+        body_lo = _skip_forward(tokens, index + 1, hi)
+        if body_lo >= hi or tokens[body_lo].type is not TokenType.IDENT:
+            continue
+        if tokens[body_lo].value.upper() not in {'SELECT', 'WITH', 'VALUES', 'TABLE'}:
+            continue
+        bodies.append((body_lo, _matching_paren(tokens, index, hi)))
+    return bodies
+
+
+def _derived_tables(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    dialect: Dialect,
+) -> list[tuple[int, int, str | None]]:
+    """Subquery bodies in a FROM position, with the alias that names them."""
+    out = []
+    for body_lo, body_hi in _subquery_bodies(tokens, lo, hi):
+        opener = body_lo - 1
+        while opener > lo and tokens[opener].text != '(':
+            opener -= 1
+        before = _skip_back(tokens, opener - 1)
+        if before < lo or tokens[before].type is not TokenType.IDENT:
+            continue
+        if tokens[before].value.upper() not in _RELATION_CLAUSES | {'JOIN'}:
+            continue
+        alias, _ = _read_alias(tokens, body_hi + 1, hi, dialect)
+        out.append((body_lo, body_hi, alias))
+    return out
 
 
 def _bind(relation: Relation, ctes: dict[str, Relation]) -> Relation:
@@ -247,6 +310,11 @@ def _relations_in(
     while index < hi:
         token = tokens[index]
         if token.type in _SKIP:
+            index += 1
+            continue
+        # Relations belong to the level that declared them; a nested subquery's
+        # FROM is private to it and is picked up by that level's own scope.
+        if token.depth > tokens[lo].depth:
             index += 1
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect)
