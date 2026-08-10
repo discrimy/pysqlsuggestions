@@ -96,3 +96,28 @@ def test_empty_input() -> None:
     result = derive_request('', 0, POSTGRES)
     assert result.kinds == (Kind.KEYWORD,)
     assert result.clause is None
+
+
+def test_readme_example_is_accurate() -> None:
+    """The example in README.md must actually work, verbatim."""
+    sql = 'SELECT id, na FROM users u'
+    result = derive_request(sql, 13, POSTGRES)
+    assert result.prefix == 'na'
+    assert result.clause == 'SELECT'
+    assert result.replace_span == (11, 13)
+    assert result.kinds == (Kind.COLUMN, Kind.FUNCTION, Kind.KEYWORD)
+    assert [r.label for r in (result.scope.visible() if result.scope else ())] == ['u']
+
+
+def test_readme_qualifier_example_is_accurate() -> None:
+    """The caret must sit past the dot. plan.md §10 writes 29, which is one short."""
+    sql = 'SELECT * FROM users u WHERE u.'
+    assert derive_request(sql, 30, POSTGRES).kinds == (Kind.COLUMN,)
+    assert derive_request(sql, 29, POSTGRES).kinds == (Kind.COLUMN, Kind.FUNCTION)
+
+
+def test_readme_dialect_example_is_accurate() -> None:
+    """One tuple, three answers to the same text."""
+    sql = 'SELECT * FROM analytics.'
+    assert derive_request(sql, len(sql), POSTGRES).kinds == (Kind.TABLE,)
+    assert derive_request(sql, len(sql), TRINO).kinds == (Kind.SCHEMA,)
