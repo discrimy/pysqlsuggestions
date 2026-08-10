@@ -371,16 +371,32 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
     return []
 
 
+_BOOLEANS = {'t': 'true', 'true': 'true', 'f': 'false', 'false': 'false'}
+"""
+How a backend prints a boolean, and how SQL wants one written.
+
+Statistics report the printed form: Postgres stores `t` and `f`, and neither is
+a literal — `WHERE is_superuser = f` parses `f` as a column reference and fails
+with `column "f" does not exist`.
+"""
+
+
 def _as_literal(value: str, type_text: str, dialect_quote: str) -> str:
     """
     Spell `value` the way the column's type wants it written.
 
-    A number and a boolean go bare; everything else is a string literal, which
-    is also the safe reading of a type this engine does not recognise — every
-    backend here will coerce a quoted literal, and none will accept a bare word.
+    A number goes bare and a boolean goes bare once translated; everything else
+    is a string literal, which is also the safe reading of a type — or a boolean
+    spelling — this engine does not recognise. Every backend here will coerce a
+    quoted literal, and none will accept a bare word it did not expect.
     """
-    if datatypes.family(type_text) in ('numeric', 'boolean'):
+    family = datatypes.family(type_text)
+    if family == 'numeric':
         return value
+    if family == 'boolean':
+        spelled = _BOOLEANS.get(value.lower())
+        if spelled is not None:
+            return spelled
     return f'{dialect_quote}{value.replace(dialect_quote, dialect_quote * 2)}{dialect_quote}'
 
 

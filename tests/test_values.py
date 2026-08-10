@@ -103,3 +103,29 @@ def test_a_catalog_without_statistics_offers_no_values(dialect: Dialect) -> None
     found = texts('SELECT * FROM reports_database d WHERE d.type = ⌶', dialect, bare)
     assert not any(t.startswith("'") for t in found)
     assert 'title' in found
+
+
+def test_a_boolean_is_spelled_as_a_literal_not_as_postgres_prints_it() -> None:
+    """
+    `pg_stats` reports a boolean the way Postgres *prints* it — `t` and `f` —
+    and neither is a literal. `WHERE is_superuser = f` parses `f` as a column
+    reference and fails with `column "f" does not exist`.
+    """
+    printed = MemoryCatalog(SNAPSHOT, values={('public', 'reports_database', 'is_archived'): ['f', 't']})
+    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=printed)[:2] == ['false', 'true']
+
+
+def test_a_boolean_already_spelled_out_is_left_alone() -> None:
+    """A backend that reports `true` needs no translating."""
+    spelled = MemoryCatalog(SNAPSHOT, values={('public', 'reports_database', 'is_archived'): ['TRUE', 'false']})
+    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=spelled)[:2] == ['true', 'false']
+
+
+def test_an_unrecognised_boolean_is_quoted_rather_than_guessed() -> None:
+    """
+    Every backend here coerces a quoted literal to boolean, so quoting is the
+    honest answer to a spelling this table does not know — better than emitting
+    a bare word that may not parse.
+    """
+    odd = MemoryCatalog(SNAPSHOT, values={('public', 'reports_database', 'is_archived'): ['maybe']})
+    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=odd)[:1] == ["'maybe'"]

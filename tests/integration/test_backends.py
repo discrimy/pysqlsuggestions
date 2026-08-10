@@ -252,9 +252,11 @@ def test_postgres_offers_values_from_planner_statistics(postgres_catalog: DbapiC
     """
     `WHERE is_staff = ⌶` answers from `pg_stats.most_common_vals`.
 
-    A boolean, so the literals go in bare. Nothing is read from the table: the
-    values are the ones the planner already recorded, which is also why they
-    are only there once ANALYZE has run.
+    A boolean, so the literals go in bare — as `true` and `false`, not as the
+    `t` and `f` the statistics report, which are how Postgres *prints* a boolean
+    rather than how it parses one. Nothing is read from the table: the values
+    are the ones the planner already recorded, which is also why they are only
+    there once ANALYZE has run.
     """
     postgres_catalog.columns('public', 'auth_user')  # ensure the relation is reachable at all
     values = postgres_catalog.common_values('public', 'auth_user', 'is_staff', 30)
@@ -267,7 +269,7 @@ def test_postgres_offers_values_from_planner_statistics(postgres_catalog: DbapiC
         POSTGRES,
         postgres_catalog,
     )
-    assert found[0] in {'t', 'f'}, found[:5]
+    assert found[0] in {'true', 'false'}, found[:5]
 
 
 def test_postgres_asks_the_statistics_view_not_the_table(postgres_catalog: DbapiCatalog) -> None:
