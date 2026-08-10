@@ -58,7 +58,7 @@ def test_a_comparison_offers_the_values_that_column_holds() -> None:
 
 def test_a_value_is_quoted_by_its_column_type() -> None:
     """A varchar needs quotes, a boolean and an integer must not have them."""
-    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶')[:2] == ['false', 'true']
+    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶')[:2] == ['true', 'false']
     assert texts('SELECT * FROM reports_database d WHERE d.port = ⌶')[:2] == ['5432', '9000']
 
 
@@ -105,27 +105,64 @@ def test_a_catalog_without_statistics_offers_no_values(dialect: Dialect) -> None
     assert 'title' in found
 
 
-def test_a_boolean_is_spelled_as_a_literal_not_as_postgres_prints_it() -> None:
+def test_a_boolean_never_takes_the_form_statistics_print_it_in() -> None:
     """
     `pg_stats` reports a boolean the way Postgres *prints* it — `t` and `f` —
-    and neither is a literal. `WHERE is_superuser = f` parses `f` as a column
-    reference and fails with `column "f" does not exist`.
+    and neither is a literal: `WHERE is_superuser = f` reads `f` as a column
+    reference and fails with `column "f" does not exist`. The type answers
+    instead, with the two words SQL accepts, and statistics are never consulted
+    for a column whose type already lists everything it can hold.
     """
     printed = MemoryCatalog(SNAPSHOT, values={('public', 'reports_database', 'is_archived'): ['f', 't']})
-    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=printed)[:2] == ['false', 'true']
+    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=printed)[:2] == ['true', 'false']
 
 
-def test_a_boolean_already_spelled_out_is_left_alone() -> None:
-    """A backend that reports `true` needs no translating."""
-    spelled = MemoryCatalog(SNAPSHOT, values={('public', 'reports_database', 'is_archived'): ['TRUE', 'false']})
-    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=spelled)[:2] == ['true', 'false']
+BARE = MemoryCatalog(
+    {
+        ('public', 'reports_database'): [
+            ('is_archived', 'boolean'),
+            ('kind', "Enum8('postgres' = 1, 'clickhouse' = 2)"),
+            ('title', 'varchar(256)'),
+        ],
+    },
+)
+"""No statistics at all: everything here must come from the column's type."""
 
 
-def test_an_unrecognised_boolean_is_quoted_rather_than_guessed() -> None:
+@pytest.mark.parametrize('dialect', [POSTGRES, CLICKHOUSE])
+def test_a_boolean_needs_no_statistics(dialect: Dialect) -> None:
     """
-    Every backend here coerces a quoted literal to boolean, so quoting is the
-    honest answer to a spelling this table does not know — better than emitting
-    a bare word that may not parse.
+    Its values are the type. `WHERE is_archived = ⌶` on a database that has
+    never been ANALYZEd still knows the answer is one of two words, and every
+    dialect spells them the same way.
     """
-    odd = MemoryCatalog(SNAPSHOT, values={('public', 'reports_database', 'is_archived'): ['maybe']})
-    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=odd)[:1] == ["'maybe'"]
+    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', dialect, BARE)[:2] == ['true', 'false']
+
+
+def test_an_enum_offers_its_labels_from_the_type_text() -> None:
+    """
+    ClickHouse writes the labels into the type — `Enum8('a' = 1, 'b' = 2)` —
+    so the exhaustive answer is already in hand and costs no query at all.
+    """
+    assert texts('SELECT * FROM reports_database d WHERE d.kind = ⌶', CLICKHOUSE, BARE)[:2] == [
+        "'postgres'",
+        "'clickhouse'",
+    ]
+
+
+def test_a_type_that_enumerates_itself_beats_the_statistics() -> None:
+    """
+    Exhaustive outranks frequent: the type lists every value, statistics only
+    the common ones, so consulting the catalog there would narrow the answer.
+    """
+    partial = MemoryCatalog(
+        {('public', 'reports_database'): [('is_archived', 'boolean')]},
+        values={('public', 'reports_database', 'is_archived'): ['f']},
+    )
+    assert texts('SELECT * FROM reports_database d WHERE d.is_archived = ⌶', cat=partial)[:2] == ['true', 'false']
+
+
+def test_a_type_that_does_not_enumerate_itself_still_asks() -> None:
+    """A varchar has no value set of its own, so statistics remain the only source."""
+    assert texts('SELECT * FROM reports_database d WHERE d.type = ⌶')[:1] == ["'postgres'"]
+    assert texts('SELECT * FROM reports_database d WHERE d.title = ⌶', cat=BARE)[:1] != ["'"]

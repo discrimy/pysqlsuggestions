@@ -93,15 +93,25 @@ complete("SELECT * FROM reports_database d WHERE d.type = ", 48, POSTGRES, catal
 # [Suggestion(text="'postgres'", kind=Kind.VALUE, ...), ...]
 ```
 
-They come from the planner statistics the backend already keeps — Postgres's
-`pg_stats.most_common_vals` — never from reading the table: a completion engine
-may not start a scan, and `pg_stats` is already filtered to what the connected
-role may read. They appear once `ANALYZE` has run, and only for columns whose
-values repeat.
+Nothing reads the table — a completion engine may not start a scan. There are
+two sources, and the exhaustive one wins:
 
-It is a capability (`SupportsColumnValues`), so a catalog that cannot answer
-simply offers columns and functions there instead. Only the Postgres dialect
-ships a query; ClickHouse and Trino keep no comparable statistics.
+| source | where it comes from | cost |
+| --- | --- | --- |
+| boolean | the type: `true` / `false` | free, every dialect |
+| enum | ClickHouse writes its labels into the type text; Postgres keeps them in `pg_enum` | free / one read |
+| frequent values | Postgres `pg_stats.most_common_vals` | one read |
+
+A type that enumerates itself is complete, so statistics could only narrow it.
+Everything else falls back to whatever the planner already recorded, which for
+Postgres is also filtered to what the connected role may read.
+
+Statistics appear once `ANALYZE` has run and only for columns whose values
+repeat, so a column of distinct values has none — that is the feature working,
+not failing. Fetching them is a capability (`SupportsColumnValues`): a catalog
+that cannot answer offers columns and functions there instead. ClickHouse and
+Trino keep no most-common-values, so ClickHouse answers from its enums and
+Trino from booleans alone.
 
 ## Design
 

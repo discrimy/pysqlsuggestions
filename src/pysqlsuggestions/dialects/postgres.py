@@ -89,20 +89,33 @@ QUERIES = CatalogQueries(
         """,
         row=lambda row: Function(schema=str(row[0]), name=str(row[1]), args=str(row[2]), result=str(row[3])),
     ),
-    # Planner statistics, not a table read. `most_common_vals` is an anyarray
-    # ordered by frequency, so WITH ORDINALITY is what keeps that order through
-    # the unnest. pg_stats already restricts itself to what the connected role
-    # may read, which is the privilege check this would otherwise have to make.
+    # Two sources, exhaustive first. An enum type lists every value it permits,
+    # which no statistic can improve on; `format_type` reports only the type's
+    # name, so the labels are a read of their own. Failing that, planner
+    # statistics: `most_common_vals` is an anyarray ordered by frequency, so
+    # WITH ORDINALITY is what carries that order through the unnest. Neither
+    # touches the table, and pg_stats already restricts itself to what the
+    # connected role may read.
     values=Query(
         sql="""
-            SELECT v.value
-            FROM pg_stats s
-            JOIN pg_class c ON c.relname = s.tablename
-            JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s.schemaname
-            CROSS JOIN LATERAL unnest(s.most_common_vals::text::text[]) WITH ORDINALITY AS v(value, ord)
-            WHERE s.tablename = $2 AND s.attname = $3
-              AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
-            ORDER BY v.ord
+            SELECT q.value FROM (
+                SELECT e.enumlabel::text AS value, 0 AS source, e.enumsortorder::float8 AS ord
+                FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_enum e ON e.enumtypid = a.atttypid
+                WHERE c.relname = $2 AND a.attname = $3 AND a.attnum > 0 AND NOT a.attisdropped
+                  AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
+                UNION ALL
+                SELECT v.value, 1 AS source, v.ord::float8
+                FROM pg_stats s
+                JOIN pg_class c ON c.relname = s.tablename
+                JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s.schemaname
+                CROSS JOIN LATERAL unnest(s.most_common_vals::text::text[]) WITH ORDINALITY AS v(value, ord)
+                WHERE s.tablename = $2 AND s.attname = $3
+                  AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
+            ) q
+            ORDER BY q.source, q.ord
             LIMIT 50
         """,
         row=lambda row: str(row[0]),

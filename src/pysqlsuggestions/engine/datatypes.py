@@ -103,6 +103,34 @@ def family(type_text: str | None) -> str:
     return UNKNOWN
 
 
+_ENUM_LABELS = re.compile(r"'((?:[^']|'')*)'")
+
+_BOOLEAN_LITERALS = ('true', 'false')
+
+
+def literals(type_text: str | None) -> tuple[str, ...]:
+    """
+    Every value a column of this type can hold, when the type says so outright.
+
+    A boolean has two, and an enum that writes its labels into its own type text
+    — ClickHouse's `Enum8('ok' = 1, 'error' = 2)` — has exactly those. Both are
+    exhaustive and free: no statistics, no query, and nothing left out. Postgres
+    spells an enum column with the type's *name* instead, so there the labels
+    are a catalog read like any other.
+
+    Empty for every other type, which is most of them: a varchar has no value
+    set to enumerate and only statistics can say what is in it.
+    """
+    if not type_text:
+        return ()
+    if family(type_text) == 'boolean':
+        return _BOOLEAN_LITERALS
+    lowered = type_text.lower()
+    if lowered.startswith(('enum8(', 'enum16(', 'enum(')):
+        return tuple(match.group(1).replace("''", "'") for match in _ENUM_LABELS.finditer(type_text))
+    return ()
+
+
 def comparable(left: str, right: str) -> bool:
     """
     Whether two families may face each other across a comparison operator.

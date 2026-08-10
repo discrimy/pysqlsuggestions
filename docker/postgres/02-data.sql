@@ -84,3 +84,12 @@ VALUES (1, '2026-06-01', 12500.00, true),
 
 INSERT INTO billing."MonthlyTotals" ("Period", "Amount")
 VALUES ('2026-06-01', 12500.00), ('2026-07-01', 16800.50);
+
+-- Repeated on purpose: `most_common_vals` records a value only once it recurs,
+-- so a handful of distinct rows would leave this column with no statistics.
+INSERT INTO reports_runlog (report_id, status, environment)
+SELECT 1 + (n % 3), (ARRAY['queued', 'running', 'succeeded', 'failed']::run_status[])[1 + (n % 4)],
+       (ARRAY['production', 'staging'])[1 + (n % 2)]
+FROM generate_series(1, 120) AS n;
+
+ANALYZE;

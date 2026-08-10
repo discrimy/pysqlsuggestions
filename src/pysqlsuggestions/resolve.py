@@ -356,7 +356,9 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
         column = next((c for c in reader.columns(schema, table) if c.name == path[-1]), None)
         if column is None:
             continue
-        values = reader.common_values(schema, table, column.name)
+        # The type first: where it enumerates itself the answer is exhaustive,
+        # and statistics could only narrow it to the frequent ones.
+        values = datatypes.literals(column.type) or reader.common_values(schema, table, column.name)
         return [
             Candidate(
                 text=_as_literal(value, column.type, dialect_quote="'"),
@@ -371,13 +373,14 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
     return []
 
 
-_BOOLEANS = {'t': 'true', 'true': 'true', 'f': 'false', 'false': 'false'}
+_BARE_BOOLEANS = frozenset({'true', 'false'})
 """
-How a backend prints a boolean, and how SQL wants one written.
+The only two boolean spellings that may go in unquoted.
 
-Statistics report the printed form: Postgres stores `t` and `f`, and neither is
-a literal — `WHERE is_superuser = f` parses `f` as a column reference and fails
-with `column "f" does not exist`.
+Backends *print* a boolean differently from how they parse one — Postgres
+statistics report `t` and `f`, and `WHERE is_superuser = f` reads `f` as a
+column reference and fails with `column "f" does not exist`. Anything else is
+quoted, which every backend here coerces correctly.
 """
 
 
@@ -385,18 +388,16 @@ def _as_literal(value: str, type_text: str, dialect_quote: str) -> str:
     """
     Spell `value` the way the column's type wants it written.
 
-    A number goes bare and a boolean goes bare once translated; everything else
-    is a string literal, which is also the safe reading of a type — or a boolean
-    spelling — this engine does not recognise. Every backend here will coerce a
-    quoted literal, and none will accept a bare word it did not expect.
+    A number goes bare, and so do the two boolean words. Everything else is a
+    string literal, which is also the safe reading of a type this engine does
+    not recognise: every backend here will coerce a quoted literal, and none
+    will accept a bare word it did not expect.
     """
     family = datatypes.family(type_text)
     if family == 'numeric':
         return value
-    if family == 'boolean':
-        spelled = _BOOLEANS.get(value.lower())
-        if spelled is not None:
-            return spelled
+    if family == 'boolean' and value.lower() in _BARE_BOOLEANS:
+        return value.lower()
     return f'{dialect_quote}{value.replace(dialect_quote, dialect_quote * 2)}{dialect_quote}'
 
 

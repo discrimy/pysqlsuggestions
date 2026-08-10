@@ -283,3 +283,45 @@ def test_postgres_asks_the_statistics_view_not_the_table(postgres_catalog: Dbapi
     assert query is not None
     assert 'pg_stats' in query.sql
     assert 'auth_user' not in query.sql
+
+
+def test_postgres_offers_enum_labels_without_statistics(postgres_catalog: DbapiCatalog) -> None:
+    """
+    An enum type lists every value it permits, which no statistic improves on.
+
+    Postgres reports the column's type as the enum's *name*, so unlike
+    ClickHouse the labels are a read of their own — of `pg_enum`, not the table.
+    """
+    if not any(c.name == 'status' for c in postgres_catalog.columns('public', 'reports_runlog')):
+        pytest.skip('the reports_runlog fixture predates this seed: docker compose down -v && up')
+    assert list(postgres_catalog.common_values('public', 'reports_runlog', 'status', 30)) == [
+        'queued',
+        'running',
+        'succeeded',
+        'failed',
+    ]
+    found = suggest('SELECT * FROM reports_runlog r WHERE r.status = ⌶', POSTGRES, postgres_catalog)
+    assert found[:2] == ["'queued'", "'running'"]
+
+
+def test_clickhouse_offers_enum_labels_from_the_type_alone(clickhouse_catalog: DbapiCatalog) -> None:
+    """
+    `Enum8('PostgreSQL' = 1, ...)` carries its values in the type text the
+    columns query already returned, so this costs no query at all — and
+    ClickHouse keeps no most-common-values to fall back on.
+    """
+    found = suggest('SELECT * FROM report_dim d WHERE d.db_type = ⌶', CLICKHOUSE, clickhouse_catalog)
+    assert found[:3] == ["'PostgreSQL'", "'ClickHouse'", "'Trino'"]
+
+
+def test_trino_offers_the_two_boolean_words(trino_catalog: DbapiCatalog) -> None:
+    """
+    Trino keeps neither most-common-values nor an enum type, so a boolean is
+    all its types can enumerate — and that needs no catalog support at all.
+    """
+    found = suggest(
+        'SELECT * FROM postgresql.public.auth_user u WHERE u.is_staff = ⌶',
+        TRINO,
+        trino_catalog,
+    )
+    assert found[:2] == ['true', 'false']

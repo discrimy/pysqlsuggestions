@@ -200,3 +200,17 @@ WHERE NOT r.is_archived AND NOT r.broken;
 CREATE INDEX reports_report_database_id_idx ON reports_report (database_id);
 CREATE INDEX reports_report_group_id_idx ON reports_report (group_id);
 CREATE INDEX reports_report_dt_created_idx ON reports_report (dt_created DESC);
+
+-- A column whose type enumerates itself, and one whose values repeat: between
+-- them they exercise both sources of value suggestions. `reports_database.type`
+-- deliberately does not, since three rows with three distinct values leave
+-- Postgres nothing to record in `pg_stats.most_common_vals`.
+CREATE TYPE run_status AS ENUM ('queued', 'running', 'succeeded', 'failed');
+
+CREATE TABLE reports_runlog (
+    id          bigserial PRIMARY KEY,
+    report_id   bigint NOT NULL REFERENCES reports_report(id),
+    status      run_status NOT NULL,
+    environment varchar(32) NOT NULL,
+    started_at  timestamptz NOT NULL DEFAULT now()
+);
