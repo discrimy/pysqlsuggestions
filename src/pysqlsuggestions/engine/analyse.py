@@ -7,7 +7,7 @@ Nothing performs I/O, and nothing knows what a catalog is.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
@@ -576,7 +576,7 @@ def scope_of(
     Returns the innermost scope containing the caret, chained to its parents.
     """
     ctes, cte_bodies = _read_ctes(tokens, lo, hi, dialect)
-    return _scope_level(tokens, lo, hi, caret, dialect, ctes, parent=None, cte_bodies=cte_bodies)
+    return _scope_level(tokens, lo, hi, caret, dialect, ctes, parent=None, cte_scopes=cte_bodies)
 
 
 def _scope_level(
@@ -587,12 +587,14 @@ def _scope_level(
     dialect: Dialect,
     ctes: dict[str, Relation],
     parent: Scope | None,
-    cte_bodies: frozenset[tuple[int, int]] = frozenset(),
+    cte_scopes: Mapping[tuple[int, int], dict[str, Relation]] | None = None,
 ) -> Scope:
     """One query level, recursing into whichever subquery holds the caret."""
+    cte_scopes = cte_scopes if cte_scopes is not None else {}
     lo, hi = _branch_at(tokens, lo, hi, caret)
     relations = [_bind(r, ctes) for r in _relations_in(tokens, lo, hi, caret, dialect)]
-    for derived_lo, derived_hi, alias in _derived_tables(tokens, lo, hi, dialect):
+    derived = _derived_tables(tokens, lo, hi, dialect)
+    for derived_lo, derived_hi, alias in derived:
         projection = select_outputs(tokens, derived_lo, derived_hi, dialect)
         relations.append(Relation(alias=alias, path=(), source='subquery', projection=projection))
 
@@ -602,24 +604,39 @@ def _scope_level(
         parent=parent,
         projection=select_outputs(tokens, lo, hi, dialect),
     )
+    opaque = {(body_lo, body_hi) for body_lo, body_hi, _ in derived if not _is_lateral(tokens, body_lo, dialect)}
 
     for inner_lo, inner_hi in _subquery_bodies(tokens, lo, hi):
         if tokens[inner_lo].start <= caret <= tokens[inner_hi - 1].end:
-            # A CTE body is evaluated on its own: it cannot reference the outer
-            # query's FROM list, nor the CTE being defined. A correlated
-            # subquery can, so only CTE bodies drop the parent link.
-            enclosing = None if (inner_lo, inner_hi) in cte_bodies else here
+            # Three kinds of nested query, and they see three different things.
+            # A CTE body sees the CTEs written before it and nothing of the outer
+            # FROM; a derived table sees neither, unless LATERAL asks for it; a
+            # correlated subquery in an expression sees everything.
+            declared = cte_scopes.get((inner_lo, inner_hi))
+            opaque_here = declared is not None or (inner_lo, inner_hi) in opaque
             return _scope_level(
                 tokens,
                 inner_lo,
                 inner_hi,
                 caret,
                 dialect,
-                ctes,
-                parent=enclosing,
-                cte_bodies=cte_bodies,
+                ctes if declared is None else declared,
+                parent=None if opaque_here else here,
+                cte_scopes=cte_scopes,
             )
     return here
+
+
+def _is_lateral(tokens: Sequence[Token], body_lo: int, dialect: Dialect) -> bool:
+    """
+    Whether the derived table starting at `body_lo` was introduced by LATERAL.
+
+    LATERAL is the keyword that asks for exactly what a plain derived table is
+    denied: the other relations of the FROM list it sits in.
+    """
+    del dialect
+    before = _skip_back(tokens, body_lo - 2)  # past the `(`
+    return before >= 0 and tokens[before].type is TokenType.IDENT and tokens[before].value.upper() == 'LATERAL'
 
 
 def _branch_at(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> tuple[int, int]:
@@ -764,6 +781,27 @@ def clauses_written(
             continue
         found.add(matched[0])
         index = matched[1]
+    return frozenset(found)
+
+
+def words_in_item(tokens: Sequence[Token], caret: int) -> frozenset[str]:
+    """
+    Unquoted keywords written in the caret's own list item, at its own depth.
+
+    An item runs from the last comma to the caret. Some words are one choice
+    made once — a sort direction, a nulls placement — and the clause's
+    continuation list cannot know which of them the author already picked.
+    """
+    depth = depth_at(tokens, caret)
+    found: list[str] = []
+    for index in range(_index_before(tokens, caret), -1, -1):
+        token = tokens[index]
+        if token.depth != depth or token.start >= caret:
+            continue
+        if token.type is TokenType.PUNCT and token.text == ',':
+            break
+        if token.type is TokenType.IDENT and not token.quoted:
+            found.append(token.value.upper())
     return frozenset(found)
 
 
@@ -1070,20 +1108,24 @@ def _read_ctes(
     lo: int,
     hi: int,
     dialect: Dialect,
-) -> tuple[dict[str, Relation], frozenset[tuple[int, int]]]:
+) -> tuple[dict[str, Relation], dict[tuple[int, int], dict[str, Relation]]]:
     """
     Every relation declared in a leading WITH clause, keyed by name.
 
-    Also returns each body's token span, because a caret inside one is scoped
-    differently from a caret inside any other parenthesised subquery.
+    Also returns what each body can see, which is not the same thing. A
+    non-recursive WITH is read in order, so the first body cannot reference the
+    second — Postgres answers `relation "b" does not exist` — and RECURSIVE is
+    precisely the word that adds the body's own name to its own scope.
     """
     start = _after_clause(tokens, lo, hi, 'WITH', dialect)
     if start is None:
-        return {}, frozenset()
+        return {}, {}
     ctes: dict[str, Relation] = {}
-    bodies: list[tuple[int, int]] = []
+    visible: list[tuple[tuple[int, int], tuple[str, ...]]] = []
     index = _skip_forward(tokens, start, hi)
+    recursive = False
     if index < hi and tokens[index].type is TokenType.IDENT and tokens[index].value.upper() == 'RECURSIVE':
+        recursive = True
         index = _skip_forward(tokens, index + 1, hi)
     while index < hi:
         index = _skip_forward(tokens, index, hi)
@@ -1108,14 +1150,14 @@ def _read_ctes(
         projection = (
             Projection(columns=declared) if declared else select_outputs(tokens, body_lo, body_hi, dialect, ctes)
         )
+        visible.append(((body_lo, body_hi), (*ctes, *((name,) if recursive else ()))))
         ctes[name] = Relation(alias=None, path=(name,), source='cte', projection=projection)
-        bodies.append((body_lo, body_hi))
         index = _skip_forward(tokens, body_hi + 1, hi)
         if index < hi and tokens[index].text == ',':
             index += 1
             continue
         break
-    return ctes, frozenset(bodies)
+    return ctes, {span: {n: ctes[n] for n in names if n in ctes} for span, names in visible}
 
 
 def _read_declared_columns(tokens: Sequence[Token], index: int, hi: int) -> tuple[tuple[str, ...], int]:

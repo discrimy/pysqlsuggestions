@@ -69,3 +69,51 @@ def test_two_levels_of_nesting() -> None:
 def test_derived_table_body_relations_are_not_visible_outside() -> None:
     """`orders` inside the derived table must not leak into the outer scope."""
     assert rendered('SELECT ⌶ FROM (SELECT id FROM orders) d') == ['d:']
+
+
+def test_a_derived_table_cannot_see_the_enclosing_from() -> None:
+    """
+    `FROM a JOIN (SELECT a.⌶ FROM b) s` is not a correlated subquery.
+
+    A derived table is evaluated before the join it sits in, so the other
+    relations of that FROM list are not in scope. Postgres answers `invalid
+    reference to FROM-clause entry for table "u"`, and offering the column is
+    offering a query that does not run.
+    """
+    found = scope('SELECT * FROM auth_user u JOIN (SELECT ⌶ FROM orders) s ON 1 = 1')
+    assert [r.label for r in found.visible()] == ['orders']
+
+
+def test_a_lateral_derived_table_can_see_it() -> None:
+    """LATERAL is the keyword that asks for exactly what the plain form forbids."""
+    found = scope('SELECT * FROM auth_user u, LATERAL (SELECT ⌶ FROM orders) s')
+    assert 'u' in [r.label for r in found.visible()]
+
+
+def test_an_expression_subquery_still_sees_the_outer_query() -> None:
+    """The counterpart: a correlated subquery in WHERE is the case that must keep working."""
+    found = scope('SELECT * FROM auth_user u WHERE EXISTS (SELECT ⌶ FROM orders)')
+    assert 'u' in [r.label for r in found.visible()]
+
+
+def test_a_cte_body_sees_only_the_ctes_declared_before_it() -> None:
+    """
+    `WITH a AS (SELECT ⌶ FROM b), b AS (...)` cannot reference `b`.
+
+    A non-recursive WITH is read in order, so Postgres answers `relation "b"
+    does not exist`. Declaration and visibility are not the same thing.
+    """
+    found = scope('WITH a AS (SELECT ⌶ FROM b), b AS (SELECT id FROM orders) SELECT * FROM a')
+    assert list(found.ctes) == []
+
+
+def test_a_later_cte_body_sees_the_earlier_ones() -> None:
+    """The counterpart, and the reason the declaration order is worth keeping."""
+    found = scope('WITH a AS (SELECT id FROM orders), b AS (SELECT ⌶ FROM a) SELECT * FROM b')
+    assert list(found.ctes) == ['a']
+
+
+def test_a_recursive_cte_sees_itself() -> None:
+    """RECURSIVE is what makes the self-reference legal, and it is the whole point of the form."""
+    found = scope('WITH RECURSIVE t AS (SELECT id FROM orders UNION ALL SELECT ⌶ FROM t) SELECT * FROM t')
+    assert 't' in found.ctes
