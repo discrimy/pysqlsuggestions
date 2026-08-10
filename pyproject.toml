@@ -19,6 +19,21 @@ classifiers = [
     'Typing :: Typed',
 ]
 
+# Extras are named after the driver they install, not the backend: more than one
+# driver can serve the same backend, so a future psycopg3 extra sits alongside
+# psycopg2 rather than silently changing what `postgres` means.
+[project.optional-dependencies]
+psycopg2 = ['psycopg2-binary>=2.9']
+clickhouse-driver = ['clickhouse-driver>=0.2.9']
+trino = ['trino>=0.328']
+demo = ['fastapi>=0.110', 'uvicorn>=0.29']
+
+[project.entry-points.'pysqlsuggestions.dialects']
+ansi = 'pysqlsuggestions.dialects.ansi:ANSI'
+postgres = 'pysqlsuggestions.dialects.postgres:POSTGRES'
+clickhouse = 'pysqlsuggestions.dialects.clickhouse:CLICKHOUSE'
+trino = 'pysqlsuggestions.dialects.trino:TRINO'
+
 [build-system]
 requires = ['hatchling']
 build-backend = 'hatchling.build'
@@ -33,6 +48,13 @@ dev = [
     'ruff>=0.14',
     'mypy>=1.7',
     'pre-commit>=3.5',
+    # Integration tests and the demo only. The library itself imports none of these,
+    # and tests/test_purity.py fails the build if that ever stops being true.
+    'psycopg2-binary>=2.9',
+    'clickhouse-driver>=0.2.9',
+    'trino>=0.328',
+    'fastapi>=0.110',
+    'uvicorn>=0.29',
 ]
 
 [tool.ruff]
@@ -69,3 +91,4 @@ files = ['src', 'tests']
 
 [tool.pytest.ini_options]
 testpaths = ['tests']
+markers = ['integration: needs the docker backends (docker/docker-compose.yml)']

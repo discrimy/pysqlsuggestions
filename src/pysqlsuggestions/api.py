@@ -31,8 +31,9 @@ class _NullCatalog:
     those suggestions, which are the ones a caller without an adapter most wants.
     """
 
-    def schemas(self) -> list[str]:
+    def schemas(self, catalog: str | None = None) -> list[str]:
         """No namespaces are known."""
+        del catalog
         return []
 
     def tables(self, schema: str | None = None) -> list[Table]:

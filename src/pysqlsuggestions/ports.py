@@ -31,8 +31,15 @@ class Catalog(Protocol):
     `FROM users` — the most common query shape there is — cannot be expressed.
     """
 
-    def schemas(self) -> Sequence[str]:
-        """Schema, database or catalog names, depending on the dialect's namespace."""
+    def schemas(self, catalog: str | None = None) -> Sequence[str]:
+        """
+        Namespace names one level down.
+
+        `catalog` is the level above, and is only meaningful where the dialect
+        has three levels: `SELECT * FROM prod.<caret>` in Trino must list the
+        schemas of the `prod` catalog, not every schema everywhere. Backends with
+        a two-level namespace ignore it.
+        """
         ...
 
     def tables(self, schema: str | None = None) -> Sequence[Table]:

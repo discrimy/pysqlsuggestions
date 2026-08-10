@@ -6,8 +6,60 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import Clause, Namespace, Syntax
-from pysqlsuggestions.types import Kind
+from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Query, Syntax
+from pysqlsuggestions.types import Column, Function, Kind, Table
+
+_INTERNAL = "('system', 'INFORMATION_SCHEMA', 'information_schema')"
+
+QUERIES = CatalogQueries(
+    schemas=Query(
+        sql=f"""
+            SELECT name FROM system.databases
+            WHERE name NOT IN {_INTERNAL} AND $1 = $1
+            ORDER BY name
+        """,
+        row=lambda row: str(row[0]),
+    ),
+    tables=Query(
+        sql=f"""
+            SELECT database, name, engine FROM system.tables
+            WHERE ($1 = '' AND database = currentDatabase() OR database = $1)
+              AND database NOT IN {_INTERNAL}
+            ORDER BY database, name
+        """,
+        row=lambda row: Table(schema=str(row[0]), name=str(row[1]), kind=str(row[2]).lower()),
+    ),
+    columns=Query(
+        sql="""
+            SELECT database, table, name, type, position FROM system.columns
+            WHERE table = $2 AND ($1 = '' AND database = currentDatabase() OR database = $1)
+            ORDER BY position
+        """,
+        row=lambda row: Column(
+            schema=str(row[0]),
+            table=str(row[1]),
+            name=str(row[2]),
+            type=str(row[3]),
+            position=int(row[4]),
+        ),
+    ),
+    # ClickHouse exposes thousands of functions and no signatures, so they are
+    # introspected rather than shipped, and the detail column stays empty.
+    functions=Query(
+        sql="""
+            SELECT name, is_aggregate FROM system.functions
+            WHERE $1 = $1
+            ORDER BY name
+            LIMIT 2000
+        """,
+        row=lambda row: Function(
+            schema=None,
+            name=str(row[0]),
+            args='',
+            result='aggregate' if row[1] else 'function',
+        ),
+    ),
+)
 
 RESERVED = ANSI_RESERVED | frozenset(
     """
@@ -50,4 +102,5 @@ CLICKHOUSE = replace(
     ),
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,
+    catalog_queries=QUERIES,
 )

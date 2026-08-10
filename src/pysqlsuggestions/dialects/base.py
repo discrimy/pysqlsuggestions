@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from pysqlsuggestions.types import Kind
 
@@ -85,7 +85,14 @@ class Query:
     """
 
     sql: str
-    row: Callable[[tuple[object, ...]], object]
+    row: Callable[[tuple[Any, ...]], object]
+    """
+    Maps one driver row to a value type.
+
+    The row is `Any` because DB-API hands back untyped values whose Python types
+    vary by driver — the mapper is where that gets pinned down, and it is the
+    only place a backend's raw shape is allowed to be visible.
+    """
 
 
 @dataclass(frozen=True, slots=True)

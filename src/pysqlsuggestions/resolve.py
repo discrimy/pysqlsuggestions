@@ -66,9 +66,9 @@ class _Reader:
         self._cache[key] = value
         return value
 
-    def schemas(self) -> Sequence[str]:
-        """Namespace names at the dialect's first level."""
-        return self._read(self._key('', ''), self._catalog.schemas)
+    def schemas(self, catalog: str | None = None) -> Sequence[str]:
+        """Namespace names one level below `catalog`."""
+        return self._read(self._key(catalog or '', '\x00schemas'), lambda: self._catalog.schemas(catalog))
 
     def tables(self, schema: str | None) -> Sequence[Table]:
         """Relations in `schema`, or the default namespace."""
@@ -122,7 +122,8 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     if Kind.TABLE in request.kinds:
         candidates += [_table_candidate(table) for table in reader.tables(request.qualifier[-1])]
     if Kind.SCHEMA in request.kinds:
-        candidates += [_schema_candidate(name) for name in reader.schemas()]
+        # The qualifier is the level above: `prod.<caret>` lists prod's schemas.
+        candidates += [_schema_candidate(name) for name in reader.schemas(request.qualifier[-1])]
     return candidates[:limit]
 
 

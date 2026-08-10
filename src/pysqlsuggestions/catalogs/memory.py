@@ -63,9 +63,9 @@ class MemoryCatalog:
         self.calls: list[tuple[str, ...]] = []
         """Recorded call names, so tests can assert a CTE cost no catalog reads."""
 
-    def schemas(self) -> Sequence[str]:
-        """Distinct schema names, sorted."""
-        self.calls.append(('schemas',))
+    def schemas(self, catalog: str | None = None) -> Sequence[str]:
+        """Distinct schema names, sorted. A snapshot holds one catalog, so `catalog` is ignored."""
+        self.calls.append(('schemas', catalog or ''))
         return sorted({schema for schema, _ in self._columns})
 
     def tables(self, schema: str | None = None) -> Sequence[Table]:
