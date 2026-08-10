@@ -209,12 +209,15 @@ function select(b, el) {
   request();
 }
 
-function request() {
+// `quiet` refreshes the readout without reopening the popup — used after an
+// accept, where the word under the caret is now complete and re-completing it
+// would just offer back what was picked.
+function request(quiet) {
   clearTimeout(timer);
-  timer = setTimeout(fire, 55);
+  timer = setTimeout(() => fire(quiet), 55);
 }
 
-async function fire() {
+async function fire(quiet) {
   const mine = ++seq;
   const body = JSON.stringify({
     sql: sql.value, caret: sql.selectionStart, backend, limit: 25,
@@ -226,7 +229,7 @@ async function fire() {
   const data = await res.json();
   if (data.error) return;
   paintRequest(data);
-  items = data.suggestions;
+  items = quiet ? [] : data.suggestions;
   active = items.length ? 0 : -1;
   paintPopup();
 }
@@ -308,13 +311,17 @@ function accept(i) {
     caret = from + insert.length - 1;   // park between the parens
   }
   sql.value = sql.value.slice(0, from) + insert + tail;
+  const parked = caret !== null;          // caret left inside a function's parens
   if (caret === null) caret = from + insert.length;
   sql.setSelectionRange(caret, caret);
   sql.dataset.example = 'no';
   pop.hidden = true;
   items = [];
+  active = -1;
   sql.focus();
-  request();
+  // Accepting `count()` parks the caret between the parens, where the arguments
+  // are worth offering. Accepting a name finishes it, so stay closed.
+  request(!parked);
 }
 
 function move(delta) {
