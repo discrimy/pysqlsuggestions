@@ -344,6 +344,23 @@ def test_alias_generation() -> None:
     assert texts('SELECT * FROM reports_report ⌶')[0] == 'rr'
 
 
+def test_after_as_only_generated_aliases_are_offered() -> None:
+    """A table or a keyword there would overwrite the name being invented."""
+    assert texts('SELECT * FROM reports_report AS ⌶') == ['rr', 'r', 'rep']
+
+
+def test_a_typed_alias_is_never_overwritten() -> None:
+    """`AS u` used to accept UNION, which matches `u` and is a keyword the clause allows."""
+    assert texts('SELECT * FROM auth_user AS u⌶') == []
+
+
+def test_a_typed_alias_survives_in_any_dialect() -> None:
+    """The rule is about the position, not about which words happen to collide."""
+    for dialect in (POSTGRES, CLICKHOUSE, TRINO):
+        sql, caret = split_caret('SELECT * FROM auth_user AS u⌶')
+        assert [s.text for s in complete(sql, caret, dialect, catalog())] == []
+
+
 def test_no_catalog_still_answers_from_the_query() -> None:
     """The degraded mode a backend without an adapter gets."""
     sql, caret = split_caret('WITH recent AS (SELECT id, name FROM t) SELECT r.⌶ FROM recent r')

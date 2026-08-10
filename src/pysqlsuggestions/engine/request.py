@@ -13,6 +13,7 @@ from typing import Literal
 
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.engine.analyse import (
+    after_as,
     after_cast,
     after_operand,
     clause_at,
@@ -68,7 +69,7 @@ def _expecting(
     caret: int,
     clause: str | None,
     dialect: Dialect,
-) -> Literal['operand', 'operator', 'connective', 'type']:
+) -> Literal['operand', 'operator', 'connective', 'type', 'alias']:
     """
     Which expression position the caret is in.
 
@@ -76,6 +77,8 @@ def _expecting(
     BY — so a completed item there goes straight to 'connective', where its
     `followed_by` list lives.
     """
+    if after_as(tokens, caret):
+        return 'alias'
     if after_cast(tokens, caret, dialect):
         return 'type'
     if not after_operand(tokens, caret, dialect):
@@ -148,6 +151,10 @@ def _clause_kinds(
     offering one is worse than offering nothing. Which keywords depends on
     whether the predicate is finished — see `Request.expecting`.
     """
+    if expecting == 'alias':
+        # Only what this engine can derive from the relation's own name. A table
+        # or a keyword here would overwrite the name the author is inventing.
+        return (Kind.ALIAS,)
     if expecting == 'type':
         return (Kind.TYPE,)
     if clause is None:

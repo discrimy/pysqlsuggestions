@@ -23,6 +23,8 @@ def local_candidates(request: Request) -> list[Candidate]:
     """Everything answerable from `request` alone."""
     if not request.kinds or request.scope is None:
         return []
+    if request.expecting == 'alias':
+        return _alias_suggestions(request)
     if request.clause in _SELECT_LIST_CLAUSES:
         return _select_list(request)
     if request.clause in _ALIAS_CLAUSES:

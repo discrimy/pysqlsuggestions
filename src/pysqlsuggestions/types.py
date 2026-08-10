@@ -175,7 +175,7 @@ class Request:
     `'7 days'` is of unknown type in Postgres and coerces to whatever it is
     compared against, so narrowing on it would be wrong.
     """
-    expecting: Literal['operand', 'operator', 'connective', 'type'] = 'operand'
+    expecting: Literal['operand', 'operator', 'connective', 'type', 'alias'] = 'operand'
     """
     What the caret position wants next.
 

@@ -186,6 +186,23 @@ def _star_is_an_item(tokens: Sequence[Token], index: int, dialect: Dialect) -> b
     return False
 
 
+def after_as(tokens: Sequence[Token], caret: int) -> bool:
+    """
+    Whether the caret is naming something after an explicit `AS`.
+
+    An alias is invented by the author, so nothing in a catalog can propose it.
+    Offering tables and keywords there means `as u` gets overwritten by UNION,
+    which is worse than offering nothing at all.
+    """
+    index = _index_before(tokens, caret)
+    if index < 0:
+        return False
+    if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
+        index -= 1
+    index = _skip_back(tokens, index)
+    return index >= 0 and tokens[index].type is TokenType.IDENT and tokens[index].value.upper() == 'AS'
+
+
 def after_cast(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool:
     """
     Whether the caret is naming the target of a cast: `'7 days'::<caret>`.
