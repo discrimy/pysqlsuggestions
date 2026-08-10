@@ -88,24 +88,30 @@ def _expecting(
 
 def _keyword_case(tokens: Sequence[Token], caret: int, dialect: Dialect) -> Literal['lower', 'upper'] | None:
     """
-    How the author is writing keywords: the half-typed word if there is one,
-    otherwise the last complete keyword before the caret.
+    How the author is writing keywords: the last complete one they finished.
+
+    A half-typed word is only consulted when there are no complete keywords to
+    go on. Two lowercase letters in a document of uppercase keywords means the
+    shift key has not been pressed *yet*, not that the style has changed — so
+    `GROUP BY d.id` followed by `or` completes to `ORDER BY`.
 
     It has to read `Token.text` rather than `Request.prefix`, because the lexer
     folds identifiers for a case-insensitive dialect — `WH` arrives as `wh` and
     the typed case is gone. The raw slice is the only place it survives.
     """
+    partial: Literal['lower', 'upper'] | None = None
     for token in reversed(tokens):
         if token.type is not TokenType.IDENT or token.quoted or token.start >= caret:
             continue
         typed = token.text[: caret - token.start]
-        partial = token.end > caret
-        if not partial and token.value.upper() not in dialect.keywords:
-            continue
         if not typed.isalpha():
             continue
-        return 'lower' if typed.islower() else 'upper'
-    return None
+        written: Literal['lower', 'upper'] = 'lower' if typed.islower() else 'upper'
+        if token.end >= caret:
+            partial = written  # the caret sits at or inside this word: it is still being typed
+        elif token.value.upper() in dialect.keywords:
+            return written
+    return partial
 
 
 def _kinds_for(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.api import apply_suggestion, complete
+from pysqlsuggestions.api import apply_suggestion, complete, derive_request
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.types import Function, Kind, Suggestion
@@ -113,10 +113,28 @@ def test_a_quoted_identifier_is_inserted_as_quoted() -> None:
     assert apply_suggestion('SELECT * FROM Mi', suggestion)[0] == 'SELECT * FROM "Mixed Case"'
 
 
-def test_keyword_case_follows_the_typed_prefix() -> None:
-    """What the author is typing right now wins."""
+def test_keyword_case_follows_the_document() -> None:
+    """The keywords already finished decide it."""
     assert accept_first('select * from auth_user wh')[0].endswith('where')
     assert accept_first('SELECT * FROM auth_user WH')[0].endswith('WHERE')
+
+
+def test_a_half_typed_word_does_not_overrule_the_document() -> None:
+    """Two lowercase letters among uppercase keywords means shift has not been pressed yet."""
+    assert accept_first('SELECT * FROM auth_user wh')[0].endswith('WHERE')
+    assert accept_first('select * from auth_user WH')[0].endswith('where')
+
+
+def test_the_half_typed_word_decides_when_nothing_else_can() -> None:
+    """With no complete keyword written, it is the only evidence there is."""
+    assert derive_request('sel', 3, POSTGRES).keyword_case == 'lower'
+    assert derive_request('SEL', 3, POSTGRES).keyword_case == 'upper'
+
+
+def test_the_document_outranks_the_half_typed_word() -> None:
+    """The same partial, two documents, two answers."""
+    assert derive_request('SELECT * FROM t wh', 18, POSTGRES).keyword_case == 'upper'
+    assert derive_request('select * from t wh', 18, POSTGRES).keyword_case == 'lower'
 
 
 def test_keyword_case_follows_the_last_keyword_when_nothing_is_typed() -> None:
