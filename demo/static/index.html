@@ -135,6 +135,7 @@
       <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
       <span><kbd>Tab</kbd> / <kbd>Enter</kbd> accept</span>
       <span><kbd>Tab</kbd> next blank in a template</span>
+      <span id="stops-left" class="none"></span>
       <span><kbd>Esc</kbd> dismiss</span>
     </p>
   </section>
@@ -261,6 +262,8 @@ function paintRequest(d) {
     ? r.kinds.map((k) => `<span class="chip k-${k}">${esc(k)}</span>`).join('')
     : '<span class="none">nothing here</span>';
 
+  $('stops-left').textContent = pending.length ? `${pending.length} blank${pending.length > 1 ? 's' : ''} left` : '';
+
   $('stat').textContent =
     `${d.suggestions.length} suggestions in ${d.elapsed_ms} ms` +
     (d.available ? '' : ' — backend unreachable, query-only mode');
@@ -325,9 +328,17 @@ function accept(i) {
     // Only park inside when there is an argument to type. `now()` is finished.
     if (s.takes_arguments) caret = from + insert.length - 1;
   }
-  // A snippet carries its own caret stops, relative to the insertion point.
-  pending = (s.stops || []).map((o) => from + o);
-  if (pending.length) caret = pending.shift();
+  if (s.stops && s.stops.length) {
+    // A template brings its own stops, relative to the insertion point.
+    pending = s.stops.map((o) => from + o);
+    caret = pending.shift();
+  } else if (pending.length) {
+    // Filling one stop must not discard the rest — just move the ones after it.
+    const delta = insert.length - (to - from);
+    pending = pending.map((p) => (p >= to ? p + delta : p));
+    // Accepting *is* filling that blank, so go straight to the next one.
+    caret = pending.shift();
+  }
 
   sql.value = sql.value.slice(0, from) + insert + tail;
   measured = sql.value.length;
