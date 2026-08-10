@@ -117,6 +117,11 @@ def apply_suggestion(
     tail = sql[end:]
     caret: int | None = None
 
+    # A snippet says where to stop; the first is where insertion leaves you, and
+    # a front end that can cycle the rest reads them off `Suggestion.stops`.
+    if suggestion.stops:
+        return sql[:start] + text + tail, start + suggestion.stops[0]
+
     if suggestion.kind is Kind.FUNCTION and close_parens and not tail.lstrip().startswith('('):
         text += '()'
         if suggestion.takes_arguments:

@@ -37,6 +37,8 @@ cannot silently demote a generated alias below the tables it was derived from.
 _MAX_POSITION_PENALTY = 50
 _POSITION_WEIGHT = 0.1
 
+_PLACEHOLDER = re.compile(r'\$(\d+)')
+
 # Non-ASCII letters are legal unquoted in every backend here, so a Cyrillic
 # column must not come back wrapped in quotes it never needed.
 _PLAIN_LOWER = re.compile(r'[a-z_-￿][\w$-￿]*\Z')
@@ -54,14 +56,15 @@ def rank(
     scored: list[tuple[float, int, str, Suggestion]] = []
 
     for candidate in candidates:
-        strength = _match_strength(candidate.text, request.prefix, candidate.kind)
+        # A snippet matches on its label — nobody types the expanded text.
+        strength = _match_strength(candidate.label or candidate.text, request.prefix, candidate.kind)
         if strength is None:
             continue
         score = strength + _kind_bonus(candidate.kind, kind_rank, len(request.kinds))
         score -= min(candidate.position, _MAX_POSITION_PENALTY) * _POSITION_WEIGHT
         if candidate.origin == 'local':
             score += _LOCAL_BONUS
-        text = _render(candidate, request, dialect)
+        text, stops = _render(candidate, request, dialect)
         scored.append(
             (
                 -score,
@@ -74,6 +77,8 @@ def rank(
                     score=round(score, 3),
                     detail=candidate.detail,
                     takes_arguments=candidate.takes_arguments,
+                    stops=stops,
+                    label=candidate.label,
                 ),
             ),
         )
@@ -97,6 +102,28 @@ def rank(
         ordered.append(suggestion)
 
     return ordered[:limit] if limit is not None else ordered
+
+
+def expand_snippet(snippet: str) -> tuple[str, tuple[int, ...]]:
+    """
+    Strip `$1`-style placeholders, returning the plain text and where they were.
+
+    Offsets come back in visiting order — `$1`, `$2`, then `$0` last, as LSP
+    defines it — so a front end can cycle them without parsing anything.
+    """
+    parts: list[str] = []
+    marks: list[tuple[int, int]] = []
+    written = 0
+    cursor = 0
+    for match in _PLACEHOLDER.finditer(snippet):
+        chunk = snippet[cursor : match.start()]
+        parts.append(chunk)
+        written += len(chunk)
+        marks.append((int(match.group(1)), written))
+        cursor = match.end()
+    parts.append(snippet[cursor:])
+    ordered = sorted(marks, key=lambda mark: (mark[0] == 0, mark[0]))
+    return ''.join(parts), tuple(offset for _, offset in ordered)
 
 
 def _match_strength(text: str, prefix: str, kind: Kind = Kind.COLUMN) -> float | None:
@@ -188,16 +215,19 @@ def _kind_bonus(kind: Kind, kind_rank: dict[Kind, int], total: int) -> float:
     return 0.0 if index is None else (total - index) * _KIND_STEP
 
 
-def _render(candidate: Candidate, request: Request, dialect: Dialect) -> str:
-    """The text to insert: quoted if it must be, cased to match what the user is typing."""
+def _render(candidate: Candidate, request: Request, dialect: Dialect) -> tuple[str, tuple[int, ...]]:
+    """The text to insert and where the caret should stop in it."""
+    if candidate.snippet is not None:
+        body = candidate.snippet if not _typing_lowercase(request) else candidate.snippet.lower()
+        return expand_snippet(body)
     if candidate.literal or candidate.kind is Kind.OPERATOR:
-        return candidate.text
+        return candidate.text, ()
     if candidate.kind is Kind.KEYWORD:
-        return candidate.text.lower() if _typing_lowercase(request) else candidate.text.upper()
+        return (candidate.text.lower() if _typing_lowercase(request) else candidate.text.upper()), ()
     text = quote_if_needed(candidate.text, dialect)
     if candidate.qualifier:
-        return f'{quote_if_needed(candidate.qualifier, dialect)}.{text}'
-    return text
+        return f'{quote_if_needed(candidate.qualifier, dialect)}.{text}', ()
+    return text, ()
 
 
 def _typing_lowercase(request: Request) -> bool:

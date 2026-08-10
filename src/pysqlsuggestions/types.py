@@ -27,6 +27,8 @@ class Kind(Enum):
     OPERATOR = 'operator'
     TYPE = 'type'
     """A data type name, wanted after a cast: `'7 days'::interval`."""
+    SNIPPET = 'snippet'
+    """A whole statement shape with places to fill in, offered where one can start."""
     """`=`, `<>`, `>=`. Separate from KEYWORD because it has no case to follow."""
 
 
@@ -208,6 +210,15 @@ class Candidate:
     """The backend's type text, for comparison checking. None when there is none to know."""
     takes_arguments: bool = False
     """A function needing an argument list, so insertion parks the caret inside its parentheses."""
+    snippet: str | None = None
+    """
+    A template with `$1`, `$2`, `$0` marking where the caret should stop.
+
+    Rank expands it into plain text plus offsets, so nothing downstream has to
+    understand the placeholder syntax.
+    """
+    label: str | None = None
+    """What to show in a list, when the text to insert would read poorly there."""
     qualifier: str | None = None
     """
     Relation label to prefix on insertion, when a bare name would be ambiguous.
@@ -228,3 +239,13 @@ class Suggestion:
     detail: str | None = None
     takes_arguments: bool = False
     """A function needing an argument list. `apply_suggestion` parks the caret inside for these."""
+    stops: tuple[int, ...] = ()
+    """
+    Offsets *within* `text` where a caret should stop, in visiting order.
+
+    Relative rather than absolute so a caller can splice at any position:
+    `replace_span[0] + stops[0]` is the first. `apply_suggestion` uses the first
+    and leaves the rest to a front end that can cycle them.
+    """
+    label: str | None = None
+    """What to show in a list. Falls back to `text`, which is usually the same thing."""

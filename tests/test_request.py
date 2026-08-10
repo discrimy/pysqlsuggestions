@@ -203,9 +203,9 @@ def test_scope_is_attached() -> None:
 
 
 def test_empty_input() -> None:
-    """An empty document is not an error."""
+    """An empty document offers the ways a statement can begin."""
     result = derive_request('', 0, POSTGRES)
-    assert result.kinds == (Kind.KEYWORD,)
+    assert result.kinds == (Kind.SNIPPET, Kind.KEYWORD)
     assert result.clause is None
 
 

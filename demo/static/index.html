@@ -134,6 +134,7 @@
       <span><kbd>Ctrl</kbd>+<kbd>Space</kbd> suggest</span>
       <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
       <span><kbd>Tab</kbd> / <kbd>Enter</kbd> accept</span>
+      <span><kbd>Tab</kbd> next blank in a template</span>
       <span><kbd>Esc</kbd> dismiss</span>
     </p>
   </section>
@@ -168,6 +169,7 @@ let items = [];
 let active = -1;
 let timer = null;
 let seq = 0;
+let pending = [];        // remaining snippet stops, absolute offsets
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -275,7 +277,7 @@ function paintPopup() {
   pop.innerHTML = items.map((s, i) => `
     <div class="item" role="option" data-i="${i}" aria-selected="${i === active}">
       <span class="k k-${s.kind}">${esc(s.kind)}</span>
-      <span class="txt">${esc(s.text)}</span>
+      <span class="txt">${esc(s.label || s.text)}</span>
       <span class="det">${esc(s.detail || '')}</span>
     </div>`).join('');
   pop.hidden = false;
@@ -311,8 +313,12 @@ function accept(i) {
     // Only park inside when there is an argument to type. `now()` is finished.
     if (s.takes_arguments) caret = from + insert.length - 1;
   }
+  // A snippet carries its own caret stops, relative to the insertion point.
+  pending = (s.stops || []).map((o) => from + o);
+  if (pending.length) caret = pending.shift();
+
   sql.value = sql.value.slice(0, from) + insert + tail;
-  const parked = caret !== null;          // caret left inside a function's parens
+  const parked = caret !== null;          // caret left inside parens or at a stop
   if (caret === null) caret = from + insert.length;
   sql.setSelectionRange(caret, caret);
   sql.dataset.example = 'no';
@@ -340,6 +346,13 @@ sql.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' && open) { e.preventDefault(); move(1); }
   else if (e.key === 'ArrowUp' && open) { e.preventDefault(); move(-1); }
   else if ((e.key === 'Enter' || e.key === 'Tab') && open) { e.preventDefault(); accept(active); }
+  // With the popup closed, Tab walks the stops a snippet left behind.
+  else if (e.key === 'Tab' && pending.length) {
+    e.preventDefault();
+    const next = pending.shift();
+    sql.setSelectionRange(next, next);
+    request(true);
+  }
   else if (e.key === 'Escape') { pop.hidden = true; }
   else if (e.key === ' ' && e.ctrlKey) { e.preventDefault(); fire(); }
   else if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { setTimeout(request, 0); }

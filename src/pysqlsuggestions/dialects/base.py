@@ -105,6 +105,22 @@ class ClauseModel:
 
 
 @dataclass(frozen=True, slots=True)
+class Template:
+    """
+    A whole statement shape, offered where a statement can begin.
+
+    `snippet` marks the places to fill in with `$1`, `$2` and so on, `$0` last.
+    The syntax is deliberately the bare LSP subset — no default values, no
+    choices — because everything downstream only needs the offsets, and a
+    smaller format is one fewer thing for a third-party dialect to get wrong.
+    """
+
+    label: str
+    snippet: str
+    detail: str = ''
+
+
+@dataclass(frozen=True, slots=True)
 class Query:
     """
     Introspection SQL as data.
@@ -146,6 +162,15 @@ class Dialect:
     """Offered as completions. Ideally introspected; the static set is the offline fallback."""
     reserved: frozenset[str] = frozenset()
     """Lowercased. Drives quoting decisions, which must be made before any connection exists."""
+    statement_start: tuple[str, ...] = ()
+    """
+    Keywords a statement may begin with.
+
+    Without these an empty editor answers nothing: there is no clause yet, so no
+    clause can say what follows it.
+    """
+    templates: tuple[Template, ...] = ()
+    """Whole statement shapes, offered in the same position as `statement_start`."""
     types: tuple[str, ...] = ()
     """
     Data type names, for a cast position. Ordered by how often they are wanted.

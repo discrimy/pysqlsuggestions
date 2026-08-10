@@ -201,6 +201,20 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     if Kind.FUNCTION in request.kinds:
         candidates += [_function_candidate(function) for function in reader.functions()]
 
+    if Kind.SNIPPET in request.kinds:
+        candidates += [
+            Candidate(
+                text=template.label,
+                kind=Kind.SNIPPET,
+                detail=template.detail or None,
+                position=index,
+                origin='keyword',
+                snippet=template.snippet,
+                label=template.label,
+            )
+            for index, template in enumerate(dialect.templates)
+        ]
+
     if Kind.TYPE in request.kinds:
         candidates += [
             Candidate(text=name, kind=Kind.TYPE, detail='type', position=index, origin='keyword', literal=True)
@@ -233,6 +247,12 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
     in six hundred reserved words is the same as not offering them.
     """
     clause = dialect.clauses.get(request.clause) if request.clause else None
+    if clause is None and dialect.statement_start:
+        # No clause means no statement yet, so nothing can say what follows.
+        return [
+            Candidate(text=word, kind=Kind.KEYWORD, detail='starts a statement', position=index, origin='keyword')
+            for index, word in enumerate(dialect.statement_start)
+        ]
     if clause is not None and clause.followed_by:
         words = clause.after_operand if request.expecting == 'operator' else clause.followed_by
         return [

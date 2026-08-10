@@ -216,6 +216,8 @@ def suggest(payload: SuggestRequest) -> JSONResponse:
                     'score': s.score,
                     'replace_span': list(s.replace_span),
                     'takes_arguments': s.takes_arguments,
+                    'stops': list(s.stops),
+                    'label': s.label or s.text,
                 }
                 for s in suggestions
             ],

@@ -151,7 +151,9 @@ def _clause_kinds(
     if expecting == 'type':
         return (Kind.TYPE,)
     if clause is None:
-        return (Kind.KEYWORD,)
+        # Nothing written yet: a statement may begin, and a whole shape is worth
+        # offering alongside the single words that start one.
+        return (Kind.SNIPPET, Kind.KEYWORD)
     found = dialect.clauses.get(clause)
     if found is None:
         return (Kind.KEYWORD,)

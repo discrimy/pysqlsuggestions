@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace, Syntax
+from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace, Syntax, Template
 from pysqlsuggestions.types import Kind
 
 RESERVED = frozenset(
@@ -146,6 +146,16 @@ CLAUSES = ClauseModel(
     ),
 )
 
+STATEMENT_START = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
+
+TEMPLATES = (
+    Template(
+        label='SELECT … FROM … AS …',
+        snippet='SELECT $1 FROM $2 AS $3',
+        detail='a whole query, with places to fill in',
+    ),
+)
+
 ANSI = Dialect(
     name='ansi',
     syntax=Syntax(),
@@ -153,4 +163,6 @@ ANSI = Dialect(
     clauses=CLAUSES,
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,
+    statement_start=STATEMENT_START,
+    templates=TEMPLATES,
 )

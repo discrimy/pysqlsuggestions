@@ -21,6 +21,7 @@ def test_kind_values_are_json_ready_strings() -> None:
         'keyword',
         'operator',
         'type',
+        'snippet',
     ]
 
 
