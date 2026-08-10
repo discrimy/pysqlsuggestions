@@ -10,9 +10,9 @@ fallback so an unknown backend degrades instead of failing.
 ## Status
 
 The whole pipeline works end to end against real servers: lex, analyse, request,
-resolve, rank. Still to come are the features in `plan.md` §6.2–6.7 — physical
-layout ranking, FK-derived joins, value hints, history ranking — plus the
-`Availability` work in §7 and the syntax extensions in §8.
+resolve, rank. Value hints landed since; still to come are physical layout
+ranking, FK-derived joins and history ranking, plus per-role availability and
+the syntax extensions.
 
 ## Usage
 
