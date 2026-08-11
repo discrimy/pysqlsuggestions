@@ -43,6 +43,9 @@ def relation_joins(scope: Scope | None, edges: Sequence[ForeignKey], dialect: Di
     """
     if scope is None:
         return []
+    # Only what the statement already says. These proposals are alternatives —
+    # accepting one discards the rest — so an alias reserved by a sibling would
+    # number the others around relations the query does not contain and never will.
     taken = {relation.label.lower() for relation in scope.visible() if relation.label}
     candidates: list[Candidate] = []
     for relation in _catalog_relations(scope):
@@ -155,7 +158,6 @@ def _clause_candidate(
     """One whole `JOIN` clause, with an alias that collides with nothing already in scope."""
     source_schema, target_schema, target_table, pairs, direction = link
     alias = _free_alias(target_table, taken)
-    taken.add(alias.lower())
     reference = _reference(source[0], source_schema, target_schema, target_table, dialect)
     condition = _condition(relation.label, alias, pairs, dialect)
     snippet = f'{reference} {alias} ON {condition}'

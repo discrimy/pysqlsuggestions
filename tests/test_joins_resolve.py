@@ -268,7 +268,7 @@ def test_two_proposals_to_one_relation_are_told_apart_in_the_list() -> None:
     shown = [displayed(s) for s in complete(sql, caret, POSTGRES, catalog) if s.kind is Kind.JOIN]
     assert shown == [
         'airport a ON f.origin = a.code',
-        'airport air ON f.destination = air.code',
+        'airport a ON f.destination = a.code',
     ]
 
 

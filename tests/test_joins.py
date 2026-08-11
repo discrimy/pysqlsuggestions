@@ -98,7 +98,12 @@ def test_self_reference_gets_a_distinct_alias() -> None:
 
 
 def test_two_edges_to_one_target_stay_two_proposals() -> None:
-    """Both are real answers; picking one for the user would be picking wrong half the time."""
+    """
+    Both are real answers; picking one for the user would be picking wrong half the time.
+
+    They share an alias, which is right: only one will be accepted, and the
+    condition is what tells them apart in the list.
+    """
     created = ForeignKey(
         schema='public',
         table='reports_databaseaccess',
@@ -118,7 +123,7 @@ def test_two_edges_to_one_target_stay_two_proposals() -> None:
     found = relation_joins(scope_of(('reports_databaseaccess', 'a')), [created, owned], POSTGRES)
     assert [c.snippet for c in found] == [
         'auth_user au ON a.user_created_id = au.id',
-        'auth_user aut ON a.user_id = aut.id',
+        'auth_user au ON a.user_id = au.id',
     ]
 
 
@@ -204,3 +209,36 @@ def test_qualified_left_side_degrades_to_annotated_columns() -> None:
     assert [c.text for c in found] == ['author_id']
     assert found[0].note == 'fk: auth_user.id'
     assert found[0].snippet == 'author_id'
+
+
+def test_each_proposal_is_an_alternative_and_may_reuse_an_alias() -> None:
+    """
+    Proposals at one caret are alternatives; exactly one of them will ever be accepted.
+
+    Reserving `a` for the first pushed the rest to `a2` and `a3` — numbered around
+    relations the statement does not contain and never will, since accepting any
+    one proposal discards the others. Only what the query already says is taken.
+    """
+    edges = [
+        ForeignKey(
+            schema='public',
+            table='flight',
+            columns=('airline_id',),
+            ref_schema='public',
+            ref_table='airline',
+            ref_columns=('id',),
+        ),
+        ForeignKey(
+            schema='public',
+            table='flight',
+            columns=('origin',),
+            ref_schema='public',
+            ref_table='airport',
+            ref_columns=('code',),
+        ),
+    ]
+    found = relation_joins(scope_of(('flight', 'f')), edges, POSTGRES)
+    assert [c.snippet for c in found] == [
+        'airline a ON f.airline_id = a.id',
+        'airport a ON f.origin = a.code',
+    ]
