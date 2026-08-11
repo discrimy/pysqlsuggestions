@@ -25,13 +25,20 @@ class Kind(Enum):
     ALIAS = 'alias'
     KEYWORD = 'keyword'
     OPERATOR = 'operator'
+    """`=`, `<>`, `>=`. Separate from KEYWORD because it has no case to follow."""
     TYPE = 'type'
     """A data type name, wanted after a cast: `'7 days'::interval`."""
     SNIPPET = 'snippet'
     """A whole statement shape with places to fill in, offered where one can start."""
     VALUE = 'value'
     """A literal the compared column actually holds: `WHERE type = 'postgres'`."""
-    """`=`, `<>`, `>=`. Separate from KEYWORD because it has no case to follow."""
+    JOIN = 'join'
+    """
+    A whole join clause or join condition, derived from a declared foreign key.
+
+    Not a TABLE: accepting it writes `auth_user au ON r.author_id = au.id`, not a
+    name. Ranking treats it as whatever the position wanted — see `_kind_bonus`.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +109,26 @@ class ColumnValue:
     carry the figure, and it is what separates a value covering most of the
     table from one covering a thousandth of it.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class ForeignKey:
+    """
+    One declared relationship: `columns` of `table` reference `ref_columns` of `ref_table`.
+
+    Both sides are tuples and correspond positionally, so a composite key is
+    representable from the start and renders as an `AND` chain. A backend with no
+    constraints reports none rather than guessing from column names: a wrong join
+    condition is valid SQL that returns wrong rows, which is a worse failure than
+    offering nothing.
+    """
+
+    schema: str
+    table: str
+    columns: tuple[str, ...]
+    ref_schema: str
+    ref_table: str
+    ref_columns: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +314,13 @@ class Candidate:
     """
     relation: tuple[str, ...] = ()
     """The relation this column needs in the FROM clause, when the statement has none."""
+    note: str | None = None
+    """
+    Why this candidate is worth more than its neighbours: `fk: auth_user.id`.
+
+    Distinct from `detail`, which says what the thing *is*. A front end may render
+    it differently — the annotation is the teaching part of a ranked list.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,4 +408,11 @@ class Suggestion:
     choosing its table as well — a column reference to a relation the query does
     not name is not a smaller mistake than no suggestion at all — so insertion
     writes the FROM clause in the same edit.
+    """
+    note: str | None = None
+    """
+    Why this suggestion is worth more than its neighbours: `fk: auth_user.id`.
+
+    Distinct from `detail`, which says what the thing *is*. A front end may render
+    it differently — the annotation is the teaching part of a ranked list.
     """
