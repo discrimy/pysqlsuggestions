@@ -294,6 +294,28 @@ def postgres() -> MemoryCatalog:
     )
 
 
+TRINO_CATALOGS = {'warehouse': ['public', 'revenue'], 'events': ['analytics', 'staging']}
+"""
+Trino federates the other two, which is what it is for.
+
+`warehouse` is the operational database and `events` the analytical one, so a
+query can join across them — the shape that makes three namespace levels worth
+having rather than an inconvenience.
+"""
+
+
+def trino() -> MemoryCatalog:
+    """Both schemas under one engine, with a catalog level above them."""
+    return MemoryCatalog(
+        {**POSTGRES_TABLES, **CLICKHOUSE_TABLES},
+        functions=FUNCTIONS,
+        table_kinds={('revenue', 'DailyTotals'): 'materialized view'},
+        table_rows={**POSTGRES_ROWS, **CLICKHOUSE_ROWS},
+        values={**POSTGRES_VALUES, **CLICKHOUSE_VALUES},
+        catalogs=TRINO_CATALOGS,
+    )
+
+
 def clickhouse() -> MemoryCatalog:
     """The same domain as ClickHouse would report it: events, and types that name their values."""
     return MemoryCatalog(

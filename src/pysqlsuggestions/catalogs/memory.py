@@ -41,6 +41,7 @@ class MemoryCatalog:
         values: Mapping[tuple[str, str, str], Sequence[str | ColumnValue]] | None = None,
         table_kinds: Mapping[tuple[str, str], str] | None = None,
         table_rows: Mapping[tuple[str, str], int] | None = None,
+        catalogs: Mapping[str, Sequence[str]] | None = None,
         oversized: bool = False,
     ) -> None:
         self._columns: dict[tuple[str, str], tuple[Column, ...]] = {}
@@ -68,6 +69,7 @@ class MemoryCatalog:
         )
         self._functions = tuple(functions)
         self._keywords = tuple(keywords)
+        self._catalogs = {name: tuple(schemas) for name, schemas in (catalogs or {}).items()}
         self._values = {
             key: tuple(v if isinstance(v, ColumnValue) else ColumnValue(text=v) for v in found)
             for key, found in (values or {}).items()
@@ -77,14 +79,35 @@ class MemoryCatalog:
         """Recorded call names, so tests can assert a CTE cost no catalog reads."""
 
     def schemas(self, catalog: str | None = None) -> Sequence[str]:
-        """Distinct schema names, sorted. A snapshot holds one catalog, so `catalog` is ignored."""
+        """
+        Namespace names one level down, sorted.
+
+        Without `catalogs` the snapshot is two-level and holds one catalog, so
+        the argument is ignored and every schema comes back. With them it is
+        three-level, as Trino is: one level down from nothing is a *catalog*,
+        and naming one gives the schemas below it. Returning schemas for an
+        empty argument would offer the second level at the first position.
+        """
         self.calls.append(('schemas', catalog or ''))
-        return sorted({schema for schema, _ in self._columns})
+        if not self._catalogs:
+            return sorted({schema for schema, _ in self._columns})
+        if not catalog:
+            return sorted(self._catalogs)
+        return sorted(self._catalogs.get(catalog, ()))
 
     def tables(self, schema: str | None = None) -> Sequence[Table]:
-        """Relations in `schema`; with None, every relation in the snapshot."""
+        """
+        Relations in `schema`.
+
+        With None and two levels, every relation in the snapshot. With three
+        there is no useful default: a bare position wants catalogs, and
+        enumerating every relation of every catalog is what the live Trino
+        adapter declines to do for the same reason.
+        """
         self.calls.append(('tables', schema or ''))
-        return [t for t in self._tables if schema is None or t.schema == schema]
+        if schema is None:
+            return [] if self._catalogs else list(self._tables)
+        return [t for t in self._tables if t.schema == schema]
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """

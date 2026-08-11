@@ -8,9 +8,9 @@ snapshot, which is exactly this situation. `demo/payload.py` builds the same
 JSON the server does, so the page cannot tell which one answered.
 
 The schema is `demo/schema.py`, invented for the demo and carried as Python
-rather than exported from anywhere. Trino is absent: its namespace has three
-levels and `MemoryCatalog` is keyed by two, so a faithful static Trino would
-mean bending the library to suit a demo.
+rather than exported from anywhere. Trino is here too: the `Catalog` port
+passes one name at each level, so a snapshot with a catalog mapping serves
+three levels as readily as two.
 """
 
 from __future__ import annotations
@@ -24,12 +24,14 @@ from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.dialects.trino import TRINO
 
-DIALECTS: dict[str, Dialect] = {'postgres': POSTGRES, 'clickhouse': CLICKHOUSE}
+DIALECTS: dict[str, Dialect] = {'postgres': POSTGRES, 'clickhouse': CLICKHOUSE, 'trino': TRINO}
 
 LABELS = {
     'postgres': ('PostgreSQL', 'schema.table — two levels'),
     'clickhouse': ('ClickHouse', 'database.table — two levels, case preserved'),
+    'trino': ('Trino', 'catalog.schema.table — three levels, federated'),
 }
 
 EXAMPLES = {
@@ -41,6 +43,12 @@ EXAMPLES = {
         'WHERE f.'
     ),
     'clickhouse': ('SELECT airport, count() AS events\nFROM flight_event e\nWHERE e.'),
+    'trino': (
+        'SELECT f.number, e.delay_minutes\n'
+        'FROM warehouse.public.flight f\n'
+        'JOIN events.analytics.flight_event e ON e.flight_id = f.id\n'
+        'WHERE f.'
+    ),
 }
 
 
@@ -51,6 +59,7 @@ class Demo:
         self._catalogs: dict[str, MemoryCatalog] = {
             'postgres': schema.postgres(),
             'clickhouse': schema.clickhouse(),
+            'trino': schema.trino(),
         }
         self._caches: dict[str, dict[object, object]] = {key: {} for key in self._catalogs}
 

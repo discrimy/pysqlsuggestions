@@ -139,8 +139,17 @@ booleans so values come from the type, skewed columns so they come from
 statistics, relations three orders of magnitude apart in size, two schemas, a
 materialized view and a mixed-case name that only Postgres has to quote.
 
-Trino is server-only. Its namespace has three levels and `MemoryCatalog` is
-keyed by two, so a static Trino would mean bending the library to suit a demo.
+All three backends are there, Trino included. The `Catalog` port passes one
+name at each level — a catalog names the schemas below it, a schema names its
+relations — so a snapshot with a catalog mapping serves three levels as readily
+as two:
+
+```python
+MemoryCatalog(tables, catalogs={'warehouse': ['public', 'revenue']})
+```
+
+That is a `MemoryCatalog` feature rather than a demo one: anyone pre-fetching a
+Trino schema into a snapshot needed it.
 
 ## Design
 

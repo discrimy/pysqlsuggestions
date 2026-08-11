@@ -42,6 +42,17 @@ def main() -> int:
         print('no wheel in dist/ — run `uv build --wheel` first', file=sys.stderr)  # noqa: T201
         return 1
 
+    # The site is only as fresh as dist/. A wheel older than the library it was
+    # built from produces a page that runs yesterday's code, and the symptom is
+    # a TypeError from inside Pyodide rather than anything pointing here.
+    built = wheels[-1].stat().st_mtime
+    stale = [f for f in (ROOT / 'src').rglob('*.py') if f.stat().st_mtime > built]
+    if stale:
+        names = ', '.join(sorted(f.name for f in stale)[:3])
+        print(f'wheel is older than {len(stale)} source file(s) ({names}…)', file=sys.stderr)  # noqa: T201
+        print('run `uv build --wheel` first', file=sys.stderr)  # noqa: T201
+        return 1
+
     if SITE.exists():
         shutil.rmtree(SITE)
     SITE.mkdir()
