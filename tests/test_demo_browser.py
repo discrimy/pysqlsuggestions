@@ -127,3 +127,17 @@ def test_clickhouse_and_trino_offer_no_join_proposals() -> None:
     for backend in ('clickhouse', 'trino'):
         answer = json.loads(Demo().suggest(body(sql='SELECT * FROM flight_event e JOIN ', caret=34, backend=backend)))
         assert not [s for s in answer['suggestions'] if s['kind'] == 'join'], backend
+
+
+def test_the_transport_declares_a_runtime_total_for_the_build_to_fill() -> None:
+    """
+    Asserted against the source, as the request body is, and for the same reason.
+
+    `scripts/build_pages.py` substitutes this constant and fails when it is
+    absent, so the two have to be kept in step. A rename here with no matching
+    change there is caught by the build — but only at publish time, which is a
+    long way from the edit.
+    """
+    source = DRIVER.read_text()
+    assert 'const RUNTIME_BYTES = 0;' in source, 'the build has no placeholder to fill in'
+    assert 'response.body.getReader()' in source, 'progress needs a streaming read'
