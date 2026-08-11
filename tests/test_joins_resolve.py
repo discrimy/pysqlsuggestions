@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pysqlsuggestions.api import complete, plan_insertion
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.rank import rank
 from pysqlsuggestions.resolve import _Reader
 from pysqlsuggestions.types import Candidate, ForeignKey, Kind, Request
+from tests.corpus.cases import split_caret
 
 EDGE = ForeignKey(
     schema='public',
@@ -139,3 +142,79 @@ def test_typed_prefix_still_decides() -> None:
     ]
     found = rank(candidates, request, POSTGRES)
     assert [s.text for s in found] == ['auth_user']
+
+
+SNAPSHOT = {
+    ('public', 'reports_report'): [('id', 'bigint'), ('title', 'varchar(100)'), ('author_id', 'bigint')],
+    ('public', 'auth_user'): [('id', 'bigint'), ('username', 'varchar(150)'), ('email', 'varchar(254)')],
+}
+JOINED = MemoryCatalog(SNAPSHOT, foreign_keys=[EDGE])
+BARE = MemoryCatalog(SNAPSHOT)
+
+
+def suggest(marked: str, catalog: MemoryCatalog) -> list[str]:
+    """Suggestion texts for ⌶-marked SQL."""
+    sql, caret = split_caret(marked)
+    return [s.text for s in complete(sql, caret, POSTGRES, catalog)]
+
+
+def test_join_position_leads_with_the_whole_clause() -> None:
+    """
+    The relation, its alias and the condition, in one accept.
+
+    `au` rather than `u`: the generator offers the initials of the underscore-separated
+    words first, and `r` is already taken by the relation in the FROM.
+    """
+    found = suggest('SELECT * FROM reports_report r JOIN ⌶', JOINED)
+    assert found[0] == 'auth_user au ON r.author_id = au.id'
+    assert 'auth_user' in found
+
+
+def test_on_position_leads_with_the_whole_condition() -> None:
+    """The plain columns stay underneath for a condition the constraints do not describe."""
+    found = suggest('SELECT * FROM reports_report r JOIN auth_user u ON ⌶', JOINED)
+    assert found[0] == 'r.author_id = u.id'
+    assert 'u.email' in found
+
+
+def test_qualified_on_position_lifts_the_fk_column() -> None:
+    """`ON r.⌶` has committed the left side, so the column leads instead."""
+    found = suggest('SELECT * FROM reports_report r JOIN auth_user u ON r.⌶', JOINED)
+    assert found[0] == 'author_id'
+    assert found.count('author_id') == 1
+
+
+def test_from_position_is_untouched() -> None:
+    """Nothing is guessed at a user who has not typed JOIN."""
+    found = suggest('SELECT * FROM reports_report r ⌶', JOINED)
+    assert found[0] == 'JOIN'
+    assert not [text for text in found if ' ON ' in text]
+
+
+def test_without_constraints_nothing_changes() -> None:
+    """The same catalog minus its edges behaves exactly as it did before this feature."""
+    at_join = suggest('SELECT * FROM reports_report r JOIN ⌶', BARE)
+    assert at_join[:2] == ['auth_user', 'reports_report']
+    assert not [text for text in at_join if ' ON ' in text]
+
+    at_on = suggest('SELECT * FROM reports_report r JOIN auth_user u ON ⌶', BARE)
+    assert not [text for text in at_on if ' = ' in text]
+    assert 'r.author_id' in at_on
+
+
+def test_the_proposal_is_accepted_as_one_edit() -> None:
+    """`plan_insertion` needs no change: one replacement over the span, caret at the end."""
+    sql, caret = split_caret('SELECT * FROM reports_report r JOIN ⌶')
+    best = complete(sql, caret, POSTGRES, JOINED)[0]
+    plan = plan_insertion(sql, best, dialect=POSTGRES)
+    assert len(plan.edits) == 1
+    written = sql[: plan.edits[0].span[0]] + plan.edits[0].text + sql[plan.edits[0].span[1] :]
+    assert written == 'SELECT * FROM reports_report r JOIN auth_user au ON r.author_id = au.id'
+
+
+def test_a_caret_that_cannot_join_costs_no_catalog_read() -> None:
+    """The constraints are fetched only where they can be used, so ordinary typing pays nothing."""
+    catalog = MemoryCatalog(SNAPSHOT, foreign_keys=[EDGE])
+    sql, caret = split_caret('SELECT * FROM reports_report r WHERE r.⌶')
+    complete(sql, caret, POSTGRES, catalog)
+    assert not [call for call in catalog.calls if call[0] == 'foreign_keys']

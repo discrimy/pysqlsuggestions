@@ -16,7 +16,7 @@ from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
-from pysqlsuggestions.engine import datatypes
+from pysqlsuggestions.engine import datatypes, joins
 from pysqlsuggestions.ports import (
     Cache,
     Catalog,
@@ -104,6 +104,26 @@ def _catalog_columns(relation: Relation, reader: _Reader) -> Sequence[Column]:
         return ()
     schema, table = _split_path(relation.path)
     return reader.columns(schema, table) if table else ()
+
+
+def _edges(scope: Scope | None, reader: _Reader) -> Sequence[ForeignKey]:
+    """
+    Constraints for every schema the statement names, and for the default namespace.
+
+    Called only from the two positions that can use them, so a statement whose
+    caret never reaches a JOIN or an ON pays nothing for this.
+    """
+    if scope is None:
+        return ()
+    wanted = {_split_path(r.path)[0] for r in scope.relations if r.projection is None and r.path}
+    found: dict[tuple[str, ...], ForeignKey] = {}
+    for schema in sorted(wanted, key=lambda name: (name is not None, name or '')):
+        for edge in reader.foreign_keys(schema):
+            # Built as a tuple first: a star expression directly inside a
+            # subscript is 3.11 syntax, and this package supports 3.10.
+            key = (edge.schema, edge.table, *edge.columns)
+            found[key] = edge
+    return list(found.values())
 
 
 class _Reader:
@@ -203,7 +223,16 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     if scope is not None:
         relation = _find_relation(head, scope)
         if relation is not None:
-            return _columns_of(relation, reader, seen=set())
+            columns = _columns_of(relation, reader, seen=set())
+            if request.clause != 'ON':
+                return columns
+            # `ON r.<caret>` has committed the left side, so a whole condition is
+            # no longer expressible: lift and annotate that relation's FK columns
+            # instead. The name filter is what stops the column appearing twice —
+            # rank dedups on (kind, text), and these two candidates differ in kind.
+            lifted = joins.condition_columns(relation, _edges(scope, reader), dialect)
+            names = {candidate.text for candidate in lifted}
+            return lifted + [candidate for candidate in columns if candidate.text not in names]
 
     if Kind.COLUMN in request.kinds and len(request.qualifier) >= len(dialect.namespace.levels):
         # schema.table.<caret> — the deepest reading is a column of that relation.
@@ -228,6 +257,11 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     """No dot typed: everything the clause admits, from whatever is in scope."""
     candidates: list[Candidate] = []
     scope = request.scope
+
+    if request.clause == 'JOIN' and Kind.TABLE in request.kinds:
+        candidates += joins.relation_joins(scope, _edges(scope, reader), dialect)
+    elif request.clause == 'ON' and Kind.COLUMN in request.kinds:
+        candidates += joins.join_conditions(scope, _edges(scope, reader), dialect)
 
     if Kind.VALUE in request.kinds:
         candidates += _values(request, reader)
