@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from scripts.build_pages import external_references
+import pytest
+
+from scripts.build_pages import RUNTIME_BYTES, external_references
 
 
 def test_an_absolute_url_is_reported(tmp_path: Path) -> None:
@@ -49,3 +52,32 @@ def test_the_demo_sources_name_no_external_host() -> None:
     instead, so a CDN reintroduced during development is caught the same afternoon.
     """
     assert external_references(Path(__file__).resolve().parents[1] / 'demo' / 'static') == []
+
+
+def test_the_runtime_total_is_injected_into_the_built_transport() -> None:
+    """
+    The page cannot measure the download without knowing what it is measuring against.
+
+    Injected rather than fetched: a `sizes.json` would cost a round trip before
+    the bar could appear. Injected rather than hand-written: a constant nobody
+    updates produces a bar that stops at 84% after a Pyodide upgrade, which is
+    worse than no bar at all.
+    """
+    site = Path(__file__).resolve().parents[1] / 'site'
+    if not (site / 'browser.js').exists():
+        pytest.skip('run `uv run python -m scripts.build_pages` first')
+
+    written = re.search(r'const RUNTIME_BYTES = (\d+);', (site / 'browser.js').read_text())
+    assert written is not None, 'the build left no RUNTIME_BYTES in site/browser.js'
+    assert int(written.group(1)) == sum(f.stat().st_size for f in (site / 'pyodide').iterdir())
+
+
+def test_a_transport_without_the_placeholder_fails_the_build() -> None:
+    """
+    Renaming the constant must break the build, not the bar.
+
+    The failure it guards is silent: the page would ship with whatever number was
+    last hard-coded, and nothing downstream would notice.
+    """
+    assert RUNTIME_BYTES.search('const RUNTIME_BYTES = 0;') is not None
+    assert RUNTIME_BYTES.search('const RUNTIME_TOTAL = 0;') is None

@@ -43,6 +43,15 @@ STATIC = ROOT / 'demo' / 'static'
 # 404 inside Pyodide's installer rather than from anything here.
 WHEEL_NAME = re.compile(r'pysqlsuggestions-[^/\\\'"]+?-py3-none-any\.whl')
 
+RUNTIME_BYTES = re.compile(r'const RUNTIME_BYTES = (\d+);')
+"""
+The decoded size of the vendored runtime, which the boot reports progress against.
+
+Matched as a shape rather than a literal for the same reason as `WHEEL_NAME`: the
+number moves with every Pyodide upgrade, and a build that quietly failed to
+replace it would ship a bar that stops short of the end.
+"""
+
 COPIED = (
     (STATIC / 'index.html', 'index.html'),
     (STATIC / 'browser.js', 'browser.js'),
@@ -128,7 +137,13 @@ def main() -> int:
     if not named[1]:
         print('browser.js names no wheel to install', file=sys.stderr)  # noqa: T201
         return 1
-    (SITE / 'browser.js').write_text(named[0])
+
+    runtime_bytes = sum(f.stat().st_size for f in (SITE / 'pyodide').iterdir())
+    sized = RUNTIME_BYTES.subn(f'const RUNTIME_BYTES = {runtime_bytes};', named[0])
+    if not sized[1]:
+        print('browser.js declares no RUNTIME_BYTES to fill in', file=sys.stderr)  # noqa: T201
+        return 1
+    (SITE / 'browser.js').write_text(sized[0])
 
     # Jekyll would otherwise swallow files it considers special.
     (SITE / '.nojekyll').write_text('')

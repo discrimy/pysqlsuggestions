@@ -12,6 +12,13 @@
 // host but the one serving it, which is the claim the demo exists to make.
 const PYODIDE = new URL('./pyodide/', import.meta.url).href;
 
+// The decoded size of everything in ./pyodide/, written here by
+// scripts/build_pages.py so the boot can report progress against it. Zero in the
+// source on purpose: the number belongs to a build, not to a commit, and a
+// hand-maintained one goes stale at the next Pyodide upgrade without anyone
+// noticing — the bar would simply stop short.
+const RUNTIME_BYTES = 0;
+
 const status = () => document.getElementById('boot');
 
 function say(text, done) {
