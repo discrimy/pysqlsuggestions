@@ -258,3 +258,40 @@ def test_a_word_that_precedes_the_item_is_offered_before_one_and_behind_a_prefix
     assert 'DISTINCT' not in texts('SELECT ⌶'), 'a column is what belongs here'
     assert texts('SELECT dis⌶') == ['DISTINCT']
     assert texts('SELECT id, dis⌶') == [], 'and never after an item, however it is spelled'
+
+
+def test_a_clause_follows_what_it_actually_follows() -> None:
+    """
+    `UPDATE t FROM y` and `INSERT INTO t RETURNING id` name no assignment and
+    no rows, and neither parses.
+
+    Both clauses listed everything that appears anywhere later in their
+    statement as following them directly. What follows the relation an UPDATE
+    names is SET, and what follows the table an INSERT names is the rows —
+    WHERE, FROM and RETURNING all come after those.
+    """
+    assert texts('UPDATE events ⌶')[-1:] == ['SET']
+    assert texts('UPDATE events SET name = 1 ⌶') == ['WHERE', 'FROM', 'RETURNING']
+    assert texts('INSERT INTO events ⌶') == ['VALUES', 'SELECT']
+    assert texts('INSERT INTO events VALUES (1) ⌶') == ['ON CONFLICT', 'RETURNING']
+
+
+def test_an_operator_position_takes_operators_and_not_the_dictionary() -> None:
+    """
+    `UPDATE t SET total ` offered AS, BY, DO, IN, IS and ON — the reserved word
+    list, reached by a fallback meant for a caret with no clause at all.
+
+    A clause that declares operators and no predicate words has nothing to say
+    here, and saying nothing is the answer: `=` arrives as an operator, which is
+    a kind of its own.
+    """
+    assert texts('UPDATE events SET name ⌶') == ['=']
+
+
+def test_an_insert_target_is_not_offered_a_bare_alias() -> None:
+    """
+    `UPDATE orders o` and `DELETE FROM orders o` are legal; `INSERT INTO orders o`
+    is not — that one spells its alias `AS o`, and the generated names are bare.
+    """
+    assert texts('INSERT INTO events ⌶') == ['VALUES', 'SELECT']
+    assert 'e' in texts('UPDATE events ⌶')

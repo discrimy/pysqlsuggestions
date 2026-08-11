@@ -69,13 +69,6 @@ KNOWN = frozenset(
         # only follow SELECT itself, and `*` takes no alias.
         'SELECT *',
         'SELECT * ',
-        # UPDATE's own shape: SET comes before FROM and WHERE, and its target
-        # takes no alias without AS.
-        'UPDATE orders ',
-        'UPDATE orders SET total ',
-        'INSERT INTO orders ',
-        'INSERT INTO orders (user_id, total)',
-        'INSERT INTO orders (user_id, total) ',
         # Inside a cast only AS belongs, and the clause's own continuations are
         # offered instead.
         'SELECT cast(o.total ',

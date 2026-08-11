@@ -306,22 +306,26 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
             Candidate(text=word, kind=Kind.KEYWORD, detail='starts a statement', position=index, origin='keyword')
             for index, word in enumerate(dialect.statement_start)
         ]
+    if clause is not None and request.expecting == 'operator':
+        # What continues an unfinished predicate, and nothing if the clause has
+        # no such words. Falling through to the whole reserved list put AS, BY,
+        # DO, IN, IS and ON after `UPDATE t SET total `, where only `=` belongs.
+        return [
+            Candidate(text=word, kind=Kind.KEYWORD, detail=f'after {clause.name}', position=index, origin='keyword')
+            for index, word in enumerate(clause.after_operand)
+        ]
     if clause is not None:
-        words = (
-            clause.after_operand
-            if request.expecting == 'operator'
-            else _unspent_alias(
-                _only_where_an_item_begins(
-                    _unchosen(
-                        dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
-                        request.item_words,
-                    ),
-                    dialect,
-                    request,
+        words = _unspent_alias(
+            _only_where_an_item_begins(
+                _unchosen(
+                    dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
+                    request.item_words,
                 ),
-                clause,
+                dialect,
                 request,
-            )
+            ),
+            clause,
+            request,
         )
         if words:
             return [

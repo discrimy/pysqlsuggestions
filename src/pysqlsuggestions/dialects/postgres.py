@@ -219,7 +219,7 @@ POSTGRES = replace(
         Clause(name='DISTINCT ON', follows=frozenset({'SELECT'}), suggests=(Kind.COLUMN, Kind.FUNCTION)),
         Clause(
             name='ON CONFLICT',
-            follows=frozenset({'INSERT INTO', 'VALUES'}),
+            follows=frozenset({'VALUES'}),
             statements=frozenset({'INSERT INTO'}),
             suggests=(Kind.COLUMN,),
         ),
@@ -228,7 +228,7 @@ POSTGRES = replace(
         # follow is the whole of what this dialect has to say about it.
         Clause(
             name='RETURNING',
-            follows=frozenset({'DELETE FROM', 'INSERT INTO', 'UPDATE', 'SET', 'WHERE', 'VALUES', 'ON CONFLICT'}),
+            follows=frozenset({'DELETE FROM', 'SET', 'WHERE', 'VALUES', 'ON CONFLICT'}),
             statements=frozenset({'DELETE FROM', 'INSERT INTO', 'UPDATE'}),
             suggests=COLUMN_EXPRESSION,
         ),

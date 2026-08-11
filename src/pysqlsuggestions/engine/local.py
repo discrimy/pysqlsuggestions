@@ -22,7 +22,14 @@ Clauses answered from this query's own select list.
 inside a select item, and offering that item its own output name is circular —
 Postgres does not make select-list aliases visible there either.
 """
-_ALIAS_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO'})
+_ALIAS_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM'})
+"""
+Clauses whose relation may be given a generated alias.
+
+Not INSERT INTO: `UPDATE orders o` and `DELETE FROM orders o` are legal, and
+`INSERT INTO orders o` is not — that one spells its alias `AS o`, so a bare
+name offered there writes a statement no server takes.
+"""
 
 
 def local_candidates(request: Request) -> list[Candidate]:

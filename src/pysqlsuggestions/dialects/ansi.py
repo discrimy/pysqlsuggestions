@@ -103,7 +103,9 @@ CLAUSES = ClauseModel(
         Clause(
             name='UPDATE',
             suggests=RELATION_REFERENCE,
-            followed_by=('SET', 'FROM', 'WHERE'),
+            # Only SET. `UPDATE t FROM y` and `UPDATE t WHERE x` name no
+            # assignment and parse as nothing; both follow SET, which says so.
+            followed_by=('SET',),
         ),
         Clause(
             name='JOIN',
