@@ -65,14 +65,11 @@ this harness cannot judge them and says so rather than guessing.
 
 KNOWN = frozenset(
     {
-        # A word offered where its own clause has no room for it. DISTINCT may
-        # only follow SELECT itself; `*` takes no alias; OFFSET and FETCH need a
-        # count first.
+        # A word offered where its own clause has no room for it: DISTINCT may
+        # only follow SELECT itself, and `*` takes no alias.
         'SELECT count(*) AS n ',
         'SELECT *',
         'SELECT * ',
-        'SELECT o.total FROM orders o ORDER BY o.total ASC NULLS LAST LIMIT ',
-        'SELECT o.total FROM orders o ORDER BY o.total ASC NULLS LAST LIMIT 10',
         # UPDATE's own shape: SET comes before FROM and WHERE, and its target
         # takes no alias without AS.
         'UPDATE orders ',

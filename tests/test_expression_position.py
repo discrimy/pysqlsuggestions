@@ -212,3 +212,28 @@ def test_a_word_that_begins_a_reference_is_not_offered_after_one() -> None:
     assert 'LATERAL' not in texts('SELECT * FROM events e JOIN other o ⌶')
     assert 'LATERAL' in texts('SELECT * FROM events e, ⌶')
     assert 'LATERAL' in texts('SELECT * FROM events e JOIN ⌶')
+
+
+def test_a_row_count_is_typed_rather_than_suggested() -> None:
+    """
+    `LIMIT ` takes a number, and a kind there filled the position with the
+    clause's own successors — OFFSET, which belongs after the count rather than
+    instead of it.
+
+    UNION keeps its kind, because `UNION ALL` genuinely is what comes next.
+    That is the difference `followed_by` cannot express on its own, so it is
+    settled per clause rather than by a rule about operand positions.
+    """
+    assert texts('SELECT * FROM events ORDER BY id LIMIT ⌶') == []
+    assert texts('SELECT * FROM events ORDER BY id LIMIT 10 ⌶') == ['OFFSET']
+    assert texts('SELECT id FROM events UNION ⌶') == ['ALL', 'SELECT']
+
+
+def test_two_spellings_of_the_same_limit_are_one_choice() -> None:
+    """
+    `LIMIT 10 FETCH FIRST 2 ROWS ONLY` names a row count twice and no server
+    takes it, so writing either settles both — the same rule that stops
+    `ORDER BY id ASC ` offering DESC.
+    """
+    assert 'FETCH' not in texts('SELECT * FROM events ORDER BY id LIMIT 10 ⌶')
+    assert 'OFFSET' in texts('SELECT * FROM events ORDER BY id LIMIT 10 ⌶')

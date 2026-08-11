@@ -222,6 +222,9 @@ class ClauseModel:
 EXCLUSIVE = (
     (frozenset({'ASC', 'DESC'}), frozenset({'NULLS FIRST', 'NULLS LAST'})),
     (frozenset({'DISTINCT', 'ALL'}),),
+    # Two spellings of the same limit. `LIMIT 10 FETCH FIRST 2 ROWS ONLY` names
+    # a row count twice and no server takes it, so writing either settles both.
+    (frozenset({'LIMIT', 'FETCH'}),),
 )
 """
 Choices made once per list item, each sequence written in the order SQL takes it.

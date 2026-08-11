@@ -165,8 +165,13 @@ CLAUSES = ClauseModel(
         ),
         # A window spec, not a statement: what follows is the frame, never LIMIT.
         Clause(name='PARTITION BY', suggests=COLUMN_EXPRESSION, followed_by=('ORDER BY', 'ROWS', 'RANGE')),
-        Clause(name='LIMIT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=_onwards('OFFSET')),
-        Clause(name='OFFSET', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=_onwards('FETCH')),
+        # These take a row count, and there is nothing to suggest for one. With
+        # a kind here the position filled with the clause's own successors —
+        # `LIMIT ` offered OFFSET, which belongs after the number rather than
+        # instead of it. UNION keeps its kind because `UNION ALL` really does
+        # come next, which is why this is per-clause and not a rule.
+        Clause(name='LIMIT', statements=_QUERY, followed_by=_onwards('OFFSET')),
+        Clause(name='OFFSET', statements=_QUERY, followed_by=_onwards('FETCH')),
         Clause(name='FETCH', statements=_QUERY, suggests=(Kind.KEYWORD,)),
         Clause(
             name='SET',
