@@ -16,6 +16,7 @@ this build is a pluggable transport, and `browser.js` is what fills it in.
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -23,6 +24,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SITE = ROOT / 'site'
 STATIC = ROOT / 'demo' / 'static'
+
+# The checked-in page names a wheel that does not exist yet, and the build
+# points it at the one it just copied. Matching the shape rather than a literal
+# version is what keeps a release from turning this into a silent no-op: the
+# page would still name last version's wheel, and the failure arrives as a
+# 404 inside Pyodide's installer rather than from anything here.
+WHEEL_NAME = re.compile(r'pysqlsuggestions-[^/\\\'"]+?-py3-none-any\.whl')
 
 COPIED = (
     (STATIC / 'index.html', 'index.html'),
@@ -73,14 +81,16 @@ def main() -> int:
             print('index.html has no module script to precede', file=sys.stderr)  # noqa: T201
             return 1
         page = page.replace(marker, f'{BOOTSTRAP}\n{marker}', 1)
-    page = page.replace('pysqlsuggestions-0.1.0.dev0-py3-none-any.whl', wheels[-1].name)
+    page = WHEEL_NAME.sub(wheels[-1].name, page)
     (SITE / 'index.html').write_text(page)
 
     # browser.js names the wheel too, and the version moves.
     driver = (SITE / 'browser.js').read_text()
-    (SITE / 'browser.js').write_text(
-        driver.replace('pysqlsuggestions-0.1.0.dev0-py3-none-any.whl', wheels[-1].name),
-    )
+    named = WHEEL_NAME.subn(wheels[-1].name, driver)
+    if not named[1]:
+        print('browser.js names no wheel to install', file=sys.stderr)  # noqa: T201
+        return 1
+    (SITE / 'browser.js').write_text(named[0])
 
     # Jekyll would otherwise swallow files it considers special.
     (SITE / '.nojekyll').write_text('')

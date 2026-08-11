@@ -3,13 +3,35 @@
 from __future__ import annotations
 
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-ENGINE = Path(__file__).resolve().parents[1] / 'src' / 'pysqlsuggestions' / 'engine'
+import pysqlsuggestions
+
+ROOT = Path(__file__).resolve().parents[1]
+ENGINE = ROOT / 'src' / 'pysqlsuggestions' / 'engine'
 FORBIDDEN_FOR_ENGINE = {'pysqlsuggestions.ports', 'pysqlsuggestions.resolve'}
 DRIVERS = {'psycopg2', 'psycopg', 'trino', 'clickhouse_connect', 'clickhouse_driver', 'sqlalchemy', 'sqlglot'}
+
+
+def test_version_is_declared_once_in_effect() -> None:
+    """
+    The version is written in two files, and nothing but this makes them agree.
+
+    `pyproject.toml` is what an install records; `__version__` is what callers
+    read and what a bug report quotes. A release that bumps one and forgets the
+    other produces a package that misreports itself, and no other test notices
+    because every one of them passes either way.
+
+    Read from the file rather than from `importlib.metadata`: the installed
+    metadata is written at install time, so comparing against it would fail on a
+    correct bump until someone reinstalled.
+    """
+    declared = re.search(r"^version = '([^']+)'", (ROOT / 'pyproject.toml').read_text(), re.M)
+    assert declared is not None, 'pyproject.toml declares no version'
+    assert pysqlsuggestions.__version__ == declared.group(1)
 
 
 def test_import_pulls_in_no_drivers() -> None:
