@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pysqlsuggestions import ForeignKey
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.engine.joins import relation_joins
+from pysqlsuggestions.engine.joins import condition_columns, join_conditions, relation_joins
 from pysqlsuggestions.types import Candidate, Kind, Projection, Relation, Scope, Suggestion
 
 
@@ -168,3 +168,39 @@ def test_a_cte_has_no_constraints() -> None:
     """A relation the statement defined itself is in no catalog and carries no edges."""
     scope = Scope(relations=(Relation(alias='c', path=('c',), source='cte', projection=Projection(columns=('id',))),))
     assert relation_joins(scope, [AUTHOR], POSTGRES) == []
+
+
+def test_condition_pairs_the_latest_relation_with_an_earlier_one() -> None:
+    """`JOIN auth_user u ON <caret>` — one accept finishes the join."""
+    found = join_conditions(scope_of(('reports_report', 'r'), ('auth_user', 'u')), [AUTHOR], POSTGRES)
+    assert [c.snippet for c in found] == ['r.author_id = u.id']
+    assert found[0].kind is Kind.JOIN
+    assert found[0].label == 'author_id'
+    assert found[0].note == 'fk: auth_user.id'
+
+
+def test_condition_reads_earlier_relation_first() -> None:
+    """Text order follows the statement, not the constraint's direction."""
+    found = join_conditions(scope_of(('auth_user', 'u'), ('reports_report', 'r')), [AUTHOR], POSTGRES)
+    assert [c.snippet for c in found] == ['u.id = r.author_id']
+    assert found[0].label == 'author_id'
+
+
+def test_condition_needs_two_relations() -> None:
+    """A single relation has nothing to be joined to."""
+    assert join_conditions(scope_of(('reports_report', 'r')), [AUTHOR], POSTGRES) == []
+
+
+def test_condition_ignores_an_unrelated_pair() -> None:
+    """No constraint connects these two, so the position keeps its columns and nothing else."""
+    found = join_conditions(scope_of(('reports_report', 'r'), ('billing_invoice', 'b')), [AUTHOR], POSTGRES)
+    assert found == []
+
+
+def test_qualified_left_side_degrades_to_annotated_columns() -> None:
+    """`ON r.<caret>` has committed the left side, so the whole condition is no longer expressible."""
+    relation = Relation(alias='r', path=('reports_report',), source='table')
+    found = condition_columns(relation, [AUTHOR], POSTGRES)
+    assert [c.text for c in found] == ['author_id']
+    assert found[0].note == 'fk: auth_user.id'
+    assert found[0].snippet == 'author_id'
