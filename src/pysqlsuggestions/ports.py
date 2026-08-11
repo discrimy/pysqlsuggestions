@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
-from pysqlsuggestions.types import Column, ColumnValue, Function, Table
+from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
 
 @runtime_checkable
@@ -105,6 +105,32 @@ class SupportsColumnValues(Protocol):
         Rendering is the engine's problem: it knows the column's type and so
         whether the literal needs quotes. Each value may carry the share of rows
         it accounts for, which is what lets a list of them be read at a glance.
+        """
+        ...
+
+
+@runtime_checkable
+class SupportsForeignKeys(Protocol):
+    """
+    Declared relationships between relations, for join completion.
+
+    Absent: `JOIN <caret>` offers relation names and `ON <caret>` offers columns,
+    which is what both offered before this existed.
+
+    Only *declared* constraints belong here. A backend that keeps none — ClickHouse
+    and Trino keep none — should not implement this rather than infer edges from
+    column names, because a wrong join condition is valid SQL that silently returns
+    wrong rows.
+    """
+
+    def foreign_keys(self, schema: str | None = None) -> Sequence[ForeignKey]:
+        """
+        Every constraint whose referencing side lives in `schema`, or in the default namespace.
+
+        Schema-scoped rather than per-relation because a join is undirected: the
+        proposal at `FROM auth_user u JOIN <caret>` needs the edges that point *at*
+        `auth_user`, and no per-relation call could find them without walking every
+        relation in the database.
         """
         ...
 

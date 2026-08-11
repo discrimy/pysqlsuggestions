@@ -17,11 +17,19 @@ from typing import TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes
-from pysqlsuggestions.ports import Cache, Catalog, SupportsColumnSearch, SupportsColumnValues, SupportsKeywords
+from pysqlsuggestions.ports import (
+    Cache,
+    Catalog,
+    SupportsColumnSearch,
+    SupportsColumnValues,
+    SupportsForeignKeys,
+    SupportsKeywords,
+)
 from pysqlsuggestions.types import (
     Candidate,
     Column,
     ColumnValue,
+    ForeignKey,
     Function,
     Kind,
     Projection,
@@ -166,6 +174,19 @@ class _Reader:
             return ()
         key = self._key(schema or '', table, f'\x00values:{column}')
         return self._read(key, lambda: catalog.common_values(schema, table, column, _MAX_VALUES))
+
+    def foreign_keys(self, schema: str | None) -> Sequence[ForeignKey]:
+        """
+        Declared relationships, for join proposals.
+
+        Degrades to nothing when the catalog cannot answer, which is the documented
+        behaviour when SupportsForeignKeys is absent. Cached like everything else:
+        constraints change when someone runs DDL, not between keystrokes.
+        """
+        catalog = self._catalog
+        if not isinstance(catalog, SupportsForeignKeys):
+            return ()
+        return self._read(self._key(schema or '', '\x00fk'), lambda: catalog.foreign_keys(schema))
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords when available, otherwise the dialect's shipped set."""

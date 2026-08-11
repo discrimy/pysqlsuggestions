@@ -8,6 +8,7 @@ from pysqlsuggestions.ports import (
     Catalog,
     SupportsColumnSearch,
     SupportsColumnValues,
+    SupportsForeignKeys,
     SupportsKeywords,
 )
 from pysqlsuggestions.types import (
@@ -45,6 +46,7 @@ __all__ = [
     'Suggestion',
     'SupportsColumnSearch',
     'SupportsColumnValues',
+    'SupportsForeignKeys',
     'SupportsKeywords',
     'Table',
     '__version__',
