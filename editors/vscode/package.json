@@ -22,11 +22,41 @@
       }
     ],
     "commands": [
-      { "command": "pysqlsuggestions.addConnection", "title": "pysqlsuggestions: Add connection" },
+      { "command": "pysqlsuggestions.addConnection", "title": "pysqlsuggestions: Add connection", "icon": "$(add)" },
       { "command": "pysqlsuggestions.selectConnection", "title": "pysqlsuggestions: Select connection for this workspace" },
       { "command": "pysqlsuggestions.restartServer", "title": "pysqlsuggestions: Restart server" },
-      { "command": "pysqlsuggestions.showLogs", "title": "pysqlsuggestions: Show logs" }
+      { "command": "pysqlsuggestions.showLogs", "title": "pysqlsuggestions: Show logs" },
+      { "command": "pysqlsuggestions.refreshConnections", "title": "Refresh", "icon": "$(refresh)" },
+      { "command": "pysqlsuggestions.editConnection", "title": "Edit…", "icon": "$(edit)" },
+      { "command": "pysqlsuggestions.removeConnection", "title": "Remove", "icon": "$(trash)" },
+      { "command": "pysqlsuggestions.setPassword", "title": "Set password…" },
+      { "command": "pysqlsuggestions.clearPassword", "title": "Clear password" },
+      { "command": "pysqlsuggestions.testConnection", "title": "Test connection" },
+      { "command": "pysqlsuggestions.useConnection", "title": "Use this connection" }
     ],
+    "menus": {
+      "view/title": [
+        { "command": "pysqlsuggestions.addConnection", "when": "view == pysqlsuggestions.connections", "group": "navigation@1" },
+        { "command": "pysqlsuggestions.refreshConnections", "when": "view == pysqlsuggestions.connections", "group": "navigation@2" }
+      ],
+      "view/item/context": [
+        { "command": "pysqlsuggestions.editConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "inline@1" },
+        { "command": "pysqlsuggestions.removeConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "inline@2" },
+        { "command": "pysqlsuggestions.useConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "1_use@1" },
+        { "command": "pysqlsuggestions.testConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "1_use@2" },
+        { "command": "pysqlsuggestions.setPassword", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "2_auth@1" },
+        { "command": "pysqlsuggestions.clearPassword", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "2_auth@2" }
+      ],
+      "commandPalette": [
+        { "command": "pysqlsuggestions.refreshConnections", "when": "false" },
+        { "command": "pysqlsuggestions.editConnection", "when": "false" },
+        { "command": "pysqlsuggestions.removeConnection", "when": "false" },
+        { "command": "pysqlsuggestions.setPassword", "when": "false" },
+        { "command": "pysqlsuggestions.clearPassword", "when": "false" },
+        { "command": "pysqlsuggestions.testConnection", "when": "false" },
+        { "command": "pysqlsuggestions.useConnection", "when": "false" }
+      ]
+    },
     "configuration": {
       "title": "pysqlsuggestions",
       "properties": {

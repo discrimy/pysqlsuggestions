@@ -12,10 +12,20 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as vscode from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions } from 'vscode-languageclient/node';
-import { initializationOptions, needsPassword, readProfiles, resolveProfile } from './profiles';
+import { type Spawn, testConnection } from './check';
+import { type Profile, initializationOptions, needsPassword, readProfiles, resolveProfile } from './profiles';
 import { MINIMUM_PYTHON, ensureVenv, findInterpreter, stampPath } from './runtime';
-import { promptForPassword, readPassword } from './secrets';
+import { forgetPassword, promptForPassword, readPassword } from './secrets';
 import { Status } from './status';
+import {
+  type Scope,
+  type SettingsAccess,
+  type Stored,
+  addConnection,
+  removeConnection,
+  updateConnection,
+} from './store';
+import { ConnectionTree } from './tree';
 
 /** The server's own notification, sent once when the catalog stops being usable. */
 const DEGRADED = 'pysqlsuggestions/degraded';
@@ -23,6 +33,15 @@ const DEGRADED = 'pysqlsuggestions/degraded';
 let client: LanguageClient | undefined;
 let status: Status | undefined;
 let output: vscode.OutputChannel | undefined;
+let tree: ConnectionTree | undefined;
+
+/**
+ * The managed venv's interpreter, once there is one.
+ *
+ * Undefined means nothing can be tested, which the test flow reports rather
+ * than spawning something that cannot exist.
+ */
+let venvPython: string | undefined;
 
 /**
  * Profiles the user declined to give a password for, this window.
@@ -31,6 +50,56 @@ let output: vscode.OutputChannel | undefined;
  * forever, and a reload is how someone says "ask me again".
  */
 const declined = new Set<string>();
+
+/** Settings, as `store.ts` wants them. */
+function settingsAccess(): SettingsAccess {
+  const inspect = () =>
+    vscode.workspace.getConfiguration('pysqlsuggestions').inspect<unknown[]>('connections');
+  return {
+    user: () => inspect()?.globalValue,
+    workspace: () => inspect()?.workspaceValue,
+    write: async (scope: Scope, value: unknown[]) => {
+      await vscode.workspace
+        .getConfiguration('pysqlsuggestions')
+        .update(
+          'connections',
+          value,
+          scope === 'user' ? vscode.ConfigurationTarget.Global : vscode.ConfigurationTarget.Workspace,
+        );
+    },
+  };
+}
+
+/**
+ * Run the checker in the managed venv, killed if it does not answer.
+ *
+ * The kill is a backstop: `check.py` gives the driver its own shorter deadline
+ * so it can usually say *why* it failed. A killed process only ever reports
+ * that it was killed.
+ */
+function checkSpawn(python: string): Spawn {
+  return (input, timeoutMs) =>
+    new Promise((resolve, reject) => {
+      const child = cp.spawn(python, ['-m', 'pysqlsuggestions_lsp.check'], { windowsHide: true });
+      let collected = '';
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`no answer in ${String(timeoutMs / 1000)}s — killed`));
+      }, timeoutMs);
+      child.stdout.on('data', (chunk: Buffer) => (collected += chunk.toString()));
+      child.stderr.on('data', (chunk: Buffer) => output?.append(chunk.toString()));
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on('close', () => {
+        clearTimeout(timer);
+        resolve(collected);
+      });
+      child.stdin.write(input);
+      child.stdin.end();
+    });
+}
 
 /** Run a command, streaming everything it says into the output channel. */
 function run(command: string, args: string[]): Promise<void> {
@@ -91,11 +160,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   status.set('starting');
   context.subscriptions.push(output, status);
 
+  tree = new ConnectionTree(settingsAccess());
   context.subscriptions.push(
+    tree,
+    vscode.window.createTreeView('pysqlsuggestions.connections', { treeDataProvider: tree }),
     vscode.commands.registerCommand('pysqlsuggestions.showLogs', () => output?.show()),
     vscode.commands.registerCommand('pysqlsuggestions.restartServer', () => restart(context)),
     vscode.commands.registerCommand('pysqlsuggestions.selectConnection', () => selectConnection(context)),
-    vscode.commands.registerCommand('pysqlsuggestions.addConnection', () => addConnection()),
+    vscode.commands.registerCommand('pysqlsuggestions.addConnection', () => addConnectionFlow(context)),
+    vscode.commands.registerCommand('pysqlsuggestions.refreshConnections', () => tree?.refresh()),
+    vscode.commands.registerCommand('pysqlsuggestions.editConnection', (entry: Stored) =>
+      editConnectionFlow(context, entry),
+    ),
+    vscode.commands.registerCommand('pysqlsuggestions.removeConnection', (entry: Stored) =>
+      removeConnectionFlow(context, entry),
+    ),
+    vscode.commands.registerCommand('pysqlsuggestions.testConnection', (entry: Stored) => runTest(context, entry)),
+    vscode.commands.registerCommand('pysqlsuggestions.setPassword', async (entry: Stored) => {
+      await promptForPassword(context.secrets, entry.profile.name);
+      if (isInUse(entry.profile.name)) {
+        await restart(context);
+      }
+    }),
+    vscode.commands.registerCommand('pysqlsuggestions.clearPassword', async (entry: Stored) => {
+      await forgetPassword(context.secrets, entry.profile.name);
+      // Whatever was verified was verified with that password.
+      tree?.setHealth(entry.profile.name, 'untested');
+    }),
+    vscode.commands.registerCommand('pysqlsuggestions.useConnection', async (entry: Stored) => {
+      const scope =
+        vscode.workspace.workspaceFolders === undefined
+          ? vscode.ConfigurationTarget.Global
+          : vscode.ConfigurationTarget.Workspace;
+      await vscode.workspace
+        .getConfiguration('pysqlsuggestions')
+        .update('defaultConnection', entry.profile.name, scope);
+      await restart(context);
+    }),
   );
 
   await start(context);
@@ -145,6 +246,8 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
     return;
   }
 
+  venvPython = runtime.python;
+
   const profiles = readProfiles(settings.get('connections', []));
   const profile = resolveProfile(profiles, settings.get<string | null>('defaultConnection', null));
   let password = profile === undefined ? undefined : await readPassword(context.secrets, profile.name);
@@ -178,10 +281,14 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   // healthy, so without this the status bar would keep claiming schema
   // awareness the user is no longer getting.
   client.onNotification(DEGRADED, (params: { reason?: string }) => {
+    if (profile !== undefined) {
+      tree?.setHealth(profile.name, 'failed', params.reason);
+    }
     status?.set('degraded', profile?.name, params.reason);
     output?.appendLine(`catalog unusable: ${params.reason ?? 'no reason given'}`);
   });
 
+  tree?.setInUse(profile?.name);
   status?.set(profile === undefined ? 'no-profile' : 'bound', profile?.name);
 }
 
@@ -203,7 +310,7 @@ async function selectConnection(context: vscode.ExtensionContext): Promise<void>
   if (profiles.length === 0) {
     void vscode.window.showInformationMessage('No connections configured yet.', 'Add one').then((choice) => {
       if (choice === 'Add one') {
-        void addConnection();
+        void addConnectionFlow(context);
       }
     });
     return;
@@ -231,15 +338,140 @@ async function selectConnection(context: vscode.ExtensionContext): Promise<void>
   await restart(context);
 }
 
-/**
- * Open the settings UI rather than reimplementing a form.
- *
- * The schema in package.json already describes every field and its allowed
- * values, so a hand-written wizard would be a second description of the same
- * thing, kept in step by hand.
- */
-async function addConnection(): Promise<void> {
-  await vscode.commands.executeCommand('workbench.action.openSettings', 'pysqlsuggestions.connections');
+const DIALECTS = [
+  { label: 'postgres', detail: 'Columns, joins from foreign keys, values from statistics' },
+  { label: 'clickhouse', detail: 'No driver bundled — keywords and quoting only' },
+  { label: 'trino', detail: 'No driver bundled — keywords and quoting only' },
+  { label: 'ansi', detail: 'No connection — keywords only' },
+];
+
+/** Ask for one field. Undefined when the user backs out, which cancels the flow. */
+function ask(prompt: string, value?: string, required = false): Thenable<string | undefined> {
+  return vscode.window.showInputBox({
+    title: prompt,
+    value,
+    ignoreFocusOut: true,
+    validateInput: (entered) => (required && entered.trim().length === 0 ? 'Required' : undefined),
+  });
+}
+
+/** A trimmed value, or undefined when it was blank. */
+function optional(entered: string): string | undefined {
+  return entered.trim().length > 0 ? entered.trim() : undefined;
+}
+
+/** A port number, or undefined when blank or not a number. */
+function port(entered: string): number | undefined {
+  const parsed = Number(entered.trim());
+  return entered.trim().length > 0 && !Number.isNaN(parsed) ? parsed : undefined;
+}
+
+/** Whether `name` is the profile the running server holds. */
+function isInUse(name: string): boolean {
+  return vscode.workspace.getConfiguration('pysqlsuggestions').get<string | null>('defaultConnection', null) === name;
+}
+
+/** Test one connection and record the verdict on its row. Never throws. */
+async function runTest(context: vscode.ExtensionContext, entry: Stored): Promise<void> {
+  const name = entry.profile.name;
+  if (venvPython === undefined) {
+    tree?.setHealth(name, 'failed', 'the Python environment is not ready — run "Show logs"');
+    return;
+  }
+  tree?.setHealth(name, 'testing');
+  const password = await readPassword(context.secrets, name);
+  const verdict = await testConnection(entry.profile, password, checkSpawn(venvPython));
+  tree?.setHealth(name, verdict.ok ? 'ok' : 'failed', verdict.detail);
+  output?.appendLine(`${name}: ${verdict.ok ? 'ok' : 'failed'} — ${verdict.detail}`);
+}
+
+async function addConnectionFlow(context: vscode.ExtensionContext): Promise<void> {
+  const name = await ask('Connection name', undefined, true);
+  if (name === undefined) return;
+  const dialect = await vscode.window.showQuickPick(DIALECTS, { title: 'Which backend?' });
+  if (dialect === undefined) return;
+  const host = await ask('Host', 'localhost', true);
+  if (host === undefined) return;
+  const enteredPort = await ask('Port (blank for the driver default)', '5432');
+  if (enteredPort === undefined) return;
+  const database = await ask('Database (blank for the default)');
+  if (database === undefined) return;
+  const user = await ask('User (blank to let the driver decide)');
+  if (user === undefined) return;
+
+  const profile: Profile = {
+    name: name.trim(),
+    dialect: dialect.label,
+    host: host.trim(),
+    port: port(enteredPort),
+    database: optional(database),
+    user: optional(user),
+  };
+  await addConnection(settingsAccess(), profile);
+  tree?.refresh();
+
+  // A connection with a user almost certainly wants a password, and being asked
+  // now beats discovering later that completion quietly stopped being
+  // schema-aware.
+  if (profile.user !== undefined) {
+    await promptForPassword(context.secrets, profile.name);
+  }
+  await runTest(context, { profile, scope: 'user' });
+}
+
+async function editConnectionFlow(context: vscode.ExtensionContext, entry: Stored): Promise<void> {
+  const { profile } = entry;
+  const fields = [
+    { label: 'name', description: profile.name },
+    { label: 'dialect', description: profile.dialect },
+    { label: 'host', description: profile.host },
+    { label: 'port', description: profile.port === undefined ? '(default)' : String(profile.port) },
+    { label: 'database', description: profile.database ?? '(default)' },
+    { label: 'user', description: profile.user ?? '(driver decides)' },
+  ];
+  const chosen = await vscode.window.showQuickPick(fields, { title: `Edit ${profile.name}` });
+  if (chosen === undefined) return;
+
+  const updated: Profile = { ...profile };
+  if (chosen.label === 'dialect') {
+    const dialect = await vscode.window.showQuickPick(DIALECTS, { title: 'Which backend?' });
+    if (dialect === undefined) return;
+    updated.dialect = dialect.label;
+  } else {
+    const current =
+      chosen.label === 'port' ? (profile.port === undefined ? '' : String(profile.port)) : chosen.description;
+    const entered = await ask(chosen.label, current, chosen.label === 'name' || chosen.label === 'host');
+    if (entered === undefined) return;
+    if (chosen.label === 'name') updated.name = entered.trim();
+    if (chosen.label === 'host') updated.host = entered.trim();
+    if (chosen.label === 'port') updated.port = port(entered);
+    if (chosen.label === 'database') updated.database = optional(entered);
+    if (chosen.label === 'user') updated.user = optional(entered);
+  }
+
+  await updateConnection(settingsAccess(), profile.name, updated);
+  tree?.refresh();
+  // One connection per process, so a change to the one in use means a restart.
+  if (isInUse(profile.name)) {
+    await restart(context);
+  }
+}
+
+async function removeConnectionFlow(context: vscode.ExtensionContext, entry: Stored): Promise<void> {
+  const confirmed = await vscode.window.showWarningMessage(
+    `Remove the connection "${entry.profile.name}"?`,
+    { modal: true },
+    'Remove',
+  );
+  if (confirmed !== 'Remove') return;
+  await removeConnection(settingsAccess(), entry.profile.name);
+  // The stored password goes with it: an orphaned secret means a later
+  // connection reusing that name silently inherits somebody else's password.
+  await forgetPassword(context.secrets, entry.profile.name);
+  tree?.refresh();
+  if (isInUse(entry.profile.name)) {
+    await restart(context);
+  }
 }
 
 export async function deactivate(): Promise<void> {
