@@ -51,6 +51,22 @@ QUERIES = CatalogQueries(
     ),
     # ClickHouse exposes thousands of functions and no signatures, so they are
     # introspected rather than shipped, and the detail column stays empty.
+    column_search=Query(
+        sql=f"""
+            SELECT database, table, name, type, position FROM system.columns
+            WHERE database NOT IN {_INTERNAL}
+              AND position(lower(name), lower($1)) > 0
+            ORDER BY position(lower(name), lower($1)), length(name), database, table, name
+            LIMIT 500
+        """,
+        row=lambda row: Column(
+            schema=str(row[0]),
+            table=str(row[1]),
+            name=str(row[2]),
+            type=str(row[3]),
+            position=int(row[4]),
+        ),
+    ),
     functions=Query(
         sql="""
             SELECT name, is_aggregate FROM system.functions

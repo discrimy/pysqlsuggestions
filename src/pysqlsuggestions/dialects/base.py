@@ -256,6 +256,14 @@ class CatalogQueries:
     functions: Query | None = None
     values: Query | None = None
     """Frequent values of one column, from the backend's own planner statistics."""
+    column_search: Query | None = None
+    """
+    Columns matching a substring, across every visible relation.
+
+    For `SELECT <caret>` before any FROM exists. `$1` is what has been typed.
+    Absent means that position offers no columns, which is the right answer for
+    a backend where finding out would mean asking every catalog in turn.
+    """
 
 
 @dataclass(frozen=True, slots=True)

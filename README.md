@@ -113,6 +113,23 @@ that cannot answer offers columns and functions there instead. ClickHouse and
 Trino keep no most-common-values, so ClickHouse answers from its enums and
 Trino from booleans alone.
 
+## Columns before a FROM
+
+`SELECT ema⌶` with nothing in the FROM offers the column *and* the relation it
+belongs to, because choosing one is choosing the other:
+
+```
+SELECT ema⌶   ->   SELECT auth_user.email FROM auth_user
+```
+
+The suggestion carries two edits, and `plan_insertion` returns both. The FROM
+goes where a FROM goes — after the select list, before whatever follows it.
+
+It needs `SupportsColumnValues`'s sibling, `SupportsColumnSearch`. Postgres and
+ClickHouse ship the query; Trino does not, since answering would mean asking
+every catalog's connector in turn — the same reason its unqualified `tables` is
+empty. A prefix is required: every column in the database is not an answer.
+
 ## Qualified columns
 
 A column is offered as `<alias>.<column>`, or `<relation>.<column>` when there

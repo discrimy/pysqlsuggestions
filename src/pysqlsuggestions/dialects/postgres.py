@@ -128,6 +128,32 @@ QUERIES = CatalogQueries(
         """,
         row=lambda row: ColumnValue(text=str(row[0]), frequency=float(row[1]) if row[1] is not None else None),
     ),
+    # `position(... in ...)` rather than LIKE: a prefix comes from what the user
+    # typed, and `_` is both a LIKE wildcard and the commonest character in a
+    # column name — `user_` would match `usera`. Substring rather than prefix
+    # because `mail` finding `email` is behaviour the suite this library
+    # inherits already pins, and the ordering puts a true prefix first anyway.
+    column_search=Query(
+        sql="""
+            SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND pg_catalog.pg_table_is_visible(c.oid)
+              AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
+              AND position(lower($1) in lower(a.attname)) > 0
+            ORDER BY position(lower($1) in lower(a.attname)), length(a.attname), n.nspname, c.relname, a.attname
+            LIMIT 500
+        """,
+        row=lambda row: Column(
+            schema=str(row[0]),
+            table=str(row[1]),
+            name=str(row[2]),
+            type=str(row[3]),
+            position=int(row[4]),
+        ),
+    ),
 )
 
 RESERVED = ANSI_RESERVED | frozenset(

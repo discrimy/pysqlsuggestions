@@ -119,6 +119,32 @@ class DbapiCatalog:
         rows = self._rows(self._dialect.catalog_queries.functions, schema or '')
         return [row for row in rows if isinstance(row, Function)]
 
+    def all_columns(self) -> Sequence[Column] | None:
+        """
+        Always None: a live database is never worth enumerating on a keystroke.
+
+        The port offers this for catalogs small enough to hand over whole — a
+        snapshot, a fixture. A database of consequence has tens of thousands of
+        columns across hundreds of relations, and asking for all of them to
+        answer one keypress is the kind of query a completion engine must not
+        make. `search_columns` narrows first instead.
+        """
+        del self
+        return None
+
+    def search_columns(self, prefix: str, limit: int) -> Sequence[Column]:
+        """
+        Columns matching `prefix` anywhere in the name, closest first.
+
+        Empty for an empty prefix. Every column in the database is not an
+        answer to `SELECT <caret>`, and narrowing is the entire reason this
+        query exists rather than `all_columns`.
+        """
+        if not prefix:
+            return []
+        rows = self._rows(self._dialect.catalog_queries.column_search, prefix)
+        return [row for row in rows if isinstance(row, Column)][:limit]
+
     def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[ColumnValue]:
         """Frequent values of one column, from the dialect's statistics query."""
         rows = self._rows(self._dialect.catalog_queries.values, schema or '', table, column)

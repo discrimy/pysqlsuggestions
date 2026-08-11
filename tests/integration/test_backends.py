@@ -345,3 +345,47 @@ def test_clickhouse_estimates_how_big_a_relation_is(clickhouse_catalog: DbapiCat
     sized = {t.name: t.rows for t in clickhouse_catalog.tables('analytics')}
     assert sized, 'no relations came back'
     assert all(rows is None or rows >= 0 for rows in sized.values())
+
+
+def test_postgres_finds_a_column_before_any_from(postgres_catalog: DbapiCatalog) -> None:
+    """
+    `SELECT ema⌶` with nothing in the FROM: the column, and the relation it
+    would need. Substring rather than prefix, because `mail` finding `email` is
+    behaviour the inherited suite already pins.
+    """
+    assert [(c.table, c.name) for c in postgres_catalog.search_columns('mail', 5)] == [('auth_user', 'email')]
+    assert postgres_catalog.search_columns('', 5) == [], 'every column is not an answer'
+    assert postgres_catalog.all_columns() is None, 'a live database is never enumerated'
+
+    found = suggest('SELECT ema⌶', POSTGRES, postgres_catalog)
+    assert 'auth_user.email' in found
+
+
+def test_postgres_column_search_is_not_confused_by_a_wildcard(postgres_catalog: DbapiCatalog) -> None:
+    """
+    `_` is both a LIKE wildcard and the commonest character in a column name.
+
+    Matching with LIKE would make `dt_c` match `dtxc`; this one does not, which
+    is why it uses `position(... in ...)`.
+    """
+    found = {c.name for c in postgres_catalog.search_columns('dt_c', 20)}
+    assert found, 'nothing matched at all'
+    assert all('dt_c' in name for name in found), found
+
+
+def test_clickhouse_finds_a_column_before_any_from(clickhouse_catalog: DbapiCatalog) -> None:
+    """The same capability, from `system.columns`."""
+    found = [(c.table, c.name) for c in clickhouse_catalog.search_columns('report_id', 5)]
+    assert found, 'nothing matched'
+    assert all(name == 'report_id' for _, name in found), found
+    assert clickhouse_catalog.all_columns() is None
+
+
+def test_trino_offers_no_column_search(trino_catalog: DbapiCatalog) -> None:
+    """
+    Deliberately absent. Finding out would mean asking every catalog's
+    connector in turn, which is the same reason its `tables` is empty for an
+    unqualified position.
+    """
+    assert TRINO.catalog_queries.column_search is None
+    assert trino_catalog.search_columns('id', 5) == []
