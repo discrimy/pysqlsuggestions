@@ -78,7 +78,7 @@ ignore = [
 'scripts/*' = ['T201']
 
 [tool.ruff.lint.isort]
-known-first-party = ['pysqlsuggestions', 'tests']
+known-first-party = ['pysqlsuggestions', 'scripts', 'tests']
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = 'single'

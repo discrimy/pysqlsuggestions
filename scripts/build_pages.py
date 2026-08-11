@@ -2,13 +2,22 @@
 Assemble the static demo into `site/`, ready for GitHub Pages.
 
     uv build --wheel
-    uv run python scripts/build_pages.py
-    python -m http.server -d site 8001     # to check it locally
+    uv run python -m scripts.build_pages
+    python3 -m http.server -d site 8001     # to check it locally
+
+Run as a module, not as a path: this imports `scripts.vendor_pyodide`, which
+resolves only with the repository root on `sys.path`, and running a script by
+path puts `scripts/` there instead.
 
 Pages serves files and nothing else, so the site carries everything the page
-needs: the wheel and the three demo modules Pyodide imports, `demo/schema.py` among
-them. Pyodide itself comes from a CDN — it is about ten megabytes and
-versioned, so vendoring it would dwarf everything else here.
+needs: the wheel, the three demo modules Pyodide imports — `demo/schema.py`
+among them — and Pyodide itself.
+
+The runtime is 11.7 MiB against a demo payload of 135 kB, which is why it used
+to come from a CDN. It is carried now because the page's whole argument is that
+this library needs nothing at run time, and a page that cannot start without
+reaching somebody else's host is a poor way to make it. `vendor_pyodide.py`
+fetches it once, against a pinned digest.
 
 The page is the same `index.html` the server serves. Its only concession to
 this build is a pluggable transport, and `browser.js` is what fills it in.
@@ -20,6 +29,8 @@ import re
 import shutil
 import sys
 from pathlib import Path
+
+from scripts.vendor_pyodide import PYODIDE_VERSION, vendor
 
 ROOT = Path(__file__).resolve().parent.parent
 SITE = ROOT / 'site'
@@ -41,6 +52,32 @@ COPIED = (
 )
 
 BOOTSTRAP = '<script type="module" src="./browser.js"></script>'
+
+SCANNED = ('.html', '.js', '.py')
+"""
+Extensions a browser executes or imports from this site.
+
+Not the runtime directory: `pyodide-lock.json` names a URL per package, none of
+which this page fetches, and scanning it would fail every build over strings
+nothing reads.
+"""
+
+EXTERNAL = re.compile(r'https?://[^\s\'"()]+')
+
+
+def external_references(directory: Path) -> list[str]:
+    """
+    Absolute URLs in the files this site executes, as `name: url`.
+
+    Empty is the invariant. A page that reaches another host to start is a page
+    whose availability is somebody else's, and this demo's whole argument is that
+    the library needs nothing at run time.
+    """
+    found: list[str] = []
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and path.suffix in SCANNED:
+            found += [f'{path.name}: {url}' for url in EXTERNAL.findall(path.read_text())]
+    return found
 
 
 def main() -> int:
@@ -71,6 +108,7 @@ def main() -> int:
             return 1
         shutil.copy2(source, SITE / name)
     shutil.copy2(wheels[-1], SITE / wheels[-1].name)
+    vendor(SITE / 'pyodide')
 
     # Both are modules, so document order decides: the transport is installed
     # before the page's own script reads it.
@@ -95,8 +133,19 @@ def main() -> int:
     # Jekyll would otherwise swallow files it considers special.
     (SITE / '.nojekyll').write_text('')
 
-    total = sum(f.stat().st_size for f in SITE.iterdir()) // 1024
-    print(f'site/ built: {len(list(SITE.iterdir()))} files, {total} kB')  # noqa: T201
+    reaching = external_references(SITE)
+    if reaching:
+        print('site/ would reach another host:', file=sys.stderr)  # noqa: T201
+        for reference in reaching:
+            print(f'  {reference}', file=sys.stderr)  # noqa: T201
+        return 1
+
+    # Reported apart so a jump in our own payload stays visible next to a
+    # constant 11.7 MiB. Added together, the demo's size would never move again.
+    demo = [f for f in SITE.iterdir() if f.is_file()]
+    payload = sum(f.stat().st_size for f in demo) // 1024
+    runtime = sum(f.stat().st_size for f in (SITE / 'pyodide').iterdir()) / 1024 / 1024
+    print(f'site/ built: {len(demo)} files, {payload} kB + {runtime:.1f} MiB Pyodide {PYODIDE_VERSION}')  # noqa: T201
     return 0
 
 
