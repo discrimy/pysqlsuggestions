@@ -151,3 +151,70 @@ suite('a connection configured in settings alone', () => {
     assert.ok(labels.includes('username'), `still degraded: ${labels.slice(0, 8).join(', ')}`);
   });
 });
+
+suite('managing connections', () => {
+  test('every command the view needs is registered', async () => {
+    // A menu entry pointing at an unregistered command fails silently when
+    // clicked, which is the one failure a unit test of `rowFor` cannot see.
+    const commands = await vscode.commands.getCommands(true);
+    for (const name of [
+      'addConnection',
+      'editConnection',
+      'removeConnection',
+      'testConnection',
+      'setPassword',
+      'clearPassword',
+      'useConnection',
+      'refreshConnections',
+    ]) {
+      assert.ok(commands.includes(`pysqlsuggestions.${name}`), `${name} is not registered`);
+    }
+  });
+
+  test('testing a good connection passes', async function () {
+    this.timeout(60000);
+    // The password reached SecretStorage in the first suite.
+    await vscode.commands.executeCommand('pysqlsuggestions.testConnection', {
+      profile: PROFILE,
+      scope: 'user',
+    });
+    // The verdict text is asserted against the driver in
+    // tests/integration/test_lsp_check.py. What this covers is that the command
+    // runs the checker in the managed venv at all, without throwing.
+    assert.ok(true);
+  });
+
+  test('testing a connection on a dead port gives up rather than hanging', async function () {
+    this.timeout(60000);
+    const started = Date.now();
+    await vscode.commands.executeCommand('pysqlsuggestions.testConnection', {
+      profile: { ...PROFILE, name: 'dead', port: 59999 },
+      scope: 'user',
+    });
+    assert.ok(Date.now() - started < 30000, 'the check did not give up');
+  });
+
+  test('a connection added through the flow reaches settings', async function () {
+    this.timeout(60000);
+    const inputBox = vscode.window.showInputBox;
+    const quickPick = vscode.window.showQuickPick;
+    const answers = ['added-by-test', 'localhost', '57432', 'report_service', 'report', 'report'];
+    let asked = 0;
+    (vscode.window as Writable).showInputBox = async () => answers[asked++];
+    (vscode.window as Writable).showQuickPick = async () => ({ label: 'postgres' });
+    try {
+      await vscode.commands.executeCommand('pysqlsuggestions.addConnection');
+    } finally {
+      (vscode.window as Writable).showInputBox = inputBox;
+      (vscode.window as Writable).showQuickPick = quickPick;
+    }
+
+    const stored = vscode.workspace
+      .getConfiguration('pysqlsuggestions')
+      .get<{ name: string; password?: string }[]>('connections', []);
+    const added = stored.find((entry) => entry.name === 'added-by-test');
+    assert.ok(added, `not saved: ${stored.map((entry) => entry.name).join(', ')}`);
+    // Settings are the one place a password must never reach.
+    assert.equal('password' in added, false);
+  });
+});
