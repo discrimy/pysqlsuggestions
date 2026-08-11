@@ -6,6 +6,39 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A VS Code extension
+
+`editors/vscode/` drives the language server from an editor. It builds its own
+Python environment from wheels shipped inside the VSIX — no network, and the
+project's own environment is never touched — and needs Python 3.10+ on PATH.
+
+PostgreSQL only, for anything that reads a schema. The other backends' drivers
+are not pure Python, so bundling them would mean one build per operating system;
+their dialects still select, and still bring the right keywords and quoting.
+
+- **Connections are managed from a view**, not by editing JSON: add, edit,
+  remove, set and clear a password, choose which one is in use.
+
+- **A connection can be asked whether it works, and answers in words.** Every
+  kind of failure looks identical from an editor — completion simply stops
+  being schema-aware — so the message is the feature. A missing password says
+  so; pg8000's own answer is `'NoneType' object has no attribute 'decode'`,
+  which sent this project's author debugging in the wrong direction. A rejected
+  password, a database that is not there and a port with nothing behind it are
+  each named distinctly.
+
+- **Health and use are shown separately.** The icon is the last test result;
+  the label says which connection the server holds. The one in use may be the
+  broken one, and that is the case most worth seeing.
+
+- **Verdicts are never remembered across sessions.** A tick from last week is a
+  claim nobody checked today.
+
+- **Passwords have nowhere to live but secret storage.** The settings schema has
+  no field for one, a test asserts it stays that way, and removing a connection
+  removes its password — an orphan would be inherited by the next connection
+  reusing that name.
+
 ### A language server
 
 The engine now speaks LSP, so an editor can drive it. `pysqlsuggestions-lsp` is

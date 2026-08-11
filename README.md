@@ -250,11 +250,20 @@ It is a separate distribution in `lsp/`, not part of the library: a server needs
 pygls and a driver, and the library's promise is that importing it pulls in
 neither. See `lsp/README.md`.
 
+`editors/vscode/` is a VS Code extension over that server. It builds its own
+Python environment from wheels shipped inside it — nothing is downloaded, and
+the project's own environment is untouched — and manages connections from a view
+in the Explorer, passwords in secret storage rather than settings. It needs
+Python 3.10+ on PATH, and reads a schema from PostgreSQL only: the other
+backends' drivers are not pure Python, so bundling them would mean a separate
+download per operating system. See `editors/vscode/README.md`.
+
 ## Design
 
 See `docs/request-pipeline.md` for how the stages fit together,
 `docker/README.md` for what each fixture exercises, and
-`docs/superpowers/specs/` for the full design.
+`docs/superpowers/specs/` for the full design. `docs/gaps.md` records what is
+missing and why, measured against DBeaver.
 
 ## Development
 
