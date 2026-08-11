@@ -53,8 +53,18 @@ jobs:
       - name: Build the wheel the page installs
         run: uv build --wheel
 
+      # The runtime is 11.7 MiB fetched from a CDN, and the lock is what makes
+      # reusing it safe: a cache hit is only a cache hit for digests we pinned.
+      - name: Cache the Pyodide runtime
+        uses: actions/cache@v4
+        with:
+          path: .pyodide
+          key: pyodide-${{ hashFiles('scripts/pyodide.lock') }}
+
+      # Run as a module, not as a path: build_pages imports scripts.vendor_pyodide,
+      # which resolves only with the repository root on sys.path.
       - name: Assemble site/
-        run: uv run --no-project python scripts/build_pages.py
+        run: uv run --no-project python -m scripts.build_pages
 
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -190,9 +190,16 @@ under Pyodide and completes against a schema carried as data:
 
 ```bash
 uv build --wheel
-uv run python scripts/build_pages.py
-python -m http.server -d site 8001
+uv run python -m scripts.build_pages
+python3 -m http.server -d site 8001
 ```
+
+The page reaches nothing. Pyodide is carried in `site/` rather than fetched from
+a CDN, pinned by digest in `scripts/pyodide.lock`, and the build refuses to
+assemble a site whose files name any absolute URL. That costs 11.7 MiB against a
+demo payload of 135 kB, and buys a page that works on an air-gapped laptop and
+cannot be broken by somebody else's outage — which is the claim the demo exists
+to make.
 
 `.github/workflows/pages.yml` publishes `site/` to GitHub Pages when a `v*` tag
 is pushed, and refuses to if the tag and `pyproject.toml` disagree about the
