@@ -58,6 +58,37 @@ def test_a_namespace_continues_the_reference() -> None:
     assert plan.caret == 21
 
 
+def test_the_plan_says_whether_completion_should_carry_on() -> None:
+    """
+    A front end cannot work this out from the caret, and one that tries gets the
+    commonest case backwards.
+
+    `FROM pub` and `FROM pub.` both leave the caret past a dot — one written by
+    the insertion, one stepped over — so the caret sits at the end of the
+    inserted text in the first and beyond it in the second. Same meaning,
+    opposite arithmetic. The demo derived it that way and so closed its list on
+    every namespace whose dot it had had to supply, which is every namespace the
+    user had not already dotted.
+    """
+    schema = suggestion('public', Kind.SCHEMA, (14, 17))
+    assert plan_insertion('SELECT * FROM pub', schema).expects_more
+    assert plan_insertion('SELECT * FROM pub.', schema).expects_more
+
+    # A function finishes its blank and still wants the list, but only when
+    # there is an argument to type: the two questions have different answers.
+    takes = suggestion('count', Kind.FUNCTION, (7, 10), takes_arguments=True)
+    assert plan_insertion('SELECT cou', takes).expects_more
+    assert not plan_insertion('SELECT no', suggestion('now', Kind.FUNCTION, (7, 9))).expects_more
+
+    template = suggestion('SELECT  FROM  AS ', Kind.SNIPPET, (0, 0), stops=(13, 17, 7))
+    assert plan_insertion('', template).expects_more
+    filled = plan_insertion('SELECT  FROM  AS ', suggestion('orders', Kind.TABLE, (13, 13)), pending=(17, 7))
+    assert filled.expects_more, 'the caret moved to the next blank, which wants the list open'
+
+    ordinary = suggestion('created_at', Kind.COLUMN, (24, 28))
+    assert not plan_insertion('SELECT * FROM t WHERE u.crea', ordinary).expects_more
+
+
 def test_a_keyword_is_separated_from_what_precedes_it() -> None:
     """Nothing is being replaced, so the insertion supplies the space."""
     sql = 'SELECT * FROM t WHERE id > 1'
@@ -92,6 +123,7 @@ def test_a_blank_only_half_filled_keeps_its_place() -> None:
     assert applied(sql, plan) == 'SELECT  FROM warehouse. AS '
     assert plan.caret == 23, 'past the dot, still in the relation blank'
     assert plan.pending == (27, 7), 'the later blanks moved, none were consumed'
+    assert plan.expects_more, 'and the catalog needs a schema after it, so the list stays open'
 
 
 def test_apply_suggestion_is_the_same_decision() -> None:

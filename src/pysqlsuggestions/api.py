@@ -128,12 +128,19 @@ def plan_insertion(
     tail = sql[end:]
     caret: int | None = None
 
+    # Two questions with different answers. `finished` is whether accepting this
+    # fills the template blank it was offered for; `more` is whether the caret
+    # ends up somewhere completion should carry straight on from. A function
+    # taking arguments finishes its blank and still wants the list open.
+    finished = True
+    more = False
+
     if suggestion.kind is Kind.FUNCTION and close_parens and not tail.lstrip().startswith('('):
         text += '()'
         if suggestion.takes_arguments:
             caret = start + len(text) - 1
+            more = True
 
-    finished = True
     if suggestion.kind is Kind.SCHEMA:
         # A schema is never the end of a relation reference — something follows
         # it, and the dot is the only thing it can be. Leaving the caret on the
@@ -144,6 +151,7 @@ def plan_insertion(
         # Where the dot is already written the caret steps over it instead, so
         # either way the next level is what comes next.
         finished = False
+        more = True
         if tail.startswith('.'):
             caret = start + len(text) + 1
         else:
@@ -157,13 +165,18 @@ def plan_insertion(
     if suggestion.stops:
         # A template opens its own blanks, relative to where it was spliced.
         opened = tuple(start + offset for offset in suggestion.stops)
-        return Insertion(edits=edits, caret=opened[0], pending=opened[1:])
+        return Insertion(edits=edits, caret=opened[0], pending=opened[1:], expects_more=True)
 
     moved = tuple(p + len(text) - (end - start) if p >= end else p for p in pending)
     if moved and finished:
         # Accepting *is* filling that blank, so the caret goes to the next one.
-        return Insertion(edits=edits, caret=moved[0], pending=moved[1:])
-    return Insertion(edits=edits, caret=caret if caret is not None else default, pending=moved)
+        return Insertion(edits=edits, caret=moved[0], pending=moved[1:], expects_more=True)
+    return Insertion(
+        edits=edits,
+        caret=caret if caret is not None else default,
+        pending=moved,
+        expects_more=more,
+    )
 
 
 def _relation_edit(sql: str, suggestion: Suggestion, dialect: Dialect) -> Edit | None:

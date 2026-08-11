@@ -60,16 +60,16 @@ def respond(
 
 def _suggestion(suggestion: Suggestion, sql: str, dialect: Dialect, pending: Sequence[int]) -> dict[str, Any]:
     plan = plan_insertion(sql, suggestion, dialect=dialect, pending=pending)
-    # Whether the caret was left somewhere with more to say — inside a function's
-    # parentheses, past a namespace's dot, in a template blank — rather than at
-    # the natural end of what was inserted. A decision, so it is made here.
-    primary = plan.edits[-1]
     return {
         'insertion': {
             'edits': [{'span': list(e.span), 'text': e.text} for e in plan.edits],
             'caret': plan.caret,
             'pending': list(plan.pending),
-            'reopen': plan.caret != primary.span[0] + len(primary.text),
+            # Whether the list stays open. Read, never derived: comparing the
+            # caret against the end of the inserted text got this backwards for
+            # a namespace whose dot had to be written, which is every namespace
+            # the user has not already dotted.
+            'reopen': plan.expects_more,
         },
         'text': suggestion.text,
         'kind': suggestion.kind.value,

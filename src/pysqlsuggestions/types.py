@@ -328,6 +328,21 @@ class Insertion:
     Carried through rather than recomputed: a blank that was not filled keeps
     its place, and the ones after it move by however much the text grew.
     """
+    expects_more: bool = False
+    """
+    Whether the caret was left where completion should carry straight on.
+
+    True past a namespace's dot, inside a function's parentheses, and at a
+    template blank — places where accepting one suggestion asks for the next
+    rather than finishing. An editor that closes its list on every accept makes
+    the user retype a trigger to continue a reference the engine already knows
+    is incomplete.
+
+    Not inferable from `caret` and `edits`: a namespace whose dot had to be
+    written and one whose dot was already there leave the caret in the same
+    place relative to different text, and only this says they mean the same
+    thing.
+    """
 
 
 @dataclass(frozen=True, slots=True)
