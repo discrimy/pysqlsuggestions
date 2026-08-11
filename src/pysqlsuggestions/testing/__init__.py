@@ -125,6 +125,11 @@ class DialectConformance:
                 expect=(CATALOG if len(levels) >= 3 else SCHEMA,),  # noqa: PLR2004
             ),
             Case(
+                name='a join position offers what a relation position offers',
+                sql=f'SELECT * FROM {users} AS u JOIN ',
+                expect=(CATALOG if len(levels) >= 3 else SCHEMA,),  # noqa: PLR2004
+            ),
+            Case(
                 name='both sides of a join are in scope',
                 sql=f'SELECT * FROM {users} AS u JOIN {orders} AS o ON o.user_id = u.id WHERE o.',
                 expect=('total',),

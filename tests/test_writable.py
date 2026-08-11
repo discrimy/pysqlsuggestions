@@ -25,7 +25,7 @@ import re
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.types import Function
+from pysqlsuggestions.types import ForeignKey, Function
 
 CATALOG = MemoryCatalog(
     {
@@ -41,6 +41,16 @@ CATALOG = MemoryCatalog(
         ],
     },
     functions=[Function(schema='pg_catalog', name='count', args='*', result='bigint')],
+    foreign_keys=[
+        ForeignKey(
+            schema='public',
+            table='orders',
+            columns=('user_id',),
+            ref_schema='public',
+            ref_table='auth_user',
+            ref_columns=('id',),
+        ),
+    ],
 )
 
 GOLDEN = (

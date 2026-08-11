@@ -339,14 +339,14 @@ SQL rather than one identifier, so an accepted proposal leaving a statement
 Postgres still parses is the property most worth proving. Those harnesses found
 twenty-seven defects; a feature that writes `JOIN … ON …` belongs in them.
 
-With one correction, found while planning. `test_acceptance.py` walks every
-caret in *complete* statements, so any multi-token insertion collides with the
-text after the caret whatever its own merits — a correct join clause spliced in
-front of an existing one is a syntax error about the collision, not about the
-proposal. That is why `Kind.SNIPPET` is already excluded there, and `Kind.JOIN`
-has to be excluded for the same reason. The real judgement happens in a
-dedicated test in the same file, over prefixes with nothing following the caret,
-which is where a synthesized clause can be judged on its own.
+This section was amended twice while planning, and the second amendment was
+wrong. The worry was that `test_acceptance.py` walks carets in complete
+statements, so a multi-token insertion would collide with the text after the
+caret and be reported as a syntax error about the collision rather than about
+the proposal — the reason `Kind.SNIPPET` is excluded there. It does not: the
+harness completes against `statement[:caret]`, so nothing follows the caret and
+a synthesized clause is judged on its own. `Kind.JOIN` stays judgeable, and the
+harness needs no change at all beyond the constraints reaching it.
 
 ### 9.3 Against the container
 
