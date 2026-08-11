@@ -233,6 +233,23 @@ MemoryCatalog(tables, catalogs={'warehouse': ['public', 'revenue']})
 That is a `MemoryCatalog` feature rather than a demo one: anyone pre-fetching a
 Trino schema into a snapshot needed it.
 
+## In an editor
+
+The engine speaks LSP, so any client can drive it:
+
+```bash
+uv run python -m pysqlsuggestions_lsp
+```
+
+The connection profile arrives in `initializationOptions`. The database is not
+contacted until the first completion request — opening a document opens no
+socket — and an unreachable one degrades to completing from the statement alone
+rather than failing the request.
+
+It is a separate distribution in `lsp/`, not part of the library: a server needs
+pygls and a driver, and the library's promise is that importing it pulls in
+neither. See `lsp/README.md`.
+
 ## Design
 
 See `docs/request-pipeline.md` for how the stages fit together,
