@@ -153,7 +153,7 @@ Matching is unaffected: it runs against the column name, so `usern` still finds
 
 The same page, with no server and no database — the library has no runtime
 dependencies and its core is pure, so the whole pipeline loads into the page
-under Pyodide and completes against a snapshot of the docker fixtures:
+under Pyodide and completes against a schema carried as data:
 
 ```bash
 uv build --wheel
@@ -161,8 +161,14 @@ uv run python scripts/build_pages.py
 python -m http.server -d site 8001
 ```
 
-`.github/workflows/pages.yml` publishes `site/` to GitHub Pages on every push
-to `main`.
+`.github/workflows/pages.yml` publishes `site/` to GitHub Pages when a `v*` tag
+is pushed, and refuses to if the tag and `pyproject.toml` disagree about the
+version. The page installs a wheel, so the published demo is a released
+version's behaviour rather than whatever `main` reached this morning:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
 
 The schema is `demo/schema.py` — a small flight-booking database invented for
 the demo, written as data rather than exported from anywhere. That matters:

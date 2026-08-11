@@ -6,15 +6,16 @@ name: demo
 # library under Pyodide and completes against `demo/schema.py`, a schema
 # invented for the demo and carried as data. That is why this job needs no
 # services — and why nothing here can reach a real database, which is the point.
+#
+# A tag is what publishes. The page installs a wheel of this library, so what
+# the demo shows is one released version's behaviour and not whatever main
+# reached this morning — someone reporting that the demo misbehaves can say
+# which version misbehaved. `workflow_dispatch` remains for republishing the
+# same tag when the deploy, rather than the build, is what failed.
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'src/**'
-      - 'demo/**'
-      - 'scripts/build_pages.py'
-      - '.github/workflows/pages.yml'
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -31,6 +32,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # The wheel takes its version from pyproject.toml, never from the tag. Tag
+      # v0.1.1 on a tree that still reads 0.1.0 and the demo publishes under one
+      # version while running another — a disagreement nothing downstream can
+      # see, and the demo is where a version claim gets read most casually.
+      - name: The tag and the package agree on the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(grep -m1 "^version = " pyproject.toml | cut -d"'" -f2)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME but pyproject.toml says $version"
+            exit 1
+          fi
 
       - uses: astral-sh/setup-uv@v5
         with:
