@@ -78,19 +78,30 @@ class Demo:
         ]
         return json.dumps({'backends': rows})
 
-    def suggest(self, sql: str, caret: int, backend: str, limit: int, pending: list[int] | None = None) -> str:
-        """Suggestions plus the derived Request, as JSON, in the server's shape."""
+    def suggest(self, body: str) -> str:
+        """
+        Suggestions plus the derived Request, as JSON, in the server's shape.
+
+        One JSON argument rather than one argument per field, and the same body
+        the server's route receives. Spelling the fields out here meant naming
+        them again in the page's call, where a field could be — and was —
+        forgotten silently: `pending` has a default, so dropping it crossing
+        into Pyodide raised nothing and merely stopped the template advancing.
+        Carrying the body whole leaves nothing to keep in step.
+        """
+        request = json.loads(body)
+        backend = str(request.get('backend', 'postgres'))
         dialect = DIALECTS.get(backend)
         catalog = self._catalogs.get(backend)
         if dialect is None or catalog is None:
             return json.dumps({'error': f'unknown backend {backend!r}'})
         found = respond(
-            sql,
-            caret,
+            str(request.get('sql', '')),
+            int(request.get('caret', 0)),
             dialect,
             catalog,
             cache=self._caches[backend],
-            limit=limit,
-            pending=tuple(pending or ()),
+            limit=int(request.get('limit', 25)),
+            pending=tuple(request.get('pending') or ()),
         )
         return json.dumps(found)

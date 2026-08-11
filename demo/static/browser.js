@@ -43,9 +43,13 @@ async function boot() {
 
   const demo = py.runPython('from demo.browser import Demo\nDemo()');
 
+  // The body goes across whole, exactly as the server route receives it. Listing
+  // the fields here instead meant this call had to be updated whenever the page
+  // sent something new, and when it was not — `pending`, which has a default on
+  // the other side — nothing failed: template blanks simply stopped advancing.
   window.DRIVER = {
     backends: async () => JSON.parse(demo.backends()),
-    suggest: async (body) => JSON.parse(demo.suggest(body.sql, body.caret, body.backend, body.limit)),
+    suggest: async (body) => JSON.parse(demo.suggest(JSON.stringify(body))),
   };
   say('', true);
   return window.DRIVER;
