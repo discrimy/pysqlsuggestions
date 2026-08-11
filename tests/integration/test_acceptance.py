@@ -67,7 +67,6 @@ KNOWN = frozenset(
     {
         # A word offered where its own clause has no room for it: DISTINCT may
         # only follow SELECT itself, and `*` takes no alias.
-        'SELECT count(*) AS n ',
         'SELECT *',
         'SELECT * ',
         # UPDATE's own shape: SET comes before FROM and WHERE, and its target

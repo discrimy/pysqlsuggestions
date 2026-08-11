@@ -110,6 +110,19 @@ class Clause:
     that are not clauses in their own right — `AS`, `AND`, `ASC` — plus the
     canonical clause order; anything a dialect adds arrives through `follows`.
     """
+    before_the_item: tuple[str, ...] = ()
+    """
+    Words that stand between this clause and its first item.
+
+    `DISTINCT` may only follow SELECT itself: `SELECT * DISTINCT` and
+    `SELECT id, DISTINCT` are both syntax errors. Listing it in `followed_by`
+    put it in the one place it cannot go and nowhere it can — it was offered
+    after an item was written, and typing `dis` at the start of a select list
+    found nothing.
+
+    Offered alongside what the clause suggests rather than instead of it, since
+    a column is the likelier answer in that position either way.
+    """
     opens_an_item: bool = False
     """
     Whether this clause can only begin an item, never follow a finished one.

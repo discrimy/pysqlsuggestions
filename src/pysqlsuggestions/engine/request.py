@@ -16,6 +16,7 @@ from pysqlsuggestions.engine.analyse import (
     after_as,
     after_cast,
     after_operand,
+    at_the_clause_start,
     case_position,
     clause_at,
     clauses_written,
@@ -62,7 +63,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         return _inside_a_literal(tokens, caret, clause, scope, comparand)
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
-    continues, only = _continues(tokens, lo, hi, caret, dialect)
+    continues, only = _continues(tokens, lo, hi, caret, dialect, clause, prefix)
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
     return Request(
         kinds=_continued_kinds(
@@ -184,6 +185,8 @@ def _continues(
     hi: int,
     caret: int,
     dialect: Dialect,
+    clause: str | None,
+    prefix: str,
 ) -> tuple[tuple[str, ...], bool]:
     """
     The words that finish a half-written construct here, and whether they are all.
@@ -199,6 +202,15 @@ def _continues(
     found = continues_a_keyword(tokens, caret, dialect)
     if found:
         return found, True
+
+    # Words that stand between a clause and its first item — `SELECT DISTINCT`.
+    # Only once something is typed: `SELECT ` is the commonest caret in the
+    # language and a column is nearly always what belongs there, so putting a
+    # rarely-wanted word above every column costs more than it can return.
+    # Behind a prefix it costs nothing and `SELECT dis` still finds it.
+    opening = dialect.clauses.get(clause) if clause else None
+    if prefix and opening is not None and opening.before_the_item and at_the_clause_start(tokens, caret, opening.name):
+        return opening.before_the_item, False
 
     where = case_position(tokens, caret)
     if where is None:

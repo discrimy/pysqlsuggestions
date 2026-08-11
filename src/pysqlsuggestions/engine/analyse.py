@@ -262,6 +262,34 @@ def _half_written_clauses(dialect: Dialect) -> Mapping[tuple[str, ...], tuple[st
     return {head: tuple(sorted(words)) for head, words in table.items()}
 
 
+def at_the_clause_start(tokens: Sequence[Token], caret: int, clause: str) -> bool:
+    """
+    Whether nothing has been written in `clause` yet.
+
+    True at `SELECT ⌶`, false at `SELECT id, ⌶` and `SELECT * ⌶` — a comma and a
+    star are not words, so the run of words before the caret is empty rather
+    than the clause's own name. What stands between a clause and its first item
+    belongs here and only here.
+    """
+    return _words_before(tokens, caret) == tuple(clause.upper().split())
+
+
+def _words_before(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:
+    """The unbroken run of plain words immediately left of the caret, in order."""
+    index = _index_before(tokens, caret)
+    if index >= 0 and tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
+        index -= 1
+    written: list[str] = []
+    cursor = _skip_back(tokens, index)
+    while cursor >= 0:
+        token = tokens[cursor]
+        if token.type is not TokenType.IDENT or token.quoted:
+            break
+        written.append(token.value.upper())
+        cursor = _skip_back(tokens, cursor - 1)
+    return tuple(reversed(written))
+
+
 def continues_a_keyword(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple[str, ...]:
     """
     The words that finish the half-written construct left of the caret, if any.

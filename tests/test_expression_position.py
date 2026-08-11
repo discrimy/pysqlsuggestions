@@ -237,3 +237,24 @@ def test_two_spellings_of_the_same_limit_are_one_choice() -> None:
     """
     assert 'FETCH' not in texts('SELECT * FROM events ORDER BY id LIMIT 10 ⌶')
     assert 'OFFSET' in texts('SELECT * FROM events ORDER BY id LIMIT 10 ⌶')
+
+
+def test_a_word_that_precedes_the_item_is_offered_before_one_and_behind_a_prefix() -> None:
+    """
+    `DISTINCT` may only follow SELECT itself — `SELECT * DISTINCT` and
+    `SELECT id, DISTINCT` are both syntax errors.
+
+    Listing it among what follows the clause put it in the one place it cannot
+    go, and in none of the places it can: after an item it was offered and
+    rejected, and `SELECT dis` found nothing at all.
+
+    Behind a prefix rather than offered outright, because `SELECT ` is the
+    commonest caret in the language and a column is nearly always what belongs
+    there. A rarely-wanted word above every column costs more than it returns;
+    behind two typed letters it costs nothing.
+    """
+    assert 'DISTINCT' not in texts('SELECT * ⌶')
+    assert 'DISTINCT' not in texts('SELECT count(*) AS n ⌶')
+    assert 'DISTINCT' not in texts('SELECT ⌶'), 'a column is what belongs here'
+    assert texts('SELECT dis⌶') == ['DISTINCT']
+    assert texts('SELECT id, dis⌶') == [], 'and never after an item, however it is spelled'

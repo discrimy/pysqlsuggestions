@@ -79,7 +79,8 @@ CLAUSES = ClauseModel(
         Clause(
             name='SELECT',
             suggests=COLUMN_EXPRESSION,
-            followed_by=('AS', 'DISTINCT', *_onwards('FROM')),
+            followed_by=('AS', *_onwards('FROM')),
+            before_the_item=('DISTINCT',),
             aliases_with='AS',
         ),
         Clause(
