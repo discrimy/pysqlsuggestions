@@ -127,6 +127,20 @@ def apply_suggestion(
         if suggestion.takes_arguments:
             caret = start + len(text) - 1
 
+    if suggestion.kind is Kind.SCHEMA:
+        # A schema is never the end of a relation reference — something follows
+        # it, and the dot is the only thing it can be. Leaving the caret on the
+        # name means typing a separator the engine already knew was coming, and
+        # in a three-level namespace it means a reference that looks finished
+        # and is not: `FROM warehouse` with the caret past it reads as a table.
+        #
+        # Where the dot is already written the caret steps over it instead, so
+        # either way the next level is what comes next.
+        if tail.startswith('.'):
+            caret = start + len(text) + 1
+        else:
+            text += '.'
+
     return sql[:start] + text + tail, caret if caret is not None else start + len(text)
 
 

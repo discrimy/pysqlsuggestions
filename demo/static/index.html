@@ -354,16 +354,25 @@ function accept(i) {
     // Only park inside when there is an argument to type. `now()` is finished.
     if (s.takes_arguments) caret = from + insert.length - 1;
   }
+  // Mirrors api.apply_suggestion: a schema is never the end of a reference, so
+  // it brings its own dot and the caret lands past it, ready for the next level.
+  const unfinished = s.kind === 'schema';
+  if (unfinished) {
+    if (tail.startsWith('.')) caret = from + insert.length + 1;
+    else insert += '.';
+  }
   if (s.stops && s.stops.length) {
     // A template brings its own stops, relative to the insertion point.
     pending = s.stops.map((o) => from + o);
     caret = pending.shift();
   } else if (pending.length) {
-    // Filling one stop must not discard the rest — just move the ones after it.
     const delta = insert.length - (to - from);
     pending = pending.map((p) => (p >= to ? p + delta : p));
-    // Accepting *is* filling that blank, so go straight to the next one.
-    caret = pending.shift();
+    // A schema has not filled the blank — `FROM warehouse.` still needs its
+    // table — so the stop stays where it is and the caret waits there. Anything
+    // else finished the slot, so move on to the next.
+    if (!unfinished) caret = pending.shift();
+    else if (caret === null) caret = from + insert.length;
   }
 
   sql.value = sql.value.slice(0, from) + insert + tail;
@@ -377,8 +386,9 @@ function accept(i) {
   active = -1;
   sql.focus();
   // Accepting `count()` parks the caret between the parens, where the arguments
-  // are worth offering. Accepting a name finishes it, so stay closed.
-  request(!parked);
+  // are worth offering, and a schema leaves the next namespace level to pick.
+  // Accepting a name finishes it, so stay closed.
+  request(!parked && !unfinished);
 }
 
 function move(delta) {

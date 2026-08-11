@@ -182,3 +182,32 @@ def test_a_separator_is_not_invented_where_one_would_break_the_text() -> None:
     """A dot, an open paren and a space all already separate; only a name-to-name join needs help."""
     assert accept_first('SELECT * FROM auth_user u WHERE u.')[0].startswith('SELECT * FROM auth_user u WHERE u.')
     assert accept_first('SELECT count(')[0].startswith('SELECT count(')
+
+
+def test_accepting_a_namespace_continues_the_reference() -> None:
+    """
+    A schema is never the end of a relation reference, so it brings its own dot.
+
+    `FROM public⌶` accepting `public` gives `public.`, with the caret past the
+    dot and the next level ready to complete. Leaving the caret on `public`
+    means the author types a separator the engine already knew was coming — and
+    in a three-level namespace it means a reference that looks finished and is
+    not.
+    """
+    sql = 'SELECT * FROM pub'
+    schema = Suggestion(text='public', kind=Kind.SCHEMA, replace_span=(14, 17), score=1.0)
+    assert apply_suggestion(sql, schema) == ('SELECT * FROM public.', 21)
+
+
+def test_accepting_a_relation_does_not() -> None:
+    """The counterpart: a table finishes the reference, and a trailing dot would not parse."""
+    sql = 'SELECT * FROM ord'
+    table = Suggestion(text='orders', kind=Kind.TABLE, replace_span=(14, 17), score=1.0)
+    assert apply_suggestion(sql, table) == ('SELECT * FROM orders', 20)
+
+
+def test_a_namespace_already_followed_by_a_dot_gains_no_second_one() -> None:
+    """Re-accepting inside `public.` must not produce `public..`."""
+    sql = 'SELECT * FROM pub.orders'
+    schema = Suggestion(text='public', kind=Kind.SCHEMA, replace_span=(14, 17), score=1.0)
+    assert apply_suggestion(sql, schema) == ('SELECT * FROM public.orders', 21)
