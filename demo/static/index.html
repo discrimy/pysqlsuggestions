@@ -91,6 +91,13 @@
 
   .boot { color: var(--muted); font-size: 12px; margin: 6px 0; }
   .boot[data-done="yes"] { display: none; }
+  /* Only present while a percentage is: `say` builds the bar and drops it again
+     when the phase goes back to plain text, so a finished download never leaves
+     a full bar sitting there looking stalled. */
+  .boot .track { height: 4px; margin-top: 5px; border-radius: 2px; background: var(--line);
+                 overflow: hidden; max-width: 320px; }
+  .boot .track i { display: block; height: 100%; background: var(--accent);
+                   transition: width 120ms linear; }
 
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
   .panel h2 {
