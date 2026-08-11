@@ -79,7 +79,7 @@ def join_conditions(scope: Scope | None, edges: Sequence[ForeignKey], dialect: D
                     detail=f'joins {earlier.declared_name}',
                     position=link[4],
                     snippet=condition,
-                    label=_fk_column(link),
+                    match_text=_fk_column(link),
                     note=_note(link),
                 ),
             )
@@ -106,7 +106,7 @@ def condition_columns(relation: Relation, edges: Sequence[ForeignKey], dialect: 
                 detail=f'joins {link[2]}',
                 position=link[4],
                 snippet=quote_if_needed(name, dialect),
-                label=name,
+                match_text=name,
                 note=_note(link),
             ),
         )
@@ -165,7 +165,7 @@ def _clause_candidate(
         detail=f'joins {relation.declared_name}',
         position=direction,
         snippet=snippet,
-        label=target_table,
+        match_text=target_table,
         note=_note(link),
     )
 

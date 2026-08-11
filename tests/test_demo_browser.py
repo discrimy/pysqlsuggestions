@@ -112,6 +112,9 @@ def test_a_join_proposal_and_its_note_cross_the_boundary() -> None:
     assert proposals, 'the demo schema declares constraints, so this position has proposals'
     assert proposals[0]['text'] == 'flight f ON b.flight_id = f.id'
     assert proposals[0]['note'] == 'fk: flight.id'
+    # What the page puts in the list. It showed a bare `flight` while matching and
+    # display shared one field, so two proposals to one relation read identically.
+    assert proposals[0]['label'] == 'flight f ON b.flight_id = f.id'
 
 
 def test_clickhouse_and_trino_offer_no_join_proposals() -> None:

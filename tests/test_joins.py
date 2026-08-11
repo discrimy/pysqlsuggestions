@@ -57,7 +57,7 @@ def test_forward_edge_proposes_the_referenced_relation() -> None:
     """
     found = relation_joins(scope_of(('reports_report', 'r')), [AUTHOR], POSTGRES)
     assert [c.snippet for c in found] == ['auth_user au ON r.author_id = au.id']
-    assert found[0].label == 'auth_user'
+    assert found[0].match_text == 'auth_user'
     assert found[0].kind is Kind.JOIN
     assert found[0].note == 'fk: auth_user.id'
     assert found[0].position == 0
@@ -175,7 +175,7 @@ def test_condition_pairs_the_latest_relation_with_an_earlier_one() -> None:
     found = join_conditions(scope_of(('reports_report', 'r'), ('auth_user', 'u')), [AUTHOR], POSTGRES)
     assert [c.snippet for c in found] == ['r.author_id = u.id']
     assert found[0].kind is Kind.JOIN
-    assert found[0].label == 'author_id'
+    assert found[0].match_text == 'author_id'
     assert found[0].note == 'fk: auth_user.id'
 
 
@@ -183,7 +183,7 @@ def test_condition_reads_earlier_relation_first() -> None:
     """Text order follows the statement, not the constraint's direction."""
     found = join_conditions(scope_of(('auth_user', 'u'), ('reports_report', 'r')), [AUTHOR], POSTGRES)
     assert [c.snippet for c in found] == ['u.id = r.author_id']
-    assert found[0].label == 'author_id'
+    assert found[0].match_text == 'author_id'
 
 
 def test_condition_needs_two_relations() -> None:

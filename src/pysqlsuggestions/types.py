@@ -305,6 +305,16 @@ class Candidate:
     """
     label: str | None = None
     """What to show in a list, when the text to insert would read poorly there."""
+    match_text: str | None = None
+    """
+    What matching runs against, when that is neither the text nor the label.
+
+    A join proposal inserts a whole clause and shows one, but is hunted for by the
+    name of the relation it joins — `flight`, not `flight f ON b.flight_id = f.id`.
+    Without a field of its own that name had to go in `label`, which is what a
+    front end displays, so the list showed a bare relation name and two proposals
+    to the same table were indistinguishable.
+    """
     qualifier: str | None = None
     """
     Relation label to prefix on insertion, when a bare name would be ambiguous.

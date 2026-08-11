@@ -67,8 +67,15 @@ def rank(
     scored: list[tuple[float, int, str, Suggestion]] = []
 
     for candidate in candidates:
-        # A snippet matches on its label — nobody types the expanded text.
-        strength = _match_strength(candidate.label or candidate.text, request.prefix, candidate.kind)
+        # What is hunted for is not always what is shown, and neither is always
+        # what gets inserted. A snippet matches on its label — nobody types the
+        # expanded text — and a join proposal, which shows the clause it writes,
+        # matches on the relation name through `match_text`.
+        strength = _match_strength(
+            candidate.match_text or candidate.label or candidate.text,
+            request.prefix,
+            candidate.kind,
+        )
         if strength is None:
             continue
         score = strength + _kind_bonus(candidate.kind, kind_rank, len(request.kinds))
