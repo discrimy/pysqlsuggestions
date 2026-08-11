@@ -24,6 +24,7 @@ classifiers = [
 # psycopg2 rather than silently changing what `postgres` means.
 [project.optional-dependencies]
 psycopg2 = ['psycopg2-binary>=2.9']
+pg8000 = ['pg8000>=1.30']
 clickhouse-driver = ['clickhouse-driver>=0.2.9']
 trino = ['trino>=0.328']
 demo = ['fastapi>=0.110', 'uvicorn>=0.29']
@@ -41,6 +42,16 @@ build-backend = 'hatchling.build'
 [tool.hatch.build.targets.wheel]
 packages = ['src/pysqlsuggestions']
 
+# The language server is a second distribution rather than a subpackage: it
+# imports pygls and a driver, and `test_import_pulls_in_no_drivers` exists to
+# keep both out of `import pysqlsuggestions`. Same tree, same version, separate
+# wheel — which is also what lets the extension bundle one without the other.
+[tool.uv.workspace]
+members = ['lsp']
+
+[tool.uv.sources]
+pysqlsuggestions-lsp = { workspace = true }
+
 [dependency-groups]
 dev = [
     'pytest>=8.4',
@@ -55,11 +66,14 @@ dev = [
     'trino>=0.328',
     'fastapi>=0.110',
     'uvicorn>=0.29',
+    # The language server and the pure-Python driver the extension bundles.
+    'pysqlsuggestions-lsp',
+    'pg8000>=1.30',
 ]
 
 [tool.ruff]
 line-length = 120
-src = ['src', 'tests']
+src = ['src', 'tests', 'lsp']
 # ruff formats Python code blocks inside Markdown; the design docs are prose and
 # their snippets are illustrative, so keep it away from them.
 extend-exclude = ['*.md']
@@ -78,7 +92,7 @@ ignore = [
 'scripts/*' = ['T201']
 
 [tool.ruff.lint.isort]
-known-first-party = ['pysqlsuggestions', 'scripts', 'tests']
+known-first-party = ['pysqlsuggestions', 'pysqlsuggestions_lsp', 'scripts', 'tests']
 
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = 'single'
@@ -91,7 +105,7 @@ quote-style = 'single'
 
 [tool.mypy]
 strict = true
-files = ['src', 'tests']
+files = ['src', 'tests', 'lsp']
 
 [tool.pytest.ini_options]
 testpaths = ['tests']

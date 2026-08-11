@@ -67,3 +67,32 @@ def test_engine_never_imports_the_io_layer() -> None:
         if FORBIDDEN_FOR_ENGINE & _imported_modules(path)
     }
     assert not offenders, f'engine imported the I/O layer: {offenders}'
+
+
+def test_lsp_version_matches_the_library() -> None:
+    """
+    The server and the library are released together, so their versions agree.
+
+    The extension bundles wheels built from this tree. A server wheel claiming a
+    version the library wheel does not is a bug report nobody can reproduce,
+    because the two numbers in it describe different code.
+    """
+    root = re.search(r"^version = '([^']+)'", (ROOT / 'pyproject.toml').read_text(), re.M)
+    server = re.search(r"^version = '([^']+)'", (ROOT / 'lsp' / 'pyproject.toml').read_text(), re.M)
+    assert root is not None, 'pyproject.toml declares no version'
+    assert server is not None, 'lsp/pyproject.toml declares no version'
+    assert root.group(1) == server.group(1)
+
+
+def test_the_library_does_not_import_the_server() -> None:
+    """
+    The dependency runs one way: the server imports the library, never the reverse.
+
+    `lsp/` may import drivers and pygls, which is exactly why the library must
+    not reach into it. An import added in the wrong direction would drag both
+    into `import pysqlsuggestions` and break the zero-dependency claim from a
+    file that looks unrelated to it.
+    """
+    for path in (ROOT / 'src' / 'pysqlsuggestions').rglob('*.py'):
+        source = path.read_text(encoding='utf-8')
+        assert 'pysqlsuggestions_lsp' not in source, f'{path} names the server package'
