@@ -28,7 +28,7 @@ async function boot() {
   await py.loadPackage('micropip');
   const micropip = py.pyimport('micropip');
   // Wheel and demo sources sit beside this file; the build step puts them there.
-  await micropip.install(new URL('./pysqlsuggestions-0.1.0-py3-none-any.whl', import.meta.url).href);
+  await micropip.install(new URL('./pysqlsuggestions-0.1.1-py3-none-any.whl', import.meta.url).href);
 
   say('loading the demo schema…');
   const modules = ['payload.py', 'schema.py', 'browser.py'];
