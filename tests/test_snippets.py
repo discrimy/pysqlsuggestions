@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.api import apply_suggestion, complete
+from pysqlsuggestions.api import apply_suggestion, complete, plan_insertion
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.rank import expand_snippet
-from pysqlsuggestions.types import Kind
+from pysqlsuggestions.types import Kind, Suggestion
 
 CATALOG = MemoryCatalog({('public', 'auth_user'): [('id', 'bigint'), ('username', 'varchar')]})
 
@@ -82,11 +82,45 @@ def test_the_first_stop_is_the_relation() -> None:
     assert new_sql[:caret] == 'SELECT  FROM '
 
 
-def test_the_stops_run_relation_then_alias_then_columns() -> None:
-    """A front end that can cycle them needs them all, relative to the insertion point."""
+def test_the_stops_run_relation_then_alias_then_columns_then_the_end() -> None:
+    """
+    A front end that can cycle them needs them all, relative to the insertion
+    point — the last of which is not a blank to fill but where to be left once
+    they are filled.
+    """
     chosen = next(s for s in complete('', 0, POSTGRES, CATALOG) if s.kind is Kind.SNIPPET)
     text = chosen.text
-    assert [text[:s] for s in chosen.stops] == ['SELECT  FROM ', 'SELECT  FROM  AS ', 'SELECT ']
+    assert [text[:s] for s in chosen.stops] == [
+        'SELECT  FROM ',
+        'SELECT  FROM  AS ',
+        'SELECT ',
+        'SELECT  FROM  AS ',
+    ]
+
+
+def test_filling_the_last_blank_leaves_the_caret_past_the_whole_template() -> None:
+    """
+    The blank answered last is in the middle of the statement.
+
+    Stopping there hands back a finished query with the caret inside its select
+    list, so the next thing typed lands in the middle of a clause that is already
+    complete. What the author wants next is a WHERE or a JOIN, which go at the
+    end — and the end is not any of the three blanks, which is why the template
+    has to name it.
+    """
+    chosen = next(s for s in complete('', 0, POSTGRES, CATALOG) if s.kind is Kind.SNIPPET)
+    plan = plan_insertion('', chosen)
+    sql = chosen.text
+
+    for text, kind in (('auth_user', Kind.TABLE), ('u', Kind.ALIAS), ('u.id', Kind.COLUMN)):
+        filling = Suggestion(text=text, kind=kind, replace_span=(plan.caret, plan.caret), score=1.0)
+        plan = plan_insertion(sql, filling, pending=plan.pending)
+        edit = plan.edits[-1]
+        sql = sql[: edit.span[0]] + edit.text + sql[edit.span[1] :]
+
+    assert sql == 'SELECT u.id FROM auth_user AS u'
+    assert plan.pending == (), 'nothing left to visit'
+    assert plan.caret == len(sql), 'so the caret is past the whole thing, not in the select list'
 
 
 def test_each_stop_is_answerable_when_it_is_reached() -> None:

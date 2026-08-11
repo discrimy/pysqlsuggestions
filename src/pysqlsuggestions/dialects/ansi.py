@@ -192,7 +192,12 @@ TEMPLATES = (
         # column until it knows the table, and the alias second because the
         # generated one is derived from that relation's name. The select list is
         # last, by which point both are in scope.
-        snippet='SELECT $3 FROM $1 AS $2',
+        #
+        # `$0` is where filling the last blank leaves the caret. Without it the
+        # caret stays in the select list — the blank that happens to be answered
+        # last is in the middle of the statement, so finishing the template would
+        # otherwise strand the caret there with the query already complete.
+        snippet='SELECT $3 FROM $1 AS $2$0',
         detail='a whole query: relation first, then its alias, then the columns',
     ),
 )
