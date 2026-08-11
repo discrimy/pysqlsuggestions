@@ -21,15 +21,88 @@ const RUNTIME_BYTES = 0;
 
 const status = () => document.getElementById('boot');
 
-function say(text, done) {
+function say(text, done, percent) {
   const el = status();
   if (!el) return;
-  el.textContent = text;
   el.dataset.done = done ? 'yes' : 'no';
+  if (percent === undefined) {
+    el.textContent = text;
+    return;
+  }
+  // Rebuilt rather than mutated: the bar exists only while a percentage does,
+  // and every other caller sets plain text.
+  el.textContent = '';
+  const label = document.createElement('span');
+  label.textContent = `${text} ${percent}%`;
+  const track = document.createElement('div');
+  track.className = 'track';
+  track.setAttribute('role', 'progressbar');
+  track.setAttribute('aria-valuenow', String(percent));
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  const fill = document.createElement('i');
+  fill.style.width = `${percent}%`;
+  track.append(fill);
+  el.append(label, track);
+}
+
+// Fetch the runtime ourselves so the download can be counted, then let
+// loadPyodide ask for the same files and find them in the browser cache — Pages
+// sends `cache-control: max-age=600`, so a second request inside one page load
+// is a hit. With devtools' "disable cache" ticked it is not, and the runtime
+// downloads twice; that is a developer's situation, not a visitor's.
+//
+// The bar covers this phase alone because it is the only one with a
+// denominator. Compiling the wasm and starting the interpreter follow as text.
+const RUNTIME_FILES = [
+  'pyodide.asm.wasm',
+  'python_stdlib.zip',
+  'pyodide.asm.js',
+  'pyodide-lock.json',
+  'pyodide.mjs',
+];
+
+async function prefetch() {
+  if (!RUNTIME_BYTES || typeof ReadableStream === 'undefined') return;
+  let read = 0;
+  let shown = -1;
+  const show = () => {
+    // Clamped: a total that disagrees with what arrives must not print 103%.
+    const percent = Math.min(100, Math.round((read / RUNTIME_BYTES) * 100));
+    // Only when the number changes. A chunk arrives every few kilobytes, so
+    // repainting per chunk would rebuild these nodes some hundreds of times to
+    // draw the same figure — and the repaint would compete with the download it
+    // is reporting on.
+    if (percent === shown) return;
+    shown = percent;
+    say('loading Python', false, percent);
+  };
+  show();
+  await Promise.all(
+    RUNTIME_FILES.map(async (name) => {
+      const response = await fetch(`${PYODIDE}${name}`);
+      const reader = response.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        read += value.length;
+        show();
+      }
+    }),
+  );
 }
 
 async function boot() {
   say('loading Python…');
+  // Never lets the demo fail: an unsupported stream, a rejected fetch, anything
+  // — the page falls through to the load below and boots as it always did,
+  // without a bar.
+  await prefetch().catch(() => {});
+
+  // Its own phase because it is its own two seconds. Folded into the message
+  // above, the text sat unchanged past the point where the download had plainly
+  // finished, which is most of why the boot read as a hang.
+  say('starting Python…');
   const { loadPyodide } = await import(`${PYODIDE}pyodide.mjs`);
   const py = await loadPyodide({ indexURL: PYODIDE });
 
