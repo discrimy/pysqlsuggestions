@@ -72,3 +72,26 @@ def test_the_page_hands_the_body_over_intact() -> None:
     the shape this refuses.
     """
     assert 'demo.suggest(JSON.stringify(body))' in DRIVER.read_text()
+
+
+def test_a_namespace_is_called_what_the_backend_calls_it() -> None:
+    """
+    One `Kind.SCHEMA` covers every level of a dotted path, because they behave
+    identically. The word for it does not: labelling a Trino catalog `schema`
+    tells the reader something untrue about the server they are connected to.
+
+    Which word depends on how much of the path is written, so the same dialect
+    answers differently at different depths — and the dialects have carried
+    these words all along, so nothing here decides them.
+    """
+    trino = json.loads(Demo().suggest(body(sql='SELECT * FROM ', caret=14, backend='trino')))
+    assert trino['kind_words']['schema'] == 'catalog'
+
+    deeper = json.loads(Demo().suggest(body(sql='SELECT * FROM events.', caret=21, backend='trino')))
+    assert deeper['kind_words']['schema'] == 'schema', 'the second level of three really is a schema'
+
+    house = json.loads(Demo().suggest(body(sql='SELECT * FROM ', caret=14, backend='clickhouse')))
+    assert house['kind_words']['schema'] == 'database'
+
+    postgres = json.loads(Demo().suggest(body(sql='SELECT * FROM ', caret=14)))
+    assert postgres['kind_words']['schema'] == 'schema'

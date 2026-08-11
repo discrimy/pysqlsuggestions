@@ -183,6 +183,12 @@ let seq = 0;
 // insertion and stale one keystroke later — following an edit is the editor's job.
 let pending = [];
 let measured = 0;
+// What this backend calls each kind, where its own word differs from the
+// engine's category — a Trino catalog and a ClickHouse database are both
+// Kind.SCHEMA, because they behave identically, and neither is called a schema.
+// The category still names the colour, so only the text changes.
+let kindWords = {};
+const word = (kind) => kindWords[kind] || kind;
 
 function trackEdit() {
   const delta = sql.value.length - measured;
@@ -263,6 +269,7 @@ async function fire(quiet) {
   });
   if (mine !== seq) return;
   if (data.error) return;
+  kindWords = data.kind_words || {};
   paintRequest(data);
   items = quiet ? [] : data.suggestions;
   active = items.length ? 0 : -1;
@@ -279,7 +286,7 @@ function paintRequest(d) {
     : '<span class="none">none</span>';
   $('r-span').textContent = `[${r.replace_span[0]}, ${r.replace_span[1]})`;
   $('r-kinds').innerHTML = r.kinds.length
-    ? r.kinds.map((k) => `<span class="chip k-${k}">${esc(k)}</span>`).join('')
+    ? r.kinds.map((k) => `<span class="chip k-${k}">${esc(word(k))}</span>`).join('')
     : '<span class="none">nothing here</span>';
 
   $('stops-left').textContent = pending.length ? `${pending.length} blank${pending.length > 1 ? 's' : ''} left` : '';
@@ -311,7 +318,7 @@ function paintPopup() {
   if (!items.length) { pop.hidden = true; return; }
   pop.innerHTML = items.map((s, i) => `
     <div class="item" role="option" data-i="${i}" aria-selected="${i === active}">
-      <span class="k k-${s.kind}">${esc(s.kind)}</span>
+      <span class="k k-${s.kind}">${esc(word(s.kind))}</span>
       <span class="txt">${esc(s.label || s.text)}</span>
       <span class="det">${esc(s.detail || '')}</span>
     </div>`).join('');

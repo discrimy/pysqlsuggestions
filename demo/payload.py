@@ -20,7 +20,7 @@ from typing import Any
 from pysqlsuggestions.api import complete, derive_request, plan_insertion
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.ports import Catalog
-from pysqlsuggestions.types import Relation, Request, Scope, Suggestion
+from pysqlsuggestions.types import Kind, Relation, Request, Scope, Suggestion
 
 
 def respond(
@@ -54,8 +54,27 @@ def respond(
         'available': catalog is not None,
         'elapsed_ms': round((time.perf_counter() - started) * 1000, 2),
         'request': describe(request),
+        'kind_words': _kind_words(request, dialect),
         'suggestions': [_suggestion(s, sql, dialect, pending) for s in suggestions],
     }
+
+
+def _kind_words(request: Request, dialect: Dialect) -> dict[str, str]:
+    """
+    What this dialect calls each kind, where its own word differs.
+
+    Only the namespace kind does. The engine has one `Kind.SCHEMA` for every
+    level of a dotted path because they behave identically — but Postgres calls
+    that a schema, ClickHouse a database, and Trino a catalog at the first level
+    and a schema at the second. Labelling a Trino catalog `schema` states
+    something false about the server the user is connected to, and the dialect
+    has carried the right word all along.
+
+    Which level it is depends on how much of the path is already written, so
+    this is a fact about the request and not only about the dialect.
+    """
+    word = dialect.namespace.level_of(len(request.qualifier) + 1)
+    return {Kind.SCHEMA.value: word} if word else {}
 
 
 def _suggestion(suggestion: Suggestion, sql: str, dialect: Dialect, pending: Sequence[int]) -> dict[str, Any]:
