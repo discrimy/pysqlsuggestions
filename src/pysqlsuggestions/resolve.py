@@ -311,9 +311,13 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
             clause.after_operand
             if request.expecting == 'operator'
             else _unspent_alias(
-                _unchosen(
-                    dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
-                    request.item_words,
+                _only_where_an_item_begins(
+                    _unchosen(
+                        dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
+                        request.item_words,
+                    ),
+                    dialect,
+                    request,
                 ),
                 clause,
                 request,
@@ -334,6 +338,26 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
         for word, description in reader.keywords()
     ]
+
+
+def _only_where_an_item_begins(words: tuple[str, ...], dialect: Dialect, request: Request) -> tuple[str, ...]:
+    """
+    Drop the words that can only begin an item, where one is already written.
+
+    `LATERAL` modifies the reference after it rather than joining to the one
+    before, so `JOIN auth_user AS u LATERAL` parses as nothing while
+    `JOIN LATERAL f(x)` is exactly right. Which position that is, the clause
+    says; which position the caret is in, `expecting` says.
+    """
+    if request.expecting != 'connective':
+        return words
+    kept = []
+    for word in words:
+        found = dialect.clauses.get(word)
+        if found is not None and found.opens_an_item:
+            continue
+        kept.append(word)
+    return tuple(kept)
 
 
 def _unspent_alias(words: tuple[str, ...], clause: Clause, request: Request) -> tuple[str, ...]:

@@ -96,7 +96,14 @@ TRINO = replace(
     ),
     namespace=Namespace(levels=('catalog', 'schema', 'table')),
     clauses=ANSI.clauses.extend(
-        Clause(name='UNNEST', follows=frozenset({'FROM', 'JOIN'}), suggests=(Kind.COLUMN, Kind.FUNCTION)),
+        # Like LATERAL, and unlike a join: `FROM t, UNNEST(a)` and
+        # `CROSS JOIN UNNEST(a)` are right, `FROM t UNNEST(a)` is not.
+        Clause(
+            name='UNNEST',
+            follows=frozenset({'FROM', 'JOIN'}),
+            opens_an_item=True,
+            suggests=(Kind.COLUMN, Kind.FUNCTION),
+        ),
         Clause(name='MATCH_RECOGNIZE', follows=frozenset({'FROM'}), suggests=(Kind.COLUMN,)),
         Clause(name='TABLESAMPLE', follows=frozenset({'FROM', 'JOIN'}), suggests=(Kind.KEYWORD,)),
     ),

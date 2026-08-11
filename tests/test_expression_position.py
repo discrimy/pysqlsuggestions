@@ -195,3 +195,20 @@ def test_a_query_inside_a_statement_of_another_form_keeps_its_own_clauses() -> N
     """
     assert 'GROUP BY' in texts('INSERT INTO events SELECT * FROM events WHERE id = 1 ⌶')
     assert 'ORDER BY' in texts('UPDATE events SET name = (SELECT name FROM events WHERE id = 1 ⌶')
+
+
+def test_a_word_that_begins_a_reference_is_not_offered_after_one() -> None:
+    """
+    `LATERAL` modifies the relation after it rather than joining to the one
+    before, and the server agrees: `FROM events LATERAL (...)` is a syntax
+    error while the comma and JOIN forms are not.
+
+    It declares that it follows FROM and JOIN, which was read as "after a
+    complete relation in one of those" — the one place it cannot go. `JOIN`
+    itself carries its own separator and so may follow a relation, which is why
+    this belongs to the clause rather than to relation clauses in general.
+    """
+    assert 'LATERAL' not in texts('SELECT * FROM events e ⌶')
+    assert 'LATERAL' not in texts('SELECT * FROM events e JOIN other o ⌶')
+    assert 'LATERAL' in texts('SELECT * FROM events e, ⌶')
+    assert 'LATERAL' in texts('SELECT * FROM events e JOIN ⌶')

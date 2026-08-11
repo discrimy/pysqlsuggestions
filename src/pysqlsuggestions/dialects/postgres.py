@@ -210,7 +210,12 @@ POSTGRES = replace(
     ),
     namespace=Namespace(levels=('schema', 'table')),
     clauses=ANSI.clauses.extend(
-        Clause(name='LATERAL', follows=frozenset({'FROM', 'JOIN'}), suggests=(Kind.TABLE, Kind.FUNCTION)),
+        Clause(
+            name='LATERAL',
+            follows=frozenset({'FROM', 'JOIN'}),
+            opens_an_item=True,
+            suggests=(Kind.TABLE, Kind.FUNCTION),
+        ),
         Clause(name='DISTINCT ON', follows=frozenset({'SELECT'}), suggests=(Kind.COLUMN, Kind.FUNCTION)),
         Clause(
             name='ON CONFLICT',

@@ -110,6 +110,16 @@ class Clause:
     that are not clauses in their own right — `AS`, `AND`, `ASC` — plus the
     canonical clause order; anything a dialect adds arrives through `follows`.
     """
+    opens_an_item: bool = False
+    """
+    Whether this clause can only begin an item, never follow a finished one.
+
+    `LATERAL` modifies the relation reference after it rather than joining to
+    the one before: `JOIN LATERAL f(x)` and `FROM a, LATERAL f(x)` are right,
+    and `JOIN auth_user AS u LATERAL` parses as nothing. `JOIN` itself carries
+    its own separator and so may follow a relation, which is why this is a
+    property of the clause and not of relation clauses in general.
+    """
     aliases_with: str = ''
     """
     The word that gives this clause's relation an alias, where it takes one.

@@ -65,13 +65,9 @@ this harness cannot judge them and says so rather than guessing.
 
 KNOWN = frozenset(
     {
-        # A word offered where its own clause has no room for it. LATERAL precedes
-        # the relation rather than following it; DISTINCT may only follow SELECT
-        # itself; `*` takes no alias; OFFSET and FETCH need a count first.
-        'SELECT o.id FROM orders AS o JOIN auth_user ',
-        'SELECT o.id FROM orders AS o JOIN auth_user AS u ',
-        'SELECT u.id FROM auth_user u LEFT JOIN orders ',
-        'SELECT u.id FROM auth_user u LEFT JOIN orders o ',
+        # A word offered where its own clause has no room for it. DISTINCT may
+        # only follow SELECT itself; `*` takes no alias; OFFSET and FETCH need a
+        # count first.
         'SELECT count(*) AS n ',
         'SELECT *',
         'SELECT * ',

@@ -46,8 +46,11 @@ def test_a_dialect_clause_is_offered_after_the_clause_it_declares_it_follows() -
     assert 'PREWHERE' in words('SELECT * FROM events ⌶', CLICKHOUSE)
     assert 'ARRAY JOIN' in words('SELECT * FROM events ⌶', CLICKHOUSE)
     assert 'LIMIT BY' in words('SELECT * FROM events ORDER BY id LIMIT 1 ⌶', CLICKHOUSE)
-    assert 'LATERAL' in words('SELECT * FROM events ⌶', POSTGRES)
-    assert 'UNNEST' in words('SELECT * FROM events ⌶', TRINO)
+    # After a comma rather than after the relation: both of these begin a
+    # reference rather than following one, and the server rejects
+    # `FROM events LATERAL ...` exactly as it rejects `FROM events UNNEST(...)`.
+    assert 'LATERAL' in words('SELECT * FROM events, ⌶', POSTGRES)
+    assert 'UNNEST' in words('SELECT * FROM events, ⌶', TRINO)
 
 
 def test_a_dialect_clause_stays_out_of_the_dialects_that_lack_it() -> None:
