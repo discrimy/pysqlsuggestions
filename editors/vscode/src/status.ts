@@ -9,7 +9,7 @@
 
 import * as vscode from 'vscode';
 
-export type State = 'dormant' | 'starting' | 'connected' | 'degraded' | 'no-profile';
+export type State = 'dormant' | 'starting' | 'bound' | 'degraded' | 'no-profile';
 
 const LABELS: Record<State, { icon: string; tooltip: string }> = {
   dormant: {
@@ -17,7 +17,13 @@ const LABELS: Record<State, { icon: string; tooltip: string }> = {
     tooltip: 'pysqlsuggestions is not running. Run "pysqlsuggestions: Show logs" for why.',
   },
   starting: { icon: '$(sync~spin)', tooltip: 'pysqlsuggestions is starting…' },
-  connected: { icon: '$(database)', tooltip: 'Schema-aware completion from the connected database.' },
+  // Deliberately not "connected". The database is not contacted until the
+  // first completion, so at this point nothing has verified that it answers,
+  // and a status bar that says otherwise is the exact lie this exists to stop.
+  bound: {
+    icon: '$(database)',
+    tooltip: 'Using this connection. The database is read on the first completion.',
+  },
   degraded: {
     icon: '$(warning)',
     tooltip: 'The database could not be read. Completing from the statement alone.',
@@ -36,11 +42,11 @@ export class Status {
     this.item.command = 'pysqlsuggestions.selectConnection';
   }
 
-  /** Show `state`, naming `profile` when there is one. */
-  set(state: State, profile?: string): void {
+  /** Show `state`, naming `profile` when there is one and `detail` when it explains something. */
+  set(state: State, profile?: string, detail?: string): void {
     const label = LABELS[state];
     this.item.text = profile === undefined ? `${label.icon} SQL` : `${label.icon} ${profile}`;
-    this.item.tooltip = label.tooltip;
+    this.item.tooltip = detail === undefined ? label.tooltip : `${label.tooltip}\n\n${detail}`;
     this.item.show();
   }
 

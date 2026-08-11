@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { initializationOptions, readProfiles, resolveProfile } from '../../profiles';
+import { initializationOptions, needsPassword, readProfiles, resolveProfile } from '../../profiles';
 
 const PG = { name: 'local', dialect: 'postgres', host: 'localhost', port: 5432, user: 'ana' };
 
@@ -86,4 +86,32 @@ test('absent optional fields are omitted rather than sent as undefined', () => {
   const bare = readProfiles([{ name: 'b', dialect: 'ansi', host: 'h' }])[0];
   const options = initializationOptions(bare, undefined) ?? {};
   assert.deepEqual(Object.keys(options).sort(), ['dialect', 'host']);
+});
+
+test('a profile with a user and no stored password wants prompting', () => {
+  // Configuring a connection by editing settings.json never goes near the
+  // prompt, so without this the server connects unauthenticated and silently
+  // degrades — which looks like an extension that does not work.
+  assert.equal(needsPassword(readProfiles([PG])[0], undefined, new Set()), true);
+});
+
+test('a profile with a stored password does not', () => {
+  assert.equal(needsPassword(readProfiles([PG])[0], 'hunter2', new Set()), false);
+});
+
+test('a profile with no user does not', () => {
+  // No user means the driver picks one up from the environment, and asking
+  // for a password to go with a username we do not have helps nobody.
+  const bare = readProfiles([{ name: 'b', dialect: 'postgres', host: 'h' }])[0];
+  assert.equal(needsPassword(bare, undefined, new Set()), false);
+});
+
+test('a profile the user already declined is not asked again', () => {
+  // Dismissing is a legitimate answer: trust authentication and .pgpass both
+  // mean no password is needed. Asking every restart would be nagging.
+  assert.equal(needsPassword(readProfiles([PG])[0], undefined, new Set(['local'])), false);
+});
+
+test('no profile wants nothing', () => {
+  assert.equal(needsPassword(undefined, undefined, new Set()), false);
 });

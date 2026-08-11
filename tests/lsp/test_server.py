@@ -136,3 +136,40 @@ def test_the_server_registers_the_features_a_client_needs() -> None:
     features = create_server().protocol.fm.features
     assert TEXT_DOCUMENT_COMPLETION in features
     assert INITIALIZE in features
+
+
+def test_a_degraded_session_says_so() -> None:
+    """
+    A degraded list looks entirely healthy, so something has to announce it.
+
+    The status bar is the only place a user can tell schema-aware completion
+    from statement-only, and it cannot know without being told.
+    """
+    told: list[str] = []
+    session = Session(
+        profile=Profile(dialect='postgres', host='nowhere'),
+        connect=refusing,
+        on_degrade=told.append,
+    )
+    session.suggest(WITH_CTE, len(WITH_CTE))
+    assert told, 'the session degraded without saying so'
+
+
+def test_a_healthy_session_says_nothing() -> None:
+    """No profile, nothing to degrade from, nothing to announce."""
+    told: list[str] = []
+    Session(on_degrade=told.append).suggest(WITH_CTE, len(WITH_CTE))
+    assert told == []
+
+
+def test_degrading_is_announced_once_not_per_keystroke() -> None:
+    """The notification is a state change, not a running commentary."""
+    told: list[str] = []
+    session = Session(
+        profile=Profile(dialect='postgres', host='nowhere'),
+        connect=refusing,
+        on_degrade=told.append,
+    )
+    session.suggest(WITH_CTE, len(WITH_CTE))
+    session.suggest(WITH_CTE, len(WITH_CTE))
+    assert len(told) == 1

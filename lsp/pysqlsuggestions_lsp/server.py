@@ -22,6 +22,7 @@ not be tested without standing up a client handshake for every case.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,15 @@ log = logging.getLogger(__name__)
 TRIGGERS = ['.', ' ', ',', '(']
 """A dot continues a reference; the rest open a position where something is wanted."""
 
+DEGRADED = 'pysqlsuggestions/degraded'
+"""
+Sent once when the catalog stops being usable, carrying why.
+
+Outside the LSP specification because LSP has no shape for it. A client that
+ignores it loses nothing; one that listens can stop claiming the list in front
+of the user is schema-aware when it is not.
+"""
+
 
 @dataclass
 class Session:
@@ -63,9 +73,18 @@ class Session:
     profile: Profile | None = None
     connect: Connect | None = None
     """How to open a connection. Left None outside tests, where the driver decides."""
+    on_degrade: Callable[[str], None] | None = None
+    """
+    Told once when the catalog stops being usable, with why.
+
+    A degraded list looks entirely healthy — it still holds keywords, CTE
+    columns and aliases — so nothing downstream can infer this from the
+    suggestions themselves. It has to be said out loud.
+    """
     cache: dict[Any, Any] = field(default_factory=dict)
     _catalog: Any = None
     _tried: bool = False
+    _announced: bool = False
 
     @property
     def dialect(self) -> Dialect:
@@ -92,21 +111,27 @@ class Session:
         self._tried = True
         try:
             self._catalog = open_catalog(self.profile, connect=self.connect)
-        except Exception:
+        except Exception as error:  # noqa: BLE001
             log.exception('could not build a catalog; completing from the statement alone')
-            self._catalog = None
+            self.degrade(str(error) or error.__class__.__name__)
         return self._catalog
 
-    def degrade(self) -> None:
+    def degrade(self, why: str) -> None:
         """
-        Stop using the catalog until the server is restarted.
+        Stop using the catalog until the server is restarted, and say so once.
 
         Recorded rather than retried per keystroke: a database that is down
         stays down for the length of a coffee, and retrying would mean a
         blocking connection attempt for every character typed.
+
+        Announced once for the same reason — this is a state change, not a
+        running commentary on every keystroke that follows it.
         """
         self._catalog = None
         self._tried = True
+        if self.on_degrade is not None and not self._announced:
+            self._announced = True
+            self.on_degrade(why)
 
     def suggest(self, text: str, offset: int) -> list[CompletionItem]:
         """
@@ -128,9 +153,9 @@ class Session:
                 cache=self.cache,
                 identity=self.profile.user if self.profile else None,
             )
-        except Exception:
+        except Exception as error:  # noqa: BLE001
             log.exception('the catalog failed; completing from the statement alone')
-            self.degrade()
+            self.degrade(str(error) or error.__class__.__name__)
             suggestions = complete(statement, within, dialect)
         return [to_item(statement, base, starts, s, index, dialect) for index, s in enumerate(suggestions)]
 
@@ -151,6 +176,7 @@ def create_server(connect: Connect | None = None) -> SqlServer:
     feature with the parameters alone.
     """
     server = SqlServer(Session(connect=connect))
+    server.session.on_degrade = lambda why: server.protocol.notify(DEGRADED, {'reason': why})
 
     @server.feature(INITIALIZE)
     def initialize(params: InitializeParams) -> None:

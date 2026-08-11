@@ -70,6 +70,31 @@ export function resolveProfile(profiles: Profile[], preferred: string | null): P
 }
 
 /**
+ * Whether to ask for a password before starting.
+ *
+ * Configuring a connection by editing settings.json never goes near the prompt
+ * in `selectConnection`, so without this the server connects unauthenticated,
+ * the catalog read fails and completion silently degrades — which to a user is
+ * indistinguishable from an extension that does not work.
+ *
+ * Only when the profile names a `user`: without one the driver takes an
+ * identity from the environment, and a password to go with a username we do
+ * not have helps nobody. And never for a profile already in `declined`, since
+ * dismissing is a legitimate answer — trust authentication and `.pgpass` both
+ * mean no password is wanted — and asking again every restart is nagging.
+ */
+export function needsPassword(
+  profile: Profile | undefined,
+  stored: string | undefined,
+  declined: ReadonlySet<string>,
+): boolean {
+  if (profile === undefined || profile.user === undefined) {
+    return false;
+  }
+  return stored === undefined && !declined.has(profile.name);
+}
+
+/**
  * What goes in `initializationOptions`, matching the server's `Profile.from_options`.
  *
  * `name` is ours and has no field there. Optional fields are omitted rather

@@ -12,14 +12,25 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as vscode from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions } from 'vscode-languageclient/node';
-import { initializationOptions, readProfiles, resolveProfile } from './profiles';
+import { initializationOptions, needsPassword, readProfiles, resolveProfile } from './profiles';
 import { MINIMUM_PYTHON, ensureVenv, findInterpreter, stampPath } from './runtime';
 import { promptForPassword, readPassword } from './secrets';
 import { Status } from './status';
 
+/** The server's own notification, sent once when the catalog stops being usable. */
+const DEGRADED = 'pysqlsuggestions/degraded';
+
 let client: LanguageClient | undefined;
 let status: Status | undefined;
 let output: vscode.OutputChannel | undefined;
+
+/**
+ * Profiles the user declined to give a password for, this window.
+ *
+ * In memory rather than stored: dismissing once should not be remembered
+ * forever, and a reload is how someone says "ask me again".
+ */
+const declined = new Set<string>();
 
 /** Run a command, streaming everything it says into the output channel. */
 function run(command: string, args: string[]): Promise<void> {
@@ -136,7 +147,18 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 
   const profiles = readProfiles(settings.get('connections', []));
   const profile = resolveProfile(profiles, settings.get<string | null>('defaultConnection', null));
-  const password = profile === undefined ? undefined : await readPassword(context.secrets, profile.name);
+  let password = profile === undefined ? undefined : await readPassword(context.secrets, profile.name);
+
+  // Ask before starting rather than after failing. A profile written straight
+  // into settings.json never passes through `selectConnection`, so this is the
+  // only point at which anyone asks — and without it the server connects
+  // unauthenticated and quietly stops being schema-aware.
+  if (profile !== undefined && needsPassword(profile, password, declined)) {
+    password = await promptForPassword(context.secrets, profile.name);
+    if (password === undefined) {
+      declined.add(profile.name);
+    }
+  }
 
   const serverOptions: ServerOptions = { command: runtime.python, args: ['-m', 'pysqlsuggestions_lsp'] };
   const clientOptions: LanguageClientOptions = {
@@ -150,7 +172,17 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 
   client = new LanguageClient('pysqlsuggestions', 'pysqlsuggestions', serverOptions, clientOptions);
   await client.start();
-  status?.set(profile === undefined ? 'no-profile' : 'connected', profile?.name);
+
+  // The server tells us when the catalog stops being usable. Nothing else can:
+  // a degraded list still holds keywords and aliases and looks entirely
+  // healthy, so without this the status bar would keep claiming schema
+  // awareness the user is no longer getting.
+  client.onNotification(DEGRADED, (params: { reason?: string }) => {
+    status?.set('degraded', profile?.name, params.reason);
+    output?.appendLine(`catalog unusable: ${params.reason ?? 'no reason given'}`);
+  });
+
+  status?.set(profile === undefined ? 'no-profile' : 'bound', profile?.name);
 }
 
 async function stop(): Promise<void> {

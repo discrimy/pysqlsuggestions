@@ -118,3 +118,36 @@ suite('pysqlsuggestions', () => {
     assert.deepEqual([...ours].sort(), expected, 'ranks are duplicated, gapped, or do not start at the top');
   });
 });
+
+suite('a connection configured in settings alone', () => {
+  test('is asked for its password rather than left to degrade', async function () {
+    // The bug this covers: a profile written straight into settings.json never
+    // passes through `selectConnection`, so nothing ever asked for a password.
+    // The server then connected unauthenticated and completion degraded to
+    // nothing at all — indistinguishable, to a user, from a dead extension.
+    this.timeout(180000);
+    const settings = vscode.workspace.getConfiguration('pysqlsuggestions');
+    await settings.update(
+      'connections',
+      [{ ...PROFILE, name: 'never-selected' }],
+      vscode.ConfigurationTarget.Global,
+    );
+    await settings.update('defaultConnection', 'never-selected', vscode.ConfigurationTarget.Global);
+
+    let asked = 0;
+    const inputBox = vscode.window.showInputBox;
+    (vscode.window as Writable).showInputBox = async () => {
+      asked += 1;
+      return 'report';
+    };
+    try {
+      await vscode.commands.executeCommand('pysqlsuggestions.restartServer');
+    } finally {
+      (vscode.window as Writable).showInputBox = inputBox;
+    }
+    assert.equal(asked, 1, 'starting with an unauthenticated profile asked nobody for a password');
+
+    const labels = await completionsFor('SELECT * FROM auth_user u WHERE u.');
+    assert.ok(labels.includes('username'), `still degraded: ${labels.slice(0, 8).join(', ')}`);
+  });
+});
