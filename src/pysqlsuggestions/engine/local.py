@@ -110,11 +110,11 @@ def _alias_suggestions(request: Request) -> list[Candidate]:
     name = latest.path[-1]
     return [
         Candidate(text=alias, kind=Kind.ALIAS, detail=f'alias for {name}', position=index, origin='local')
-        for index, alias in enumerate(_alias_forms(name))
+        for index, alias in enumerate(alias_forms(name))
     ]
 
 
-def _alias_forms(name: str) -> list[str]:
+def alias_forms(name: str) -> list[str]:
     """
     Alias conventions, most idiomatic first.
 

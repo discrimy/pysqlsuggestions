@@ -7,7 +7,7 @@ from dataclasses import replace
 from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Query, Syntax
-from pysqlsuggestions.types import Column, ColumnValue, Function, Kind, Table
+from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
 
 _RELKIND = {
     'r': 'table',
@@ -158,6 +158,40 @@ QUERIES = CatalogQueries(
             name=str(row[2]),
             type=str(row[3]),
             position=int(row[4]),
+        ),
+    ),
+    foreign_keys=Query(
+        sql="""
+            SELECT n.nspname,
+                   c.relname,
+                   (SELECT array_agg(a.attname ORDER BY k.ord)
+                      FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum),
+                   rn.nspname,
+                   rc.relname,
+                   (SELECT array_agg(a.attname ORDER BY k.ord)
+                      FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum)
+            FROM pg_constraint con
+            JOIN pg_class c ON c.oid = con.conrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_class rc ON rc.oid = con.confrelid
+            JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+            WHERE con.contype = 'f'
+              AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
+            ORDER BY n.nspname, c.relname, con.conname
+        """,
+        # WITH ORDINALITY rather than a bare unnest: conkey and confkey correspond
+        # position by position, and that correspondence is the whole content of a
+        # composite key. Aggregating either side in an unspecified order would
+        # produce an edge that looks right and joins the wrong columns together.
+        row=lambda row: ForeignKey(
+            schema=str(row[0]),
+            table=str(row[1]),
+            columns=tuple(str(name) for name in row[2]),
+            ref_schema=str(row[3]),
+            ref_table=str(row[4]),
+            ref_columns=tuple(str(name) for name in row[5]),
         ),
     ),
 )

@@ -16,6 +16,7 @@ from dataclasses import replace
 
 import pytest
 
+from pysqlsuggestions.api import complete
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
@@ -23,6 +24,7 @@ from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.registry import available, named
 from pysqlsuggestions.dialects.trino import TRINO
 from pysqlsuggestions.testing import DialectConformance
+from pysqlsuggestions.types import Kind
 
 SHIPPED = (ANSI, POSTGRES, CLICKHOUSE, TRINO)
 
@@ -125,3 +127,18 @@ def test_a_registered_dialect_is_held_to_the_same_corpus() -> None:
     """
     for name, dialect in available().items():
         assert not DialectConformance.check(dialect), name
+
+
+@pytest.mark.parametrize('dialect', SHIPPED, ids=lambda d: d.name)
+def test_no_join_is_proposed_without_a_declared_constraint(dialect: Dialect) -> None:
+    """
+    A proposal comes from a constraint the backend declares, or it does not come.
+
+    The conformance fixture declares none, so this is the guard against a builder
+    that infers an edge from `<singular>_id` matching `<table>.id`. That reading is
+    right often enough to be tempting and wrong often enough to be dangerous: it
+    writes valid SQL that returns the wrong rows, which no parser can catch.
+    """
+    catalog = DialectConformance.catalog(dialect)
+    sql = f'SELECT * FROM {DialectConformance.reference(dialect, "users")} AS u JOIN '
+    assert not [s for s in complete(sql, len(sql), dialect, catalog) if s.kind is Kind.JOIN]

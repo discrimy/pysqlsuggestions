@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 from pysqlsuggestions.engine import rank
-from pysqlsuggestions.types import Column, ColumnValue, Function, Table
+from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
 ColumnSpec = tuple[str, str] | tuple[str, str, int]
 Snapshot = Mapping[tuple[str, str], Iterable[ColumnSpec]]
@@ -42,6 +42,7 @@ class MemoryCatalog:
         table_kinds: Mapping[tuple[str, str], str] | None = None,
         table_rows: Mapping[tuple[str, str], int] | None = None,
         catalogs: Mapping[str, Sequence[str]] | None = None,
+        foreign_keys: Iterable[ForeignKey] = (),
         oversized: bool = False,
     ) -> None:
         self._columns: dict[tuple[str, str], tuple[Column, ...]] = {}
@@ -74,6 +75,7 @@ class MemoryCatalog:
             key: tuple(v if isinstance(v, ColumnValue) else ColumnValue(text=v) for v in found)
             for key, found in (values or {}).items()
         }
+        self._edges = tuple(foreign_keys)
         self._oversized = oversized
         self.calls: list[tuple[str, ...]] = []
         """Recorded call names, so tests can assert a CTE cost no catalog reads."""
@@ -165,6 +167,18 @@ class MemoryCatalog:
                 del candidate_schema
                 return found[:limit]
         return ()
+
+    def foreign_keys(self, schema: str | None = None) -> Sequence[ForeignKey]:
+        """
+        Declared relationships, when the fixture supplied any.
+
+        Filtered by the *referencing* side's schema, matching what the Postgres
+        query does — an edge is owned by the table that carries the constraint.
+        """
+        self.calls.append(('foreign_keys', schema or ''))
+        if schema is None:
+            return list(self._edges)
+        return [edge for edge in self._edges if edge.schema == schema]
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords, when the fixture supplied any."""

@@ -53,6 +53,9 @@ services:
 
   trino:
     image: trinodb/trino:468
+    # Trino's jvm.config sets -XX:MaxRAMPercentage=80, which without a limit here
+    # means 80% of *host* RAM. Cap it so the JVM sizes its heap off the cgroup.
+    mem_limit: 8g
     ports:
       - '57080:8080'
     volumes:

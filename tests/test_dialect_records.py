@@ -6,7 +6,10 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Clause, ClauseModel, Namespace, Syntax
-from pysqlsuggestions.types import Kind
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
+from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.dialects.trino import TRINO
+from pysqlsuggestions.types import ForeignKey, Kind
 
 
 def test_extend_appends_without_mutating() -> None:
@@ -54,3 +57,26 @@ def test_ansi_defaults() -> None:
     assert ANSI.syntax.dollar_quoting is False
     assert ANSI.syntax.cast_operator is None
     assert 'select' in ANSI.reserved
+
+
+def test_only_postgres_ships_a_foreign_key_query() -> None:
+    """ClickHouse and Trino keep no constraints, so the slot stays empty and the capability is inert."""
+    assert POSTGRES.catalog_queries.foreign_keys is not None
+    assert CLICKHOUSE.catalog_queries.foreign_keys is None
+    assert TRINO.catalog_queries.foreign_keys is None
+    assert ANSI.catalog_queries.foreign_keys is None
+
+
+def test_the_foreign_key_row_mapper_builds_an_edge() -> None:
+    """Arrays in, ForeignKey out. The mapper is the only place a driver's shape is visible."""
+    query = POSTGRES.catalog_queries.foreign_keys
+    assert query is not None
+    edge = query.row(('public', 'reports_report', ['author_id'], 'public', 'auth_user', ['id']))
+    assert edge == ForeignKey(
+        schema='public',
+        table='reports_report',
+        columns=('author_id',),
+        ref_schema='public',
+        ref_table='auth_user',
+        ref_columns=('id',),
+    )

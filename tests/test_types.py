@@ -23,6 +23,7 @@ def test_kind_values_are_json_ready_strings() -> None:
         'type',
         'snippet',
         'value',
+        'join',
     ]
 
 

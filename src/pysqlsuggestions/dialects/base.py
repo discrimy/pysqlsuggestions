@@ -303,6 +303,15 @@ class CatalogQueries:
     Absent means that position offers no columns, which is the right answer for
     a backend where finding out would mean asking every catalog in turn.
     """
+    foreign_keys: Query | None = None
+    """
+    Declared relationships whose referencing side is in one schema. `$1` is the schema.
+
+    Absent means the backend keeps no constraints, which is the truth for
+    ClickHouse and Trino — and the reason join proposals are Postgres-only. A
+    dialect must not fill this in with a name-matching heuristic: a wrong join
+    condition is valid SQL that returns wrong rows.
+    """
 
 
 @dataclass(frozen=True, slots=True)

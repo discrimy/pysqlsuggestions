@@ -95,3 +95,32 @@ def test_a_namespace_is_called_what_the_backend_calls_it() -> None:
 
     postgres = json.loads(Demo().suggest(body(sql='SELECT * FROM ', caret=14)))
     assert postgres['kind_words']['schema'] == 'schema'
+
+
+def test_a_join_proposal_and_its_note_cross_the_boundary() -> None:
+    """
+    The demo schema declares foreign keys, and the annotation survives the payload.
+
+    `note` is exactly the kind of field this file exists to guard: it has a
+    default on the Python side, so a payload that forgot it would still answer,
+    with the join proposals silently stripped of the only thing explaining why
+    they rank where they do.
+    """
+    answer = json.loads(Demo().suggest(body(sql='SELECT * FROM booking b JOIN ', caret=29)))
+    proposals = [s for s in answer['suggestions'] if s['kind'] == 'join']
+
+    assert proposals, 'the demo schema declares constraints, so this position has proposals'
+    assert proposals[0]['text'] == 'flight f ON b.flight_id = f.id'
+    assert proposals[0]['note'] == 'fk: flight.id'
+
+
+def test_clickhouse_and_trino_offer_no_join_proposals() -> None:
+    """
+    Neither backend keeps constraints, so the page must not show the feature there.
+
+    A demo that joined on all three would be advertising something the real
+    servers cannot do — the same reason Trino's unqualified relation list is empty.
+    """
+    for backend in ('clickhouse', 'trino'):
+        answer = json.loads(Demo().suggest(body(sql='SELECT * FROM flight_event e JOIN ', caret=34, backend=backend)))
+        assert not [s for s in answer['suggestions'] if s['kind'] == 'join'], backend
