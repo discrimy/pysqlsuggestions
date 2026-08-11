@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.resolve import _Reader
 from pysqlsuggestions.types import ForeignKey
@@ -32,10 +31,39 @@ class _Constrained:
         return [EDGE]
 
 
+class _Bare:
+    """
+    The four `Catalog` methods and nothing else — an adapter for a backend with no constraints.
+
+    `MemoryCatalog` cannot stand in for this: it implements `foreign_keys`
+    unconditionally and so satisfies the protocol even when a fixture declares no
+    edges. The distinction under test is the capability being *absent*.
+    """
+
+    def schemas(self, catalog: str | None = None) -> Sequence[str]:
+        """No namespaces."""
+        del catalog
+        return []
+
+    def tables(self, schema: str | None = None) -> Sequence[object]:
+        """No relations."""
+        del schema
+        return []
+
+    def columns(self, schema: str | None, table: str) -> Sequence[object]:
+        """No columns."""
+        del schema, table
+        return []
+
+    def functions(self, schema: str | None = None) -> Sequence[object]:
+        """No functions."""
+        del schema
+        return []
+
+
 def test_reader_returns_nothing_without_the_capability() -> None:
     """A catalog that cannot answer degrades to silence, as every other capability does."""
-    plain = MemoryCatalog({('public', 'auth_user'): [('id', 'bigint')]})
-    reader = _Reader(plain, POSTGRES, None, None)
+    reader = _Reader(_Bare(), POSTGRES, None, None)  # type: ignore[arg-type]
     assert reader.foreign_keys('public') == ()
 
 
