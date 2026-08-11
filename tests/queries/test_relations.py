@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
-from tests.queries.harness import ALL_ORDER_COLUMNS, USER_COLUMNS, texts
+from tests.queries.harness import ALL_ORDER_COLUMNS, USER_COLUMNS, kinds, texts
 
 
 def test_plain_alias_columns(cur: MemoryCatalog) -> None:
@@ -97,3 +97,25 @@ def test_natural_join_keeps_both_relations(cur: MemoryCatalog) -> None:
     """
     sql = 'SELECT * FROM auth_user u NATURAL JOIN orders o WHERE o.'
     assert sorted(texts(cur, sql)) == ALL_ORDER_COLUMNS
+
+
+def test_a_finished_relation_takes_a_connective_not_another_relation(cur: MemoryCatalog) -> None:
+    """
+    The blank line under a written-out query is where a caret sits most often,
+    and every relation in the catalog was the answer there.
+
+    A relation clause offers relations where one may be named, and past a
+    complete reference no second one can follow without a comma or a JOIN
+    between them. What belongs is a word — and an alias, while the relation
+    still lacks one, because that is the other thing that may be written there.
+    """
+    after = kinds(cur, 'select u.id from auth_user as u\n')
+    assert 'auth_user' not in after, 'a second relation cannot simply follow the first'
+    assert set(after.values()) == {'keyword'}
+
+    unaliased = kinds(cur, 'select * from auth_user ')
+    assert 'auth_user' not in unaliased
+    assert 'alias' in unaliased.values(), 'the relation has no alias yet, so names for it belong'
+
+    naming = kinds(cur, 'select * from ')
+    assert naming['auth_user'] == 'table', 'and where a relation may be named, relations are offered'

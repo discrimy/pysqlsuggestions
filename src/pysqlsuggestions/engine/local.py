@@ -42,9 +42,12 @@ def local_candidates(request: Request) -> list[Candidate]:
         return _alias_suggestions(request) if request.clause in _ALIAS_CLAUSES else []
     if request.clause in _SELECT_LIST_CLAUSES:
         return _select_list(request)
-    if request.clause in _ALIAS_CLAUSES and Kind.TABLE in request.kinds:
-        # Only where a relation may still be named. `INSERT INTO orders (` is
-        # the column list, and a generated alias there is nonsense.
+    if request.clause in _ALIAS_CLAUSES and request.expecting == 'connective':
+        # Only once the reference is complete, which is the one place an alias
+        # may be written. Everything else in these clauses is mid-reference: the
+        # column list of `INSERT INTO orders (`, which has an unaliased relation
+        # in scope and would otherwise be offered names for it, and a half-typed
+        # `FROM events.`, which has no relation to name yet.
         return _alias_suggestions(request)
     return []
 

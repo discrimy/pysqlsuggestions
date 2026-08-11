@@ -40,6 +40,27 @@ def test_from_clause_offers_tables_and_schemas() -> None:
     assert request('SELECT * FROM ⌶').kinds == (Kind.TABLE, Kind.SCHEMA)
 
 
+def test_a_written_out_relation_takes_a_keyword_and_not_another_relation() -> None:
+    """
+    A relation clause offers relations where one may be *named*, which is not
+    everywhere in the clause.
+
+    Past a complete reference the next token is a comma or a JOIN — never a bare
+    second relation, which parses as nothing. The clause said `expecting` was a
+    connective here and the kinds were decided without consulting it, so the
+    commonest caret position in a finished query, the blank line under it,
+    answered with the whole catalog. Three namespace levels make it loudest:
+    what it offers there is a list of catalogs.
+    """
+    assert request('SELECT * FROM auth_user ⌶').kinds == (Kind.KEYWORD,)
+    assert request('SELECT * FROM auth_user AS u ⌶').kinds == (Kind.KEYWORD,)
+    assert request('SELECT u.id FROM auth_user AS u\n⌶').kinds == (Kind.KEYWORD,)
+    assert request('SELECT * FROM warehouse.public.flight AS f ⌶', TRINO).kinds == (Kind.KEYWORD,)
+
+    # And where one may still be named, they are still offered.
+    assert request('SELECT * FROM auth_user, ⌶').kinds == (Kind.TABLE, Kind.SCHEMA, Kind.KEYWORD)
+
+
 def test_namespace_qualifier_postgres() -> None:
     """
     One segment above a table names a schema, so the answer is tables — and

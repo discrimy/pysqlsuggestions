@@ -302,6 +302,12 @@ def _clause_kinds(
     if not dialect.clauses.continuations(found.name):
         return kinds
     if Kind.TABLE in kinds:
+        if expecting == 'connective':
+            # The relation is written out, and another cannot simply follow it —
+            # a comma or a JOIN has to come between them. Offering one here
+            # proposes `FROM flight_raw AS fr events`, which parses as nothing,
+            # and on a three-level dialect the catalogs are what it proposes.
+            return (Kind.KEYWORD,)
         return (*kinds, Kind.KEYWORD) if (scope and scope.relations) else kinds
     if expecting == 'operand':
         return kinds
