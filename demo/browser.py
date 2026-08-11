@@ -7,22 +7,23 @@ library's core is pure and `MemoryCatalog` exists to be handed a pre-fetched
 snapshot, which is exactly this situation. `demo/payload.py` builds the same
 JSON the server does, so the page cannot tell which one answered.
 
-Trino is absent. Its namespace has three levels and `MemoryCatalog` is keyed by
-two; a faithful static Trino would mean bending the library to suit a demo.
+The schema is `demo/schema.py`, invented for the demo and carried as Python
+rather than exported from anywhere. Trino is absent: its namespace has three
+levels and `MemoryCatalog` is keyed by two, so a faithful static Trino would
+mean bending the library to suit a demo.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
 
+from demo import schema
 from demo.payload import backend_entry, respond
 
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.types import ColumnValue, Function
 
 DIALECTS: dict[str, Dialect] = {'postgres': POSTGRES, 'clickhouse': CLICKHOUSE}
 
@@ -33,18 +34,25 @@ LABELS = {
 
 EXAMPLES = {
     'postgres': (
-        'SELECT r.name, d.title\nFROM reports_report r\nJOIN reports_database d ON d.id = r.database_id\nWHERE r.'
+        'SELECT f.number, a.name, b.cabin\n'
+        'FROM flight f\n'
+        'JOIN airline a ON a.id = f.airline_id\n'
+        'JOIN booking b ON b.flight_id = f.id\n'
+        'WHERE f.'
     ),
-    'clickhouse': 'SELECT report_id, count() AS runs\nFROM report_executions e\nWHERE e.',
+    'clickhouse': ('SELECT airport, count() AS events\nFROM flight_event e\nWHERE e.'),
 }
 
 
 class Demo:
-    """Everything the page asks for, answered from a snapshot."""
+    """Everything the page asks for, answered from the demo schema."""
 
-    def __init__(self, snapshot: dict[str, Any]) -> None:
-        self._catalogs = {key: _catalog(part) for key, part in snapshot.items() if key in DIALECTS}
-        self._caches: dict[str, dict[Any, Any]] = {key: {} for key in self._catalogs}
+    def __init__(self) -> None:
+        self._catalogs: dict[str, MemoryCatalog] = {
+            'postgres': schema.postgres(),
+            'clickhouse': schema.clickhouse(),
+        }
+        self._caches: dict[str, dict[object, object]] = {key: {} for key in self._catalogs}
 
     def backends(self) -> str:
         """The tab strip, as JSON."""
@@ -58,7 +66,6 @@ class Demo:
                 available=key in self._catalogs,
             )
             for key in DIALECTS
-            if key in LABELS
         ]
         return json.dumps({'backends': rows})
 
@@ -68,34 +75,4 @@ class Demo:
         catalog = self._catalogs.get(backend)
         if dialect is None or catalog is None:
             return json.dumps({'error': f'unknown backend {backend!r}'})
-        found = respond(sql, caret, dialect, catalog, cache=self._caches[backend], limit=limit)
-        return json.dumps(found)
-
-
-def _catalog(part: dict[str, Any]) -> MemoryCatalog:
-    """Rebuild a MemoryCatalog from the exported shape."""
-    snapshot: dict[tuple[str, str], list[tuple[str, str, int]]] = {}
-    kinds: dict[tuple[str, str], str] = {}
-    rows: dict[tuple[str, str], int] = {}
-    values: dict[tuple[str, str, str], list[ColumnValue]] = {}
-
-    for table in part['tables']:
-        key = (table['schema'], table['name'])
-        snapshot[key] = [(c['name'], c['type'], c['position']) for c in table['columns']]
-        kinds[key] = table['kind']
-        if table.get('rows') is not None:
-            rows[key] = int(table['rows'])
-        for column, found in (table.get('values') or {}).items():
-            values[table['schema'], table['name'], column] = [
-                ColumnValue(text=v['text'], frequency=v['frequency']) for v in found
-            ]
-
-    return MemoryCatalog(
-        snapshot,
-        functions=[
-            Function(schema=f['schema'], name=f['name'], args=f['args'], result=f['result']) for f in part['functions']
-        ],
-        table_kinds=kinds,
-        table_rows=rows,
-        values=values,
-    )
+        return json.dumps(respond(sql, caret, dialect, catalog, cache=self._caches[backend], limit=limit))

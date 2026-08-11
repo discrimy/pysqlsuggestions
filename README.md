@@ -126,12 +126,18 @@ python -m http.server -d site 8001
 ```
 
 `.github/workflows/pages.yml` publishes `site/` to GitHub Pages on every push
-to `main`. Nothing in it can reach a database, which is what makes it safe to
-publish: `demo/snapshot.json` holds the fixture schemas only, and is
-regenerated with `scripts/export_snapshot.py` against docker.
+to `main`.
 
-Never point that exporter at a real database. `most_common_vals` holds literal
-values out of the rows, and the snapshot is published.
+The schema is `demo/schema.py` — a small flight-booking database invented for
+the demo, written as data rather than exported from anywhere. That matters:
+value suggestions come from statistics, statistics are literal values out of
+the rows, and this page is published. There is deliberately no step that could
+be pointed at a real database.
+
+It is shaped to exercise the engine rather than to be realistic — enums and
+booleans so values come from the type, skewed columns so they come from
+statistics, relations three orders of magnitude apart in size, two schemas, a
+materialized view and a mixed-case name that only Postgres has to quote.
 
 Trino is server-only. Its namespace has three levels and `MemoryCatalog` is
 keyed by two, so a static Trino would mean bending the library to suit a demo.

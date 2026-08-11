@@ -30,25 +30,18 @@ async function boot() {
   // Wheel and demo sources sit beside this file; the build step puts them there.
   await micropip.install(new URL('./pysqlsuggestions-0.1.0.dev0-py3-none-any.whl', import.meta.url).href);
 
-  say('loading the schema snapshot…');
-  const [snapshot, payload, browser] = await Promise.all([
-    fetch(new URL('./snapshot.json', import.meta.url)).then((r) => r.text()),
-    fetch(new URL('./payload.py', import.meta.url)).then((r) => r.text()),
-    fetch(new URL('./browser.py', import.meta.url)).then((r) => r.text()),
-  ]);
+  say('loading the demo schema…');
+  const modules = ['payload.py', 'schema.py', 'browser.py'];
+  const sources = await Promise.all(
+    modules.map((name) => fetch(new URL(`./${name}`, import.meta.url)).then((r) => r.text())),
+  );
 
   py.FS.mkdirTree('/demo');
   py.FS.writeFile('/demo/__init__.py', '');
-  py.FS.writeFile('/demo/payload.py', payload);
-  py.FS.writeFile('/demo/browser.py', browser);
+  modules.forEach((name, i) => py.FS.writeFile(`/demo/${name}`, sources[i]));
   py.runPython('import sys; sys.path.insert(0, "/")');
 
-  py.globals.set('SNAPSHOT_JSON', snapshot);
-  const demo = py.runPython(`
-import json
-from demo.browser import Demo
-Demo(json.loads(SNAPSHOT_JSON))
-`);
+  const demo = py.runPython('from demo.browser import Demo\nDemo()');
 
   window.DRIVER = {
     backends: async () => JSON.parse(demo.backends()),

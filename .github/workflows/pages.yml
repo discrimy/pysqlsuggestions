@@ -3,8 +3,8 @@ name: demo
 # Publishes the browser demo to GitHub Pages.
 #
 # No database and no server: Pages serves files only, so the page loads the
-# library under Pyodide and completes against `demo/snapshot.json`, exported
-# from the docker fixtures and checked in. That is why this job needs no
+# library under Pyodide and completes against `demo/schema.py`, a schema
+# invented for the demo and carried as data. That is why this job needs no
 # services — and why nothing here can reach a real database, which is the point.
 
 on:

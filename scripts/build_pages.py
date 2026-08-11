@@ -6,10 +6,9 @@ Assemble the static demo into `site/`, ready for GitHub Pages.
     python -m http.server -d site 8001     # to check it locally
 
 Pages serves files and nothing else, so the site carries everything the page
-needs: the wheel, the two demo modules Pyodide imports, and the schema snapshot
-exported from the docker fixtures. Pyodide itself comes from a CDN — it is
-about ten megabytes and versioned, so vendoring it would dwarf everything else
-here.
+needs: the wheel and the three demo modules Pyodide imports, `demo/schema.py` among
+them. Pyodide itself comes from a CDN — it is about ten megabytes and
+versioned, so vendoring it would dwarf everything else here.
 
 The page is the same `index.html` the server serves. Its only concession to
 this build is a pluggable transport, and `browser.js` is what fills it in.
@@ -28,8 +27,8 @@ STATIC = ROOT / 'demo' / 'static'
 COPIED = (
     (STATIC / 'index.html', 'index.html'),
     (STATIC / 'browser.js', 'browser.js'),
-    (ROOT / 'demo' / 'snapshot.json', 'snapshot.json'),
     (ROOT / 'demo' / 'payload.py', 'payload.py'),
+    (ROOT / 'demo' / 'schema.py', 'schema.py'),
     (ROOT / 'demo' / 'browser.py', 'browser.py'),
 )
 
