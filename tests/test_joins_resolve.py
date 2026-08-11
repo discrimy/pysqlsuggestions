@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.engine.rank import rank
 from pysqlsuggestions.resolve import _Reader
-from pysqlsuggestions.types import ForeignKey
+from pysqlsuggestions.types import Candidate, ForeignKey, Kind, Request
 
 EDGE = ForeignKey(
     schema='public',
@@ -82,3 +83,59 @@ def test_reader_caches_edges_under_the_identity_led_key() -> None:
     reader.foreign_keys('public')
     assert catalog.calls == 1
     assert ('analyst', 'postgres', 'public', '\x00fk') in cache
+
+
+def test_a_join_proposal_outranks_the_tables_it_sits_among() -> None:
+    """At `JOIN <caret>` the proposal is a better answer than the bare name it contains."""
+    request = Request(kinds=(Kind.TABLE, Kind.SCHEMA, Kind.KEYWORD), prefix='', replace_span=(0, 0))
+    candidates = [
+        Candidate(text='auth_user', kind=Kind.TABLE),
+        Candidate(
+            text='auth_user au ON r.author_id = au.id',
+            kind=Kind.JOIN,
+            snippet='auth_user au ON r.author_id = au.id',
+            label='auth_user',
+            note='fk: auth_user.id',
+        ),
+    ]
+    found = rank(candidates, request, POSTGRES)
+    assert found[0].text == 'auth_user au ON r.author_id = au.id'
+    assert found[0].note == 'fk: auth_user.id'
+
+
+def test_a_join_proposal_scores_as_a_column_where_columns_belong() -> None:
+    """At `ON <caret>` there is no TABLE kind to borrow, so it takes COLUMN's place."""
+    request = Request(kinds=(Kind.COLUMN, Kind.FUNCTION), prefix='', replace_span=(0, 0))
+    candidates = [
+        Candidate(text='id', kind=Kind.COLUMN),
+        Candidate(text='r.author_id = u.id', kind=Kind.JOIN, snippet='r.author_id = u.id', label='author_id'),
+    ]
+    found = rank(candidates, request, POSTGRES)
+    assert found[0].text == 'r.author_id = u.id'
+
+
+def test_forward_outranks_reverse() -> None:
+    """Many-to-one is more often wanted and cannot multiply the result set."""
+    request = Request(kinds=(Kind.TABLE,), prefix='', replace_span=(0, 0))
+    candidates = [
+        Candidate(text='b ON u.id = b.user_id', kind=Kind.JOIN, snippet='b ON u.id = b.user_id', label='b', position=1),
+        Candidate(text='a ON r.a_id = a.id', kind=Kind.JOIN, snippet='a ON r.a_id = a.id', label='a', position=0),
+    ]
+    found = rank(candidates, request, POSTGRES)
+    assert found[0].text == 'a ON r.a_id = a.id'
+
+
+def test_typed_prefix_still_decides() -> None:
+    """Match strength stays dominant, so a proposal for another table falls away."""
+    request = Request(kinds=(Kind.TABLE,), prefix='auth', replace_span=(0, 4))
+    candidates = [
+        Candidate(
+            text='orders o ON r.o_id = o.id',
+            kind=Kind.JOIN,
+            snippet='orders o ON r.o_id = o.id',
+            label='orders',
+        ),
+        Candidate(text='auth_user', kind=Kind.TABLE),
+    ]
+    found = rank(candidates, request, POSTGRES)
+    assert [s.text for s in found] == ['auth_user']

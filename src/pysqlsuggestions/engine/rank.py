@@ -35,6 +35,15 @@ Large enough to clear a whole kind step, so adding a kind to a clause's list
 cannot silently demote a generated alias below the tables it was derived from.
 """
 
+_JOIN_BONUS = 12.0
+"""
+A whole join clause beats the bare relation name it contains.
+
+Large enough to clear two kind steps, so adding a kind to a clause's list cannot
+silently demote it; smaller than `_LOCAL_BONUS`, because a CTE the user wrote
+themselves is still the better answer at the same position.
+"""
+
 _MAX_POSITION_PENALTY = 50
 _POSITION_WEIGHT = 0.1
 
@@ -66,6 +75,8 @@ def rank(
         score -= min(candidate.position, _MAX_POSITION_PENALTY) * _POSITION_WEIGHT
         if candidate.origin == 'local':
             score += _LOCAL_BONUS
+        if candidate.kind is Kind.JOIN:
+            score += _JOIN_BONUS
         text, stops = _render(candidate, request, dialect)
         scored.append(
             (
@@ -82,6 +93,7 @@ def rank(
                     stops=stops,
                     label=candidate.label,
                     relation=candidate.relation,
+                    note=candidate.note,
                 ),
             ),
         )
@@ -211,10 +223,16 @@ def _kind_bonus(kind: Kind, kind_rank: dict[Kind, int], total: int) -> float:
 
     A CTE occupies a relation position, so it scores as one: `kinds` names TABLE
     where a relation belongs, and a CTE is the statement's own relation.
+
+    A join proposal occupies the position of whatever it completes — a relation
+    where relations go, a condition where columns go — so it borrows from
+    whichever of the two the caret asked for.
     """
     index = kind_rank.get(kind)
     if index is None and kind is Kind.CTE:
         index = kind_rank.get(Kind.TABLE)
+    if index is None and kind is Kind.JOIN:
+        index = kind_rank.get(Kind.TABLE, kind_rank.get(Kind.COLUMN))
     return 0.0 if index is None else (total - index) * _KIND_STEP
 
 
