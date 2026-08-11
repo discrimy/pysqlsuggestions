@@ -146,11 +146,23 @@ box. Not a six-step chain to change a port.
 password goes with it; leaving an orphaned secret behind means a later
 connection reusing that name silently inherits it.
 
-**Scope.** `getConfiguration().get()` merges user and workspace settings, so a
-connection defined in `.vscode/settings.json` is visible here. Writing an edit
-to user settings would leave the workspace value in place and create a silent
-shadowing duplicate. So `inspect()` decides: edits and removals go back to the
-scope the value came from, and only *add* is unconditionally user-scoped.
+**Scope.** VS Code resolves array settings by **override**, not element-wise
+merge: a workspace `pysqlsuggestions.connections` replaces the user one
+wholesale, and an empty array in a workspace overrides just as firmly as a full
+one. So exactly one scope is in effect at a time, and `inspect()` says which.
+
+> **Corrected while planning.** This section first said the scopes *merge* and
+> that only *add* was unconditionally user-scoped. Both were wrong, and the
+> second followed from the first: adding to user settings while a workspace list
+> is in effect writes a connection the extension can never use, because the
+> workspace array is what it reads. Add therefore writes to the *effective*
+> scope — user in the ordinary case, which is what the decision was protecting,
+> and workspace only when a workspace list already overrides. Edits and removals
+> were always going to follow the origin scope, and still do.
+
+The view lists the effective scope's connections only. Showing a union would
+list connections that will never be used, which is the same class of lie as a
+status bar claiming a connection it never verified.
 
 **Restarting.** Editing or removing the connection the server currently holds
 restarts it, because one connection per process is the invariant that keeps the
