@@ -1,0 +1,9 @@
+# The VSIX carries the bundled wheels and the built extension, nothing else.
+# `bundled/wheels` is the one build output that must ship: without it the
+# extension has no server to install and no way to fetch one.
+src/**
+out/test/**
+node_modules/**
+tsconfig.json
+.vscode/**
+**/*.map

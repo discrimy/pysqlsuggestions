@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pysqlsuggestions
 
@@ -96,3 +98,36 @@ def test_the_library_does_not_import_the_server() -> None:
     for path in (ROOT / 'src' / 'pysqlsuggestions').rglob('*.py'):
         source = path.read_text(encoding='utf-8')
         assert 'pysqlsuggestions_lsp' not in source, f'{path} names the server package'
+
+
+def _manifest() -> dict[str, Any]:
+    """The extension's package.json."""
+    text = (ROOT / 'editors' / 'vscode' / 'package.json').read_text(encoding='utf-8')
+    loaded: dict[str, Any] = json.loads(text)
+    return loaded
+
+
+def test_the_extension_version_matches_the_library() -> None:
+    """
+    The VSIX bundles wheels built from this tree, so the numbers must agree.
+
+    An extension reporting 0.3.0 while carrying a 0.2.1 server is a bug report
+    whose version line is a lie, and no other test would notice.
+    """
+    declared = re.search(r"^version = '([^']+)'", (ROOT / 'pyproject.toml').read_text(), re.M)
+    assert declared is not None, 'pyproject.toml declares no version'
+    assert _manifest()['version'] == declared.group(1)
+
+
+def test_the_settings_schema_has_nowhere_to_put_a_password() -> None:
+    """
+    A password field in settings is a password in someone's git history.
+
+    Passwords live in SecretStorage. This asserts the schema offers nowhere to
+    put one, because a helpful-looking field is all it takes — and
+    `additionalProperties: false` is what stops one being invented.
+    """
+    properties = _manifest()['contributes']['configuration']['properties']
+    profile = properties['pysqlsuggestions.connections']['items']
+    assert 'password' not in profile['properties']
+    assert profile['additionalProperties'] is False
