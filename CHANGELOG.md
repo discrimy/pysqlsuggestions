@@ -6,6 +6,33 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+## 0.2.1
+
+The library is unchanged — `src/` is byte-identical to 0.2.0. This release exists
+to publish the demo, which is what a `v*` tag does.
+
+### Demo
+
+- **The boot shows how far along it is.** A cold visit spent 42 of its 44
+  seconds on one unmoving `loading Python…`, 40 of them the wasm transferring.
+  That is indistinguishable from a hang, and it is the first thing this project
+  shows anyone. The runtime is now read through a streaming counter before
+  `loadPyodide`, which then finds it in cache rather than fetching it twice, and
+  the page draws a bar against a total the build injects.
+
+  A percentage rather than megabytes: a `fetch` stream yields decoded bytes
+  while the wire moves compressed ones — 8.25 MiB against 2.73 MiB for the wasm
+  — so no byte counter on that page can honestly report how much has arrived.
+
+- **`starting Python…` is a new phase.** Compiling the wasm and starting the
+  interpreter take about two seconds during which the old message sat unchanged,
+  past the point where the download had plainly finished. That was most of why
+  the boot read as stuck.
+
+- The bar disappears at 100% rather than sitting full, since a stalled full bar
+  reads as the very hang this removes. If the stream is unsupported or a fetch
+  refuses, the page boots exactly as it did before, without a bar.
+
 ## 0.2.0
 
 Joins. `JOIN ⌶` answers with the whole clause and `ON ⌶` with the whole
