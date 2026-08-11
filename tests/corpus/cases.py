@@ -55,7 +55,7 @@ CASES: tuple[GoldenRequest, ...] = (
         prefix='na',
         clause='SELECT',
         relations=('u:users',),
-        note='plan.md §3.3 worked trace: scope comes from the whole statement',
+        note='scope comes from the whole statement, including the text right of the caret',
     ),
     GoldenRequest(
         sql='SELECT * FROM users u WHERE u.⌶',
@@ -171,7 +171,7 @@ CASES: tuple[GoldenRequest, ...] = (
         qualifier=('r',),
         clause='SELECT',
         relations=('r:recent',),
-        note='plan.md §3.3: no catalog call at all',
+        note='a CTE names its own columns, so no catalog call at all',
     ),
     GoldenRequest(
         sql='WITH a AS (SELECT * FROM users) SELECT a.⌶ FROM a',

@@ -314,7 +314,7 @@ def test_clickhouse_preserves_case_without_quoting() -> None:
 
 
 def test_cte_costs_no_catalog_call() -> None:
-    """plan.md §3.3: the statement described the relation, so nothing is fetched."""
+    """The statement described the relation, so nothing is fetched."""
     cat = catalog()
     found = texts('WITH recent AS (SELECT id, name FROM reports_report) SELECT r.⌶ FROM recent r', cat=cat)
     assert found == ['id', 'name']

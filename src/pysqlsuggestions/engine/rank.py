@@ -143,10 +143,10 @@ def _match_strength(text: str, prefix: str, kind: Kind = Kind.COLUMN) -> float |
 
     Tier 5 is what the helper this supersedes did for every identifier, so its
     users already rely on `mail` finding `email`. It is contiguous and
-    position-ranked, which makes it considerably tighter than the subsequence
-    fuzzy matching plan.md §6 rejects — the failure mode there is a
-    three-character prefix matching sixty unrelated things, and a contiguous
-    match ranked below four stronger tiers does not do that.
+    position-ranked, which makes it considerably tighter than subsequence fuzzy
+    matching — whose failure mode is a three-character prefix matching sixty
+    unrelated things, and a contiguous match ranked below four stronger tiers
+    does not do that.
 
     Keywords stay prefix-only. There are a few hundred of them and they are not
     what the user is hunting for; `her` should not offer WHERE.

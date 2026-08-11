@@ -283,9 +283,9 @@ class Dialect:
     """
     Data type names, for a cast position. Ordered by how often they are wanted.
 
-    Static here, as the offline fallback plan.md §4 asks for; a backend that can
-    introspect its types should prefer that, since a user's own composite and
-    enum types belong in this list too.
+    Static here, so a cast position still answers with no connection at all. A
+    backend that can introspect its types should prefer that, since a user's own
+    composite and enum types belong in this list too.
     """
     catalog_queries: CatalogQueries = field(default_factory=CatalogQueries)
 

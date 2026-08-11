@@ -18,7 +18,7 @@ def request(marked: str, dialect: Dialect = POSTGRES) -> Request:
 
 
 def test_alias_qualifier_narrows_to_columns() -> None:
-    """plan.md §10's worked example. No keywords, no functions, no tables."""
+    """An alias collapses the answer to that relation's columns: no keywords, no functions, no tables."""
     result = request('SELECT * FROM users u WHERE u.⌶')
     assert result.kinds == (Kind.COLUMN,)
     assert result.qualifier == ('u',)
@@ -241,7 +241,13 @@ def test_readme_example_is_accurate() -> None:
 
 
 def test_readme_qualifier_example_is_accurate() -> None:
-    """The caret must sit past the dot. plan.md §10 writes 29, which is one short."""
+    """
+    The caret must sit past the dot for the qualifier to exist.
+
+    One short of it the dot has not been typed yet, so the position is an
+    ordinary operand — an off-by-one that reads as a qualifier bug rather than
+    a caret bug, which is why the README example is pinned.
+    """
     sql = 'SELECT * FROM users u WHERE u.'
     assert derive_request(sql, 30, POSTGRES).kinds == (Kind.COLUMN,)
     assert derive_request(sql, 29, POSTGRES).kinds == (Kind.COLUMN, Kind.FUNCTION)

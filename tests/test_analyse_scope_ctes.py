@@ -61,7 +61,7 @@ def test_mixed_star_and_names() -> None:
 
 
 def test_cte_is_registered_with_its_projection() -> None:
-    """plan.md §3.3: no catalog call at all."""
+    """A CTE names its own columns, so the statement answers for it without a catalog."""
     result = scope('WITH recent AS (SELECT id, total FROM orders) SELECT r.⌶ FROM recent r')
     relation = next(r for r in result.visible() if r.label == 'r')
     assert relation.source == 'cte'

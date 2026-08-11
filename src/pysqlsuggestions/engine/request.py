@@ -324,9 +324,9 @@ def _qualified_kinds(
     qualifier reaches decides what the next segment can be. A qualifier deeper
     than the namespace has nowhere left to go but a column.
 
-    The union plan.md §3.3 calls for in the ambiguous Postgres
-    `schema.table.column` case is a resolution concern, not a kind one: both
-    readings yield COLUMN, and which relation to fetch is resolve's problem.
+    The ambiguous Postgres `schema.table.column` case needs both readings, but
+    that is a resolution concern rather than a kind one: each yields COLUMN, and
+    which relation to fetch is resolve's problem.
     """
     if scope is not None and _names_a_relation(qualifier[0], scope):
         return (Kind.COLUMN,)
@@ -339,10 +339,10 @@ def _qualified_kinds(
     if kind is None:
         return ()
     if kind is Kind.TABLE:
-        # The union plan.md 3.3 asks for. One segment above a table is a schema,
-        # but it is also how a relation not in the FROM list is written, and a
-        # name matching a real table is far likelier to be that than a schema
-        # that happens to share the name.
+        # Both readings, because both are legal. One segment above a table is a
+        # schema, but it is also how a relation not in the FROM list is written,
+        # and a name matching a real table is far likelier to be that than a
+        # schema that happens to share the name.
         return (Kind.COLUMN, kind)
     return (kind,)
 

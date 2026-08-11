@@ -5,8 +5,7 @@ Status: approved, ready for implementation planning
 Supersedes nothing. Refines `plan.md` into a buildable v0.1.
 
 `plan.md` was the product vision through v0.4. It has since been removed from
-the working tree; it is in git history at `f4cb9cd`, which is what the `plan.md
-§N` citations throughout the code and tests refer to. This document covers only
+the working tree and is in git history at `f4cb9cd`. This document covers only
 what v0.1 ships, and records where v0.1 deviates from the plan and why.
 
 ---

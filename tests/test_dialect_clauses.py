@@ -24,7 +24,7 @@ def clause(marked: str, dialect: Dialect) -> str | None:
 
 
 def test_clickhouse_prewhere() -> None:
-    """PREWHERE is the canonical example from plan.md §4."""
+    """PREWHERE is the canonical clause only one dialect has, and the others must not know it."""
     assert clause('SELECT * FROM t PREWHERE ⌶', CLICKHOUSE) == 'PREWHERE'
     assert clause('SELECT * FROM t PREWHERE ⌶', POSTGRES) == 'FROM'
 
