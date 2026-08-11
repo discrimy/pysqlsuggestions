@@ -149,11 +149,18 @@ def test_an_ordinary_suggestion_has_no_extra_edits() -> None:
 
 
 def test_stops_become_snippet_placeholders() -> None:
-    """A join proposal opens its own blanks, and the client must be told they are blanks."""
-    offered = suggestion('flight f ON b.flight_id = f.id', Kind.JOIN, (29, 29), stops=(9,))
-    result = item('SELECT * FROM booking b JOIN ', offered)
+    """
+    A statement shape opens its own blanks, and the client must be told they are blanks.
+
+    Kind.SNIPPET is the kind that carries stops. A join proposal does not: it
+    inserts a finished clause, alias and condition included, and leaves nothing
+    to fill in.
+    """
+    offered = suggestion('SELECT  FROM  AS ', Kind.SNIPPET, stops=(13, 17, 7))
+    result = item('', offered)
     assert result.insert_text_format == InsertTextFormat.Snippet
     assert '$1' in edit_of(result).new_text
+    assert '$3' in edit_of(result).new_text
 
 
 def test_text_without_stops_is_inserted_literally() -> None:
@@ -165,7 +172,7 @@ def test_text_without_stops_is_inserted_literally() -> None:
 
 def test_a_dollar_beside_a_stop_is_escaped() -> None:
     """A template's own text may contain what its placeholders are written with."""
-    offered = suggestion('a $ b', Kind.JOIN, stops=(1,))
+    offered = suggestion('a $ b', Kind.SNIPPET, stops=(1,))
     assert edit_of(item('', offered)).new_text == 'a$1 \\$ b'
 
 

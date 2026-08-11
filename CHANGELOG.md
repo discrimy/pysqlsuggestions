@@ -38,7 +38,9 @@ removed from it.
 
 - **`plan_insertion`'s second edit reaches the editor.** A column accepted
   before any FROM exists writes the clause it needs as an `additionalTextEdit`,
-  and a join proposal's template blanks become snippet placeholders.
+  and a suggestion carrying template blanks — a statement shape, `Kind.SNIPPET`
+  — becomes a snippet placeholder. A join proposal carries none: it inserts a
+  finished clause, alias and condition included.
 
 - **Statements are cut at semicolon tokens, not characters.** Scope comes from
   the whole statement, and a semicolon inside a literal, a comment or a quoted

@@ -128,11 +128,18 @@ makes this repo no longer the source of truth.
 
 LSP wins on a detail that is easy to miss: it has a message shape for everything
 the engine already produces. `plan_insertion` returns *two* edits when a column
-needs a FROM clause — LSP has `additionalTextEdits`. Join proposals carry
+needs a FROM clause — LSP has `additionalTextEdits`. A statement snippet carries
 template `stops` — LSP has snippet placeholders. `replace_span` travels with the
 suggestion precisely so an editor does not re-derive a word boundary and drop the
 qualifier — LSP has `textEdit` with an explicit range. Nothing has to be
 flattened or dropped in translation.
+
+> **Corrected during implementation.** This section first claimed *join
+> proposals* carry stops. They do not: measured against the docker Postgres,
+> `Kind.JOIN` arrives with `stops=()` and inserts a finished clause — relation,
+> alias and condition — with nothing left to fill in. Only `Kind.SNIPPET` carries
+> stops. The conversion is written generically, so the code was right and only
+> this sentence was wrong.
 
 The price is a Python interpreter on the user's machine. §4 is about paying it.
 
