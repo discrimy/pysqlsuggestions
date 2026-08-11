@@ -295,3 +295,39 @@ def test_an_insert_target_is_not_offered_a_bare_alias() -> None:
     """
     assert texts('INSERT INTO events ⌶') == ['VALUES', 'SELECT']
     assert 'e' in texts('UPDATE events ⌶')
+
+
+def test_a_star_takes_no_alias() -> None:
+    """
+    `SELECT * AS x` and `SELECT t.* AS x` are both syntax errors.
+
+    A star is not a word, so nothing in the item marked it as written and AS
+    was offered after it as after any other select item. It stands in the item
+    the way a name does, and rules out the same thing.
+
+    The star inside `count(*)` is one level deeper and belongs to the call, so
+    that item may still be aliased — which is the commonest reason to write AS
+    in a select list at all.
+    """
+    assert 'AS' not in texts('SELECT * ⌶')
+    assert 'AS' not in texts('SELECT e.* ⌶')
+    assert 'AS' in texts('SELECT count(*) ⌶')
+    assert 'AS' in texts('SELECT *, e.id ⌶'), 'the comma starts an item that can be named'
+    assert 'AS' in texts('SELECT 1 ⌶'), 'and a literal is not a star'
+
+
+def test_a_cast_takes_its_own_keyword_and_not_the_clause_s() -> None:
+    """
+    `CAST(x AS type)` is a call with a keyword inside it, and after the value
+    only that keyword can follow. Nothing marked the interior as different, so
+    the enclosing clause's continuations reached it and `SELECT cast(o.total `
+    offered FROM, WHERE and GROUP BY.
+
+    An ordinary call is left alone: in `SELECT count(o.total ` the closing paren
+    may simply be unwritten, and the FROM the caret is offered there belongs to
+    the query rather than to the argument list.
+    """
+    assert texts('SELECT cast(e.id ⌶') == ['as'], 'cased to match the `cast` the author wrote'
+    assert texts('SELECT CAST(e.id ⌶') == ['AS']
+    assert 'text' in texts('SELECT cast(e.id AS ⌶')
+    assert 'FROM' in texts('SELECT count(e.id ⌶')

@@ -388,6 +388,29 @@ def after_cast(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool:
     return _enclosing_call(tokens, index) == 'CAST'
 
 
+def inside_a_cast_awaiting_as(tokens: Sequence[Token], caret: int) -> bool:
+    """
+    Whether the caret is inside `CAST(...)` with the value written and no AS yet.
+
+    A cast is a call with a keyword inside it, and after the value only that
+    keyword can follow. Nothing else marked the interior as different, so the
+    enclosing clause's continuations reached the caret and `SELECT cast(o.total `
+    was offered FROM, WHERE and GROUP BY — none of which can appear there.
+
+    `after_cast` answers the position past the AS, where a type belongs. This is
+    the one before it.
+    """
+    index = _index_before(tokens, caret)
+    if index < 0:
+        return False
+    if tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
+        index -= 1
+    index = _skip_back(tokens, index)
+    if index < 0 or _enclosing_call(tokens, index) != 'CAST':
+        return False
+    return not (tokens[index].type is TokenType.IDENT and tokens[index].value.upper() == 'AS')
+
+
 def _enclosing_call(tokens: Sequence[Token], index: int) -> str | None:
     """The uppercased name of the function whose argument list encloses `index`, if any."""
     wanted = tokens[index].depth - 1
@@ -973,13 +996,17 @@ def clauses_written(
     return frozenset(found)
 
 
-def words_in_item(tokens: Sequence[Token], caret: int) -> frozenset[str]:
+def words_in_item(tokens: Sequence[Token], caret: int, dialect: Dialect) -> frozenset[str]:
     """
     Unquoted keywords written in the caret's own list item, at its own depth.
 
     An item runs from the last comma to the caret. Some words are one choice
     made once — a sort direction, a nulls placement — and the clause's
     continuation list cannot know which of them the author already picked.
+
+    A select item's `*` is reported as `*`, which no keyword can collide with.
+    It is not a word, but what it rules out is the same kind of thing the words
+    rule out: a star takes no alias, so `SELECT * ` may not be offered AS.
     """
     depth = depth_at(tokens, caret)
     found: list[str] = []
@@ -991,6 +1018,8 @@ def words_in_item(tokens: Sequence[Token], caret: int) -> frozenset[str]:
             break
         if token.type is TokenType.IDENT and not token.quoted:
             found.append(token.value.upper())
+        elif token.type is TokenType.OPERATOR and token.text == '*' and _star_is_an_item(tokens, index, dialect):
+            found.append('*')
     return frozenset(found)
 
 

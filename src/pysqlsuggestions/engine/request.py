@@ -24,6 +24,7 @@ from pysqlsuggestions.engine.analyse import (
     continues_a_keyword,
     depth_at,
     in_literal,
+    inside_a_cast_awaiting_as,
     predicate_complete,
     qualifier_and_prefix,
     scope_of,
@@ -81,7 +82,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         comparand=comparand,
         comparand_type=comparand_type,
         expecting=expecting,
-        item_words=words_in_item(tokens, caret),
+        item_words=words_in_item(tokens, caret, dialect),
         statement=statement_form(tokens, lo, hi, caret, dialect),
         written=clauses_written(tokens, lo, hi, caret, dialect),
         keyword_case=_keyword_case(tokens, caret, dialect),
@@ -202,6 +203,11 @@ def _continues(
     found = continues_a_keyword(tokens, caret, dialect)
     if found:
         return found, True
+
+    # A cast holds a keyword between its two halves, and after the value that
+    # keyword is the only thing that can follow.
+    if inside_a_cast_awaiting_as(tokens, caret) and after_operand(tokens, caret, dialect):
+        return ('AS',), True
 
     # Words that stand between a clause and its first item — `SELECT DISTINCT`.
     # Only once something is typed: `SELECT ` is the commonest caret in the

@@ -63,17 +63,7 @@ Postgres reports them the same way it reports a genuinely misplaced token — so
 this harness cannot judge them and says so rather than guessing.
 """
 
-KNOWN = frozenset(
-    {
-        # A word offered where its own clause has no room for it: DISTINCT may
-        # only follow SELECT itself, and `*` takes no alias.
-        'SELECT *',
-        'SELECT * ',
-        # Inside a cast only AS belongs, and the clause's own continuations are
-        # offered instead.
-        'SELECT cast(o.total ',
-    }
-)
+KNOWN: frozenset[str] = frozenset()
 
 
 @pytest.fixture(scope='module')

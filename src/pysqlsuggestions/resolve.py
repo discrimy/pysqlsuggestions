@@ -385,7 +385,9 @@ def _unspent_alias(words: tuple[str, ...], clause: Clause, request: Request) -> 
         relations = request.scope.relations if request.scope else ()
         spent = not (relations and relations[-1].alias is None)
     else:
-        spent = word in request.item_words
+        # `*` stands in the item like a name and takes no alias: `SELECT * AS x`
+        # and `SELECT t.* AS x` are both syntax errors.
+        spent = word in request.item_words or '*' in request.item_words
     return tuple(other for other in words if other != word) if spent else words
 
 
