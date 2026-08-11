@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { type Verdict, parseVerdict, testConnection } from '../../check';
+import { type Verdict, parseVerdict, testConnection, verdictOf } from '../../check';
 
 const PG = { name: 'local', dialect: 'postgres', host: 'localhost', port: 5432, user: 'ana' };
 
@@ -43,7 +43,7 @@ test('the profile reaches the checker without its name', async () => {
   let sent = '';
   await testConnection(PG, 'hunter2', async (input) => {
     sent = input;
-    return '{"ok":true,"detail":"ok"}';
+    return { stdout: '{"ok":true,"detail":"ok"}', stderr: '', code: 0 };
   });
   const parsed = JSON.parse(sent) as Record<string, unknown>;
   assert.equal('name' in parsed, false);
@@ -57,7 +57,7 @@ test('no password sends no password field', async () => {
   let sent = '';
   await testConnection(PG, undefined, async (input) => {
     sent = input;
-    return '{"ok":true,"detail":"ok"}';
+    return { stdout: '{"ok":true,"detail":"ok"}', stderr: '', code: 0 };
   });
   assert.equal('password' in (JSON.parse(sent) as object), false);
 });
@@ -76,7 +76,49 @@ test('the spawn is given a timeout to enforce', async () => {
   let given = 0;
   await testConnection(PG, undefined, async (_input, timeoutMs) => {
     given = timeoutMs;
-    return '{"ok":true,"detail":"ok"}';
+    return { stdout: '{"ok":true,"detail":"ok"}', stderr: '', code: 0 };
   });
   assert.ok(given > 0, 'no timeout was passed to the spawn');
+});
+
+test('a checker that could not run says so, not "no verdict"', () => {
+  // The spec is explicit: a non-zero exit means the harness broke — a missing
+  // module, a half-built venv — and must read differently from a database that
+  // refused. The stderr holds the only useful sentence in that case.
+  const verdict = verdictOf({
+    stdout: '',
+    stderr: "No module named pysqlsuggestions_lsp.check\n",
+    code: 1,
+  });
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.detail, /could not run/);
+  assert.match(verdict.detail, /No module named/);
+});
+
+test('a verdict on stdout wins even when the exit code is odd', () => {
+  // The verdict is the product. An interpreter that answered and then died
+  // still answered.
+  const verdict = verdictOf({ stdout: '{"ok":false,"detail":"refused"}', stderr: 'noise', code: 1 });
+  assert.equal(verdict.detail, 'refused');
+});
+
+test('a clean exit with no verdict is still no verdict', () => {
+  const verdict = verdictOf({ stdout: 'nothing useful', stderr: '', code: 0 });
+  assert.match(verdict.detail, /no verdict/);
+});
+
+test('only the last line of stderr is quoted', () => {
+  // Python prints a traceback; the last line is the part that names the fault.
+  const verdict = verdictOf({
+    stdout: '',
+    stderr: 'Traceback (most recent call last):\n  File "x"\nImportError: cannot import name\n',
+    code: 1,
+  });
+  assert.match(verdict.detail, /ImportError/);
+  assert.equal(verdict.detail.includes('Traceback'), false);
+});
+
+test('a checker that could not run and said nothing still reports the code', () => {
+  const verdict = verdictOf({ stdout: '', stderr: '', code: 9 });
+  assert.match(verdict.detail, /9/);
 });

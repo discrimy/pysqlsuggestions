@@ -1,5 +1,7 @@
 import { strict as assert } from 'node:assert';
+import * as cp from 'node:child_process';
 import * as vscode from 'vscode';
+import { type Spawn, testConnection } from '../../check';
 
 /**
  * The extension loaded by a real editor, against the docker Postgres.
@@ -18,6 +20,29 @@ const PROFILE = {
   database: 'report_service',
   user: 'report',
 };
+
+/** The checker, spawned exactly as the extension spawns it. */
+function spawnFor(python: string): Spawn {
+  return (input, timeoutMs) =>
+    new Promise((resolve, reject) => {
+      const child = cp.spawn(python, ['-m', 'pysqlsuggestions_lsp.check'], { windowsHide: true });
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error('no answer — killed'));
+      }, timeoutMs);
+      child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+      child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+      child.on('error', reject);
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({ stdout, stderr, code });
+      });
+      child.stdin.write(input);
+      child.stdin.end();
+    });
+}
 
 /** `vscode.window` with its prompts made assignable, for the stubs below. */
 type Writable = { showQuickPick: unknown; showInputBox: unknown };
@@ -171,17 +196,40 @@ suite('managing connections', () => {
     }
   });
 
-  test('testing a good connection passes', async function () {
+  test('testing a good connection reports a real verdict', async function () {
     this.timeout(60000);
-    // The password reached SecretStorage in the first suite.
-    await vscode.commands.executeCommand('pysqlsuggestions.testConnection', {
-      profile: PROFILE,
-      scope: 'user',
-    });
-    // The verdict text is asserted against the driver in
-    // tests/integration/test_lsp_check.py. What this covers is that the command
-    // runs the checker in the managed venv at all, without throwing.
-    assert.ok(true);
+    // Asserted through the checker the extension actually spawns, in the venv
+    // it actually built. An earlier version of this test ended in
+    // `assert.ok(true)` and so passed while the bundled wheel was missing
+    // check.py entirely — a test that cannot fail is worse than no test,
+    // because it is counted.
+    const python = process.env.PYSQLSUGGESTIONS_TEST_PYTHON;
+    assert.ok(python, 'no interpreter for the harness to check with');
+    const verdict = await testConnection(PROFILE, 'report', spawnFor(python));
+    assert.equal(verdict.ok, true, `expected a working connection, got: ${verdict.detail}`);
+    assert.match(verdict.detail, /relations visible/);
+  });
+
+  test('a connection with no password says so rather than shrugging', async function () {
+    this.timeout(60000);
+    // The message this whole feature exists for. Untranslated, pg8000 says
+    // "'NoneType' object has no attribute 'decode'".
+    const python = process.env.PYSQLSUGGESTIONS_TEST_PYTHON;
+    assert.ok(python);
+    const verdict = await testConnection(PROFILE, undefined, spawnFor(python));
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /password/);
+    assert.equal(verdict.detail.includes('decode'), false);
+  });
+
+  test('a checker that cannot run says so, not "no verdict"', async function () {
+    this.timeout(60000);
+    // Exactly the failure that reached a user: a venv whose installed package
+    // had no check.py. stdout was empty, the exit code was 1, and the message
+    // was a generic shrug.
+    const verdict = await testConnection(PROFILE, 'report', spawnFor(process.execPath));
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /could not run|no answer/);
   });
 
   test('testing a connection on a dead port gives up rather than hanging', async function () {

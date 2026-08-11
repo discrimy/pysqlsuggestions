@@ -65,6 +65,7 @@ export async function findInterpreter(
 
 export interface EnsureOptions {
   root: string;
+  /** What the installed environment must match — see `stampFor`. */
   version: string;
   wheelDir: string;
   platform: NodeJS.Platform;
@@ -90,13 +91,41 @@ export function stampPath(root: string): string {
 }
 
 /**
- * Whether the environment has to be built for `version`.
+ * Whether the environment has to be built for `stamp`.
  *
  * Any difference means install, not just an older one: a downgraded extension
  * carries wheels its existing venv has never seen either.
  */
-export function needsInstall(stamp: string | undefined, version: string): boolean {
-  return stamp !== version;
+export function needsInstall(existing: string | undefined, wanted: string): boolean {
+  return existing !== wanted;
+}
+
+/**
+ * What the installed environment must match: the version, and the bundle.
+ *
+ * The version alone is not enough, and that is not hypothetical — a server
+ * rebuilt under an unchanged version once left a venv holding a package with no
+ * `check.py` in it, and nothing noticed because the number had not moved. The
+ * wheels are the thing actually installed, so the wheels are what is fingerprinted.
+ *
+ * Names and sizes rather than content hashes: reading twelve wheels on every
+ * activation to detect a change that only happens when the extension is
+ * rebuilt would be paying constantly for a rare event.
+ *
+ * Sorted, because directory order is not a fact about the bundle and
+ * reinstalling at random would be worse than not reinstalling at all.
+ */
+export function stampFor(version: string, wheels: readonly { name: string; size: number }[]): string {
+  const listed = [...wheels]
+    .map((wheel) => `${wheel.name}:${String(wheel.size)}`)
+    .sort()
+    .join('|');
+  let hash = 0;
+  for (let index = 0; index < listed.length; index += 1) {
+    hash = (Math.imul(hash, 31) + listed.charCodeAt(index)) | 0;
+  }
+  // The version leads so that a human opening the file learns something.
+  return `${version}+${(hash >>> 0).toString(16)}`;
 }
 
 /**
@@ -124,6 +153,11 @@ export async function ensureVenv(options: EnsureOptions): Promise<Runtime> {
       'pip',
       'install',
       '--no-index',
+      // pip skips a distribution whose version is already installed, whatever
+      // the wheel now contains — "requirement already satisfied", and the old
+      // files stay. Since we only reach here when the bundle's fingerprint
+      // changed, replacing unconditionally is the point rather than a cost.
+      '--force-reinstall',
       '--find-links',
       options.wheelDir,
       // The extra is what carries the driver. Without it the server installs

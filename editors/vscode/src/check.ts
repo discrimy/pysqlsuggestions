@@ -22,7 +22,13 @@ export interface Verdict {
   detail: string;
 }
 
-export type Spawn = (input: string, timeoutMs: number) => Promise<string>;
+export interface Completed {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+}
+
+export type Spawn = (input: string, timeoutMs: number) => Promise<Completed>;
 
 /** Long enough for a slow VPN, short enough that nobody wonders if it hung. */
 export const CHECK_TIMEOUT_MS = 10000;
@@ -52,6 +58,29 @@ export function parseVerdict(output: string): Verdict {
   return { ok: false, detail: 'the check produced no verdict' };
 }
 
+/**
+ * The verdict a finished process amounts to.
+ *
+ * A verdict on stdout always wins: a checker that answered and then died still
+ * answered. Failing that, a non-zero exit means *this harness* broke — a
+ * missing module, a half-built venv — which has to read differently from a
+ * database that refused, because the fix is completely different. The last line
+ * of stderr is the part that names the fault; Python puts the traceback above
+ * it.
+ */
+export function verdictOf(result: Completed): Verdict {
+  const parsed = parseVerdict(result.stdout);
+  if (parsed.detail !== 'the check produced no verdict') {
+    return parsed;
+  }
+  if (result.code !== 0) {
+    const lines = result.stderr.split('\n').filter((line) => line.trim().length > 0);
+    const reason = lines[lines.length - 1] ?? `exit code ${String(result.code)}`;
+    return { ok: false, detail: `the checker could not run: ${reason.trim()}` };
+  }
+  return parsed;
+}
+
 /** Test `profile`, using `password` if there is one. Never throws. */
 export async function testConnection(
   profile: Profile,
@@ -75,7 +104,7 @@ export async function testConnection(
   }
 
   try {
-    return parseVerdict(await spawn(JSON.stringify(options), CHECK_TIMEOUT_MS));
+    return verdictOf(await spawn(JSON.stringify(options), CHECK_TIMEOUT_MS));
   } catch (error) {
     return { ok: false, detail: error instanceof Error ? error.message : String(error) };
   }

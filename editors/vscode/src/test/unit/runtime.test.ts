@@ -6,6 +6,7 @@ import {
   findInterpreter,
   meetsMinimum,
   needsInstall,
+  stampFor,
   stampPath,
   venvPython,
 } from '../../runtime';
@@ -197,4 +198,65 @@ test('the reported interpreter is the venv one, even when not ready', async () =
   // would start the wrong Python.
   const runtime = await ensureVenv(options({ findPython: async () => undefined }));
   assert.equal(runtime.python, '/storage/venv/bin/python');
+});
+
+test('the stamp changes when a bundled wheel changes', () => {
+  // The version string alone cannot see this. A server rebuilt under the same
+  // version leaves a venv holding code that no longer exists in the VSIX —
+  // which is exactly how `check.py` came to be missing from a working install.
+  const before = stampFor('0.2.1', [{ name: 'server.whl', size: 100 }]);
+  const after = stampFor('0.2.1', [{ name: 'server.whl', size: 101 }]);
+  assert.notEqual(before, after);
+});
+
+test('the stamp changes when a wheel is added', () => {
+  const before = stampFor('0.2.1', [{ name: 'a.whl', size: 1 }]);
+  const after = stampFor('0.2.1', [
+    { name: 'a.whl', size: 1 },
+    { name: 'b.whl', size: 2 },
+  ]);
+  assert.notEqual(before, after);
+});
+
+test('the stamp changes when the version changes', () => {
+  const wheels = [{ name: 'a.whl', size: 1 }];
+  assert.notEqual(stampFor('0.2.1', wheels), stampFor('0.3.0', wheels));
+});
+
+test('the stamp does not change with directory listing order', () => {
+  // Filesystem order is not a fact about the bundle, and rebuilding on it
+  // would reinstall at random.
+  const one = stampFor('0.2.1', [
+    { name: 'a.whl', size: 1 },
+    { name: 'b.whl', size: 2 },
+  ]);
+  const other = stampFor('0.2.1', [
+    { name: 'b.whl', size: 2 },
+    { name: 'a.whl', size: 1 },
+  ]);
+  assert.equal(one, other);
+});
+
+test('the stamp is one line, because it is written to a file and read back', () => {
+  const stamp = stampFor('0.2.1', [{ name: 'a.whl', size: 1 }]);
+  assert.equal(stamp.includes('\n'), false);
+  assert.ok(stamp.startsWith('0.2.1'), 'a human reading the file should see the version first');
+});
+
+test('the install replaces what is there rather than trusting the version', async () => {
+  // pip skips a distribution whose version is already installed, whatever the
+  // wheel now contains. That is how a venv came to hold a package with no
+  // check.py in it while the bundle had one: the stamp changed, the install
+  // ran, and pip said "requirement already satisfied".
+  const commands: string[][] = [];
+  await ensureVenv(
+    options({
+      run: async (command, args) => {
+        commands.push([command, ...args]);
+      },
+    }),
+  );
+  const install = commands.find((command) => command.includes('install'));
+  assert.ok(install, 'nothing was installed');
+  assert.equal(install.includes('--force-reinstall'), true);
 });

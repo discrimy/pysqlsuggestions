@@ -14,7 +14,7 @@ import * as vscode from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions } from 'vscode-languageclient/node';
 import { type Spawn, testConnection } from './check';
 import { type Profile, initializationOptions, needsPassword, readProfiles, resolveProfile } from './profiles';
-import { MINIMUM_PYTHON, ensureVenv, findInterpreter, stampPath } from './runtime';
+import { MINIMUM_PYTHON, ensureVenv, findInterpreter, stampFor, stampPath } from './runtime';
 import { forgetPassword, promptForPassword, readPassword } from './secrets';
 import { Status } from './status';
 import {
@@ -51,6 +51,27 @@ let venvPython: string | undefined;
  */
 const declined = new Set<string>();
 
+/**
+ * The wheels the VSIX carries, by name and size.
+ *
+ * Empty when the directory is unreadable, which makes the stamp depend on the
+ * version alone — the behaviour before this existed, and the right fallback:
+ * an unreadable bundle is a broken install that the install step will report
+ * far more clearly than a stamp mismatch would.
+ */
+async function bundledWheels(directory: string): Promise<{ name: string; size: number }[]> {
+  try {
+    const names = await fs.readdir(directory);
+    return await Promise.all(
+      names
+        .filter((name) => name.endsWith('.whl'))
+        .map(async (name) => ({ name, size: (await fs.stat(`${directory}/${name}`)).size })),
+    );
+  } catch {
+    return [];
+  }
+}
+
 /** Settings, as `store.ts` wants them. */
 function settingsAccess(): SettingsAccess {
   const inspect = () =>
@@ -81,20 +102,27 @@ function checkSpawn(python: string): Spawn {
   return (input, timeoutMs) =>
     new Promise((resolve, reject) => {
       const child = cp.spawn(python, ['-m', 'pysqlsuggestions_lsp.check'], { windowsHide: true });
-      let collected = '';
+      let stdout = '';
+      let stderr = '';
       const timer = setTimeout(() => {
         child.kill();
         reject(new Error(`no answer in ${String(timeoutMs / 1000)}s — killed`));
       }, timeoutMs);
-      child.stdout.on('data', (chunk: Buffer) => (collected += chunk.toString()));
-      child.stderr.on('data', (chunk: Buffer) => output?.append(chunk.toString()));
+      child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
+      // Kept as well as logged: when the checker itself cannot run, this holds
+      // the only sentence that says why, and the user needs it in the tooltip
+      // rather than only in a channel they have no reason to open.
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+        output?.append(chunk.toString());
+      });
       child.on('error', (error) => {
         clearTimeout(timer);
         reject(error);
       });
-      child.on('close', () => {
+      child.on('close', (code) => {
         clearTimeout(timer);
-        resolve(collected);
+        resolve({ stdout, stderr, code });
       });
       child.stdin.write(input);
       child.stdin.end();
@@ -208,13 +236,17 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   await fs.mkdir(root, { recursive: true });
 
   const version = (context.extension.packageJSON as { version: string }).version;
+  const wheelDir = vscode.Uri.joinPath(context.extensionUri, 'bundled', 'wheels').fsPath;
   const runtime = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: 'pysqlsuggestions: preparing Python…' },
-    () =>
+    async () =>
       ensureVenv({
         root,
-        version,
-        wheelDir: vscode.Uri.joinPath(context.extensionUri, 'bundled', 'wheels').fsPath,
+        // The bundle, not just the version: a server rebuilt under an unchanged
+        // version would otherwise leave a venv holding code the VSIX no longer
+        // carries, and nothing would notice.
+        version: stampFor(version, await bundledWheels(wheelDir)),
+        wheelDir,
         platform: process.platform,
         findPython: () => findPython(settings.get<string | null>('pythonPath', null)),
         run,
