@@ -19,7 +19,7 @@ from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
 from pysqlsuggestions.dialects.base import Dialect, Query
-from pysqlsuggestions.types import Column, ColumnValue, Function, Table
+from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
 _MARKER = re.compile(r'\$(\d+)')
 _DEFAULT_PARAMSTYLE = 'format'
@@ -144,6 +144,11 @@ class DbapiCatalog:
             return []
         rows = self._rows(self._dialect.catalog_queries.column_search, prefix)
         return [row for row in rows if isinstance(row, Column)][:limit]
+
+    def foreign_keys(self, schema: str | None = None) -> Sequence[ForeignKey]:
+        """Declared relationships, when the dialect ships the query. Empty when it does not."""
+        rows = self._rows(self._dialect.catalog_queries.foreign_keys, schema or '')
+        return [row for row in rows if isinstance(row, ForeignKey)]
 
     def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[ColumnValue]:
         """Frequent values of one column, from the dialect's statistics query."""
