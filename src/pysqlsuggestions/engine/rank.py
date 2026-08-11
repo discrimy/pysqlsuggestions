@@ -81,6 +81,7 @@ def rank(
                     takes_arguments=candidate.takes_arguments,
                     stops=stops,
                     label=candidate.label,
+                    relation=candidate.relation,
                 ),
             ),
         )

@@ -12,15 +12,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.engine.analyse import select_list_end
+from pysqlsuggestions.engine.lex import lex
 from pysqlsuggestions.engine.local import local_candidates
-from pysqlsuggestions.engine.rank import rank
+from pysqlsuggestions.engine.rank import quote_if_needed, rank
 from pysqlsuggestions.engine.request import derive_request
 from pysqlsuggestions.ports import Cache, Catalog
 from pysqlsuggestions.resolve import resolve
 from pysqlsuggestions.types import (
     Candidate,
     Column,
+    Edit,
     Function,
     Insertion,
     Kind,
@@ -107,6 +111,7 @@ def plan_insertion(
     sql: str,
     suggestion: Suggestion,
     *,
+    dialect: Dialect = ANSI,
     pending: Sequence[int] = (),
     close_parens: bool = True,
 ) -> Insertion:
@@ -144,23 +149,44 @@ def plan_insertion(
         else:
             text += '.'
 
+    here = Edit(span=(start, end), text=text)
+    later = _relation_edit(sql, suggestion, dialect)
+    edits = (later, here) if later is not None else (here,)
+
     default = start + len(text)
     if suggestion.stops:
         # A template opens its own blanks, relative to where it was spliced.
         opened = tuple(start + offset for offset in suggestion.stops)
-        return Insertion(span=(start, end), text=text, caret=opened[0], pending=opened[1:])
+        return Insertion(edits=edits, caret=opened[0], pending=opened[1:])
 
     moved = tuple(p + len(text) - (end - start) if p >= end else p for p in pending)
     if moved and finished:
         # Accepting *is* filling that blank, so the caret goes to the next one.
-        return Insertion(span=(start, end), text=text, caret=moved[0], pending=moved[1:])
-    return Insertion(span=(start, end), text=text, caret=caret if caret is not None else default, pending=moved)
+        return Insertion(edits=edits, caret=moved[0], pending=moved[1:])
+    return Insertion(edits=edits, caret=caret if caret is not None else default, pending=moved)
+
+
+def _relation_edit(sql: str, suggestion: Suggestion, dialect: Dialect) -> Edit | None:
+    """
+    The FROM clause a column needs when the statement has none.
+
+    Comes *after* the column in the text, so it is listed first and applied
+    first: making it cannot move the column's own span, and the caret stays
+    where the author was rather than jumping to the end of a clause they did
+    not type.
+    """
+    if not suggestion.relation:
+        return None
+    at = select_list_end(lex(sql, dialect.syntax), suggestion.replace_span[1], dialect)
+    reference = '.'.join(quote_if_needed(part, dialect) for part in suggestion.relation)
+    return Edit(span=(at, at), text=f' FROM {reference}')
 
 
 def apply_suggestion(
     sql: str,
     suggestion: Suggestion,
     *,
+    dialect: Dialect = ANSI,
     close_parens: bool = True,
 ) -> tuple[str, int]:
     """
@@ -177,9 +203,10 @@ def apply_suggestion(
     span from their own idea of a word get that wrong, which is why the span
     travels with the suggestion.
     """
-    plan = plan_insertion(sql, suggestion, close_parens=close_parens)
-    start, end = plan.span
-    return sql[:start] + plan.text + sql[end:], plan.caret
+    plan = plan_insertion(sql, suggestion, dialect=dialect, close_parens=close_parens)
+    for edit in plan.edits:
+        sql = sql[: edit.span[0]] + edit.text + sql[edit.span[1] :]
+    return sql, plan.caret
 
 
 def _separated(sql: str, start: int, end: int, text: str) -> str:

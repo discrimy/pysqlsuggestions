@@ -71,6 +71,9 @@ GAPS = {
     # also hides a second relation's column behind the first once deduplicated.
     # These assert the bare names their engine returned.
     'columns are qualified with the relation they belong to': [
+        'columns_before_any_from_use_the_whole_schema_read',
+        'columns_before_any_from_are_prefix_filtered',
+        'an_oversized_schema_falls_back_to_the_prefix_query',
         'any_subquery_relations_drop_out',
         'column_prefix_hit_ranks_above_substring_hit',
         'correlated_outer_relation_visible_inside_a_subquery',

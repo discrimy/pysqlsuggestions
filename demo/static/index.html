@@ -341,8 +341,14 @@ function place() {
 function accept(i) {
   const s = items[i];
   if (!s) return;
-  const { span, text, caret } = s.insertion;
-  sql.value = sql.value.slice(0, span[0]) + text + sql.value.slice(span[1]);
+  // Edits arrive last-first, so applying them in order needs no arithmetic: an
+  // earlier one cannot move a later one that has already been made. Usually
+  // there is one; a column chosen before any FROM exists brings a second that
+  // writes the FROM.
+  for (const e of s.insertion.edits) {
+    sql.value = sql.value.slice(0, e.span[0]) + e.text + sql.value.slice(e.span[1]);
+  }
+  const { caret } = s.insertion;
   pending = s.insertion.pending;
   measured = sql.value.length;
   sql.setSelectionRange(caret, caret);
@@ -351,10 +357,8 @@ function accept(i) {
   items = [];
   active = -1;
   sql.focus();
-  // Reopen where the caret was left somewhere with more to say: inside a
-  // function's parentheses, after a namespace's dot, or in a template blank.
-  const parked = caret !== span[0] + text.length;
-  request(!parked);
+  // Whether to reopen is the library's call too; the page just does as told.
+  request(!s.insertion.reopen);
 }
 
 function move(delta) {

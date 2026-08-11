@@ -446,8 +446,15 @@ def test_column_search_degrades_when_unsupported() -> None:
 
 
 def test_bare_select_uses_column_search_when_supported() -> None:
-    """With the capability, columns are offered before any FROM clause exists."""
-    assert 'username' in texts('SELECT userna⌶')
+    """
+    With the capability, columns are offered before any FROM clause exists —
+    named by the relation they would need, because choosing one is choosing
+    that relation too.
+    """
+    assert 'auth_user.username' in texts('SELECT userna⌶')
+    sql, caret = split_caret('SELECT userna⌶')
+    found = next(s for s in complete(sql, caret, POSTGRES, catalog()) if s.kind is Kind.COLUMN)
+    assert found.relation == ('auth_user',), 'and it says which, so insertion can write the FROM'
 
 
 @pytest.mark.parametrize(
@@ -526,7 +533,7 @@ def test_a_narrow_search_still_finds_the_closest_match() -> None:
     wide = {('public', f't{index}'): [(f'created_at_variant_{index:03d}', 'date')] for index in range(300)}
     wide[('public', 'events')] = [('created', 'date')]
     found = complete('SELECT crea', 11, POSTGRES, MemoryCatalog(wide, oversized=True))
-    assert [s.text for s in found][0] == 'created'
+    assert [s.text for s in found][0] == 'events.created'
 
 
 def test_a_table_says_roughly_how_big_it_is() -> None:

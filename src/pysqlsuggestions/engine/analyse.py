@@ -929,6 +929,33 @@ def words_in_item(tokens: Sequence[Token], caret: int) -> frozenset[str]:
     return frozenset(found)
 
 
+def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> int:
+    """
+    The offset where a FROM clause belongs: just past the select list.
+
+    Not the end of the statement — `SELECT na ORDER BY 1` has somewhere for a
+    FROM to go and it is before the ORDER BY. Falls back to the end of the
+    caret's statement when nothing follows the list.
+    """
+    lo, hi = statement_at(tokens, caret)
+    lo, hi = _branch_at(tokens, lo, hi, caret)
+    depth = _base_depth(tokens, lo, hi)
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type in _SKIP or token.depth != depth or token.end <= caret:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
+        if matched is not None and matched[0] != 'SELECT':
+            return _skip_back_over_space(tokens, index)
+    return tokens[hi - 1].end if hi > lo else caret
+
+
+def _skip_back_over_space(tokens: Sequence[Token], index: int) -> int:
+    """The offset just before `index`, ignoring the whitespace in front of it."""
+    probe = _skip_back(tokens, index - 1)
+    return tokens[probe].end if probe >= 0 else tokens[index].start
+
+
 def statement_form(
     tokens: Sequence[Token],
     lo: int,

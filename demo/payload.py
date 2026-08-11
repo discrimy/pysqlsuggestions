@@ -54,18 +54,22 @@ def respond(
         'available': catalog is not None,
         'elapsed_ms': round((time.perf_counter() - started) * 1000, 2),
         'request': describe(request),
-        'suggestions': [_suggestion(s, sql, pending) for s in suggestions],
+        'suggestions': [_suggestion(s, sql, dialect, pending) for s in suggestions],
     }
 
 
-def _suggestion(suggestion: Suggestion, sql: str, pending: Sequence[int]) -> dict[str, Any]:
-    plan = plan_insertion(sql, suggestion, pending=pending)
+def _suggestion(suggestion: Suggestion, sql: str, dialect: Dialect, pending: Sequence[int]) -> dict[str, Any]:
+    plan = plan_insertion(sql, suggestion, dialect=dialect, pending=pending)
+    # Whether the caret was left somewhere with more to say — inside a function's
+    # parentheses, past a namespace's dot, in a template blank — rather than at
+    # the natural end of what was inserted. A decision, so it is made here.
+    primary = plan.edits[-1]
     return {
         'insertion': {
-            'span': list(plan.span),
-            'text': plan.text,
+            'edits': [{'span': list(e.span), 'text': e.text} for e in plan.edits],
             'caret': plan.caret,
             'pending': list(plan.pending),
+            'reopen': plan.caret != primary.span[0] + len(primary.text),
         },
         'text': suggestion.text,
         'kind': suggestion.kind.value,

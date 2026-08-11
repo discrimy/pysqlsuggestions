@@ -227,7 +227,12 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             for relation in relations:
                 candidates += _columns_of(relation, reader, seen, qualify=relation.label or None)
         else:
-            candidates += [_column_candidate(c) for c in reader.loose_columns(request.prefix, limit)]
+            # Nothing is in the FROM yet, so each column carries the relation it
+            # would need there. Choosing one is choosing its table as well.
+            candidates += [
+                _column_candidate(c, qualify=c.table, relation=(c.table,))
+                for c in reader.loose_columns(request.prefix, limit)
+            ]
 
     if Kind.TABLE in request.kinds:
         candidates += [_table_candidate(table) for table in reader.tables(None)]
@@ -527,7 +532,12 @@ def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
     return path[-2], path[-1]
 
 
-def _column_candidate(column: Column, label: str | None = None, qualify: str | None = None) -> Candidate:
+def _column_candidate(
+    column: Column,
+    label: str | None = None,
+    qualify: str | None = None,
+    relation: tuple[str, ...] = (),
+) -> Candidate:
     return Candidate(
         text=column.name,
         kind=Kind.COLUMN,
@@ -535,6 +545,7 @@ def _column_candidate(column: Column, label: str | None = None, qualify: str | N
         position=column.position,
         type=column.type,
         qualifier=qualify,
+        relation=relation,
     )
 
 

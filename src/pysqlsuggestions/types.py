@@ -285,6 +285,16 @@ class Candidate:
     Matching still runs against `text`, so typing `na` finds `r.name`: the
     qualifier is about what gets inserted, not what has to be typed to find it.
     """
+    relation: tuple[str, ...] = ()
+    """The relation this column needs in the FROM clause, when the statement has none."""
+
+
+@dataclass(frozen=True, slots=True)
+class Edit:
+    """One replacement: put `text` where `span` is."""
+
+    span: tuple[int, int]
+    text: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,10 +309,16 @@ class Insertion:
     is one that has to be reimplemented there and then kept in step.
     """
 
-    span: tuple[int, int]
-    """What to replace. Always a valid slice of the SQL it was planned against."""
-    text: str
-    """What to put there. Ready to insert, including any separator or closing bracket."""
+    edits: tuple[Edit, ...]
+    """
+    The replacements to make, latest in the text first.
+
+    Usually one. A column chosen before any FROM exists needs two — itself, and
+    the relation it belongs to — and there is no single span covering both.
+    Ordering them last-first means applying them in sequence needs no offset
+    arithmetic: an earlier edit cannot move a later one that has already been
+    made.
+    """
     caret: int
     """Where the caret goes afterwards, as an offset into the spliced text."""
     pending: tuple[int, ...] = ()
@@ -335,3 +351,12 @@ class Suggestion:
     """
     label: str | None = None
     """What to show in a list. Falls back to `text`, which is usually the same thing."""
+    relation: tuple[str, ...] = ()
+    """
+    A relation the statement does not have yet and this suggestion needs.
+
+    Set only for a column offered before any FROM exists. Choosing one there is
+    choosing its table as well — a column reference to a relation the query does
+    not name is not a smaller mistake than no suggestion at all — so insertion
+    writes the FROM clause in the same edit.
+    """
