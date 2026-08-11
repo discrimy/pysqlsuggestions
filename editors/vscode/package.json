@@ -57,7 +57,7 @@
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
     "compile": "tsc -p . --outDir out",
-    "check": "tsc --noEmit && npm run compile && node --test out/test/unit/",
+    "check": "tsc --noEmit && npm run compile && node --test \"out/test/unit/*.test.js\"",
     "test:integration": "npm run compile && node out/test/runTests.js"
   },
   "dependencies": {
