@@ -88,14 +88,19 @@ def _alias_suggestions(request: Request) -> list[Candidate]:
     Only fires when the relation has no alias yet, and only for the most recently
     named one — suggesting an alias for a relation the user finished with three
     clauses ago is noise.
+
+    The most recent relation, that is, rather than the most recent one still
+    lacking an alias. An alias attaches to whatever was just written, so where
+    that already has one the answer is nothing: `FROM flight JOIN booking AS b `
+    offering `f` writes `booking AS b f`, which parses as nothing at all.
     """
     scope = request.scope
-    if scope is None or request.prefix:
+    if scope is None or request.prefix or not scope.relations:
         return []
-    unaliased = [r for r in scope.relations if r.alias is None and r.path]
-    if not unaliased:
+    latest = scope.relations[-1]
+    if latest.alias is not None or not latest.path:
         return []
-    name = unaliased[-1].path[-1]
+    name = latest.path[-1]
     return [
         Candidate(text=alias, kind=Kind.ALIAS, detail=f'alias for {name}', position=index, origin='local')
         for index, alias in enumerate(_alias_forms(name))

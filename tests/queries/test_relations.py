@@ -119,3 +119,50 @@ def test_a_finished_relation_takes_a_connective_not_another_relation(cur: Memory
 
     naming = kinds(cur, 'select * from ')
     assert naming['auth_user'] == 'table', 'and where a relation may be named, relations are offered'
+
+
+def test_a_relation_that_has_an_alias_is_not_offered_another(cur: MemoryCatalog) -> None:
+    """
+    `AS` is spent once it has been used, and a second one parses as nothing.
+
+    A clause's continuation list says what may follow it, not what is still
+    unused, and the words already written cannot settle this the way they settle
+    ASC against DESC: an item runs to the last comma, and joins are not
+    comma-separated, so `FROM a AS x JOIN b` is one item holding an `AS` that
+    belongs to a different relation. The relation has to answer instead — the
+    most recent one, since that is what an alias would attach to.
+    """
+    assert 'as' in texts(cur, 'select * from auth_user ')
+    assert 'as' not in texts(cur, 'select * from auth_user as u ')
+    assert 'as' not in texts(cur, 'select * from auth_user u '), 'an alias needs no AS to be an alias'
+
+    assert 'as' in texts(cur, 'select * from auth_user as u join orders '), 'the new relation has none'
+    assert 'as' not in texts(cur, 'select * from auth_user join orders as o ')
+
+
+def test_an_alias_is_offered_for_the_relation_it_would_attach_to(cur: MemoryCatalog) -> None:
+    """
+    The same rule, for the names rather than the keyword.
+
+    Offering an alias for the last relation *lacking* one proposes it after
+    whatever was actually written last: `FROM auth_user JOIN orders AS o` would
+    take `au`, giving `orders AS o au`. Only the most recent relation can be
+    named, and only while it is unnamed.
+    """
+    assert 'au' in texts(cur, 'select * from auth_user ')
+    assert 'au' not in texts(cur, 'select * from auth_user join orders as o ')
+    assert 'o' in texts(cur, 'select * from auth_user as u join orders ')
+
+
+def test_a_select_item_that_has_an_alias_is_not_offered_another(cur: MemoryCatalog) -> None:
+    """
+    The same spending, settled the other way.
+
+    Select items are comma-separated, so the words of the item answer it and no
+    relation needs consulting — and the `AS` inside `CAST(x AS text)` sits at a
+    deeper level than the item, which is what keeps it from counting.
+    """
+    assert 'as' in texts(cur, 'select u.id ')
+    assert 'as' not in texts(cur, 'select u.id as x ')
+    assert 'as' in texts(cur, 'select u.id as x, u.email '), 'the comma starts a fresh item'
+    assert 'as' in texts(cur, 'select cast(u.id as text) '), "the cast's AS belongs to the cast"

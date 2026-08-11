@@ -67,12 +67,18 @@ CLAUSES = ClauseModel(
         # No KEYWORD here: a select list wants columns and functions, and burying
         # them under reserved words is the failure mode this engine exists to avoid.
         # AS/FROM/DISTINCT arrive through `followed_by`, once an item is written.
-        Clause(name='SELECT', suggests=COLUMN_EXPRESSION, followed_by=('AS', 'DISTINCT', *_onwards('FROM'))),
+        Clause(
+            name='SELECT',
+            suggests=COLUMN_EXPRESSION,
+            followed_by=('AS', 'DISTINCT', *_onwards('FROM')),
+            aliases_with='AS',
+        ),
         Clause(
             name='FROM',
             follows=frozenset({'SELECT'}),
             suggests=RELATION_REFERENCE,
             followed_by=_AFTER_RELATION,
+            aliases_with='AS',
         ),
         Clause(
             name='DELETE FROM',
@@ -95,6 +101,7 @@ CLAUSES = ClauseModel(
             repeats=True,
             suggests=RELATION_REFERENCE,
             followed_by=('AS', 'ON', 'USING'),
+            aliases_with='AS',
         ),
         Clause(
             name='ON',

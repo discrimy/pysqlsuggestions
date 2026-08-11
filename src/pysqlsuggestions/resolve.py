@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TypeVar
 
-from pysqlsuggestions.dialects.base import EXCLUSIVE, Dialect
+from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes
 from pysqlsuggestions.ports import Cache, Catalog, SupportsColumnSearch, SupportsColumnValues, SupportsKeywords
 from pysqlsuggestions.types import (
@@ -310,9 +310,13 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         words = (
             clause.after_operand
             if request.expecting == 'operator'
-            else _unchosen(
-                dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
-                request.item_words,
+            else _unspent_alias(
+                _unchosen(
+                    dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
+                    request.item_words,
+                ),
+                clause,
+                request,
             )
         )
         if words:
@@ -330,6 +334,31 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
         for word, description in reader.keywords()
     ]
+
+
+def _unspent_alias(words: tuple[str, ...], clause: Clause, request: Request) -> tuple[str, ...]:
+    """
+    Drop the alias keyword once the relation it would attach to has an alias.
+
+    `FROM flight_raw AS fr ` offering `AS` again writes a statement no server
+    accepts, and it led the list — the caret sits there in every finished query.
+
+    What counts as spent depends on what is being named. A relation clause has
+    to ask the relation: the most recent one is what an alias would attach to,
+    so `FROM a AS x JOIN b ` still offers it while `FROM a JOIN b AS y ` does
+    not, and joins are not separated by commas for the words to settle it. A
+    select item is, so there the words of the item are the whole answer —
+    `SELECT f.id AS x ` has spent its `AS`, and `…, f.number ` has not.
+    """
+    word = clause.aliases_with
+    if not word or word not in words:
+        return words
+    if Kind.TABLE in clause.suggests:
+        relations = request.scope.relations if request.scope else ()
+        spent = not (relations and relations[-1].alias is None)
+    else:
+        spent = word in request.item_words
+    return tuple(other for other in words if other != word) if spent else words
 
 
 def _unchosen(words: tuple[str, ...], written: frozenset[str]) -> tuple[str, ...]:

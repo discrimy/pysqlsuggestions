@@ -110,6 +110,19 @@ class Clause:
     that are not clauses in their own right — `AS`, `AND`, `ASC` — plus the
     canonical clause order; anything a dialect adds arrives through `follows`.
     """
+    aliases_with: str = ''
+    """
+    The word that gives this clause's relation an alias, where it takes one.
+
+    Named separately from `followed_by` because it is spent: `FROM flight_raw `
+    may take `AS`, and `FROM flight_raw AS fr ` may not — a second one parses as
+    nothing. `followed_by` says what may follow the clause, which is not the
+    same as what has not been used yet.
+
+    The words already written cannot settle it the way they settle `ASC`/`DESC`.
+    Those are one item apart, and joins are not: `FROM a AS x JOIN b ` is a
+    single item containing an `AS` that belongs to a different relation.
+    """
     operators: tuple[str, ...] = ()
     """
     Operators that may follow a completed operand here.
