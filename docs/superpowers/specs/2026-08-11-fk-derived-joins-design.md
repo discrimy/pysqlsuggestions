@@ -339,6 +339,15 @@ SQL rather than one identifier, so an accepted proposal leaving a statement
 Postgres still parses is the property most worth proving. Those harnesses found
 twenty-seven defects; a feature that writes `JOIN … ON …` belongs in them.
 
+With one correction, found while planning. `test_acceptance.py` walks every
+caret in *complete* statements, so any multi-token insertion collides with the
+text after the caret whatever its own merits — a correct join clause spliced in
+front of an existing one is a syntax error about the collision, not about the
+proposal. That is why `Kind.SNIPPET` is already excluded there, and `Kind.JOIN`
+has to be excluded for the same reason. The real judgement happens in a
+dedicated test in the same file, over prefixes with nothing following the caret,
+which is where a synthesized clause can be judged on its own.
+
 ### 9.3 Against the container
 
 The fixture already carries the awkward shapes: seven reverse edges into
