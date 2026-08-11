@@ -66,7 +66,7 @@ def test_values_lead_the_columns_they_are_compared_against() -> None:
     """A concrete value is the likelier answer right of an operator; the columns stay."""
     found = texts('SELECT * FROM reports_database d WHERE d.type = ⌶')
     assert found[0].startswith("'")
-    assert 'title' in found
+    assert 'd.title' in found
 
 
 def test_values_are_offered_only_where_one_belongs() -> None:
@@ -102,7 +102,7 @@ def test_a_catalog_without_statistics_offers_no_values(dialect: Dialect) -> None
     bare = MemoryCatalog(SNAPSHOT)
     found = texts('SELECT * FROM reports_database d WHERE d.type = ⌶', dialect, bare)
     assert not any(t.startswith("'") for t in found)
-    assert 'title' in found
+    assert 'd.title' in found
 
 
 def test_a_boolean_never_takes_the_form_statistics_print_it_in() -> None:

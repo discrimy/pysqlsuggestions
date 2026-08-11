@@ -64,7 +64,7 @@ def test_nulls_wants_first_or_last() -> None:
 def test_a_sort_direction_does_not_reopen_the_item() -> None:
     """`ORDER BY id ASC ⌶` accepting a column gives `ASC name`."""
     offered = texts('SELECT * FROM events ORDER BY id ASC ⌶')
-    assert 'name' not in offered
+    assert 'events.name' not in offered
     assert 'LIMIT' in offered
     assert 'name' not in texts('SELECT * FROM events ORDER BY id NULLS LAST ⌶')
 
@@ -106,8 +106,8 @@ def test_case_offers_the_words_that_continue_it() -> None:
 
 def test_a_case_branch_takes_an_operand_after_then() -> None:
     """`THEN ⌶` and `ELSE ⌶` open a value, so columns belong there."""
-    assert 'name' in texts('SELECT CASE WHEN id = 1 THEN ⌶ FROM events')
-    assert 'name' in texts("SELECT CASE WHEN id = 1 THEN 'a' ELSE ⌶ FROM events")
+    assert 'events.name' in texts('SELECT CASE WHEN id = 1 THEN ⌶ FROM events')
+    assert 'events.name' in texts("SELECT CASE WHEN id = 1 THEN 'a' ELSE ⌶ FROM events")
 
 
 def test_a_finished_case_is_a_completed_item() -> None:

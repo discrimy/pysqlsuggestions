@@ -64,17 +64,54 @@ SKIP = {
 # Known gaps, grouped by root cause. Each is a real behaviour report_service
 # users have today and this library does not yet — a burn-down, not a wontfix.
 GAPS = {
-    # Not a gap: a deliberate difference. With two relations in view a bare name
-    # may not parse — `WHERE id` against two tables that both have one is an
-    # ambiguity error — and deduplicating bare names hides the second relation's
-    # column behind the first. These assert the bare names their engine returned.
-    'columns are qualified when more than one relation is in scope': [
-        'join_brings_both_relations',
-        'cte_joined_with_a_real_table',
-        'cte_and_derived_table_both_in_scope',
-        'report_query_unqualified_scope',
+    # Not a gap: a deliberate difference, and one asked for directly — prefer
+    # `<alias>.<column>` so a reference is never ambiguous. Their engine returns
+    # bare names whenever it can. A bare name only reads better while there is
+    # one relation, and the caret is usually in a query still being written; it
+    # also hides a second relation's column behind the first once deduplicated.
+    # These assert the bare names their engine returned.
+    'columns are qualified with the relation they belong to': [
+        'any_subquery_relations_drop_out',
+        'column_prefix_hit_ranks_above_substring_hit',
         'correlated_outer_relation_visible_inside_a_subquery',
+        'cte_and_derived_table_both_in_scope',
+        'cte_columns_in_group_by',
+        'cte_columns_in_having',
+        'cte_columns_in_order_by',
+        'cte_from_a_previous_statement_is_not_visible',
+        'cte_joined_with_a_real_table',
+        'cursor_inside_cte_body_unqualified',
+        'derived_table_does_not_leak',
+        'dollar_quoted_string_with_an_apostrophe',
+        'except_second_branch',
+        'function_in_from_unqualified_scope',
+        'function_without_alias_is_harmless',
+        'inner_relation_does_not_leak_outward',
+        'insert_column_list_uses_the_target_table',
+        'join_brings_both_relations',
+        'json_operator_then_column',
         'nested_subquery_sees_every_enclosing_level',
+        'numbered_parameter_is_not_a_dollar_quote',
+        'outer_scope_after_two_ctes',
+        'parenthesised_union_branches',
+        'partition_by_sees_the_relation_after_the_cursor',
+        'plain_unqualified_columns',
+        'psycopg_named_parameter',
+        'psycopg_positional_parameter',
+        'report_placeholder_does_not_break_scope',
+        'report_placeholder_mentioning_from',
+        'report_query_unqualified_scope',
+        'scalar_subquery_in_select_list_does_not_leak',
+        'second_statement_does_not_see_the_first',
+        'string_literal_mentioning_sql_does_not_add_relations',
+        'subquery_relations_drop_out_once_it_closes',
+        'tagged_dollar_quote',
+        'union_first_branch_scope',
+        'union_inside_a_cte_body',
+        'union_of_two_ctes',
+        'union_second_branch_scope',
+        'union_second_branch_where',
+        'uppercase_unqualified_columns',
     ],
     # Not a gap: a deliberate difference. Their engine always lists keywords in
     # canonical uppercase and adjusts the case when inserting; this one decides

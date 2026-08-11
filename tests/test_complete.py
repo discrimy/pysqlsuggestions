@@ -142,9 +142,19 @@ def test_a_derived_table_falls_back_to_its_alias() -> None:
     assert found['id'].startswith('d.id')
 
 
-def test_one_relation_needs_no_qualifier() -> None:
-    """A bare name is unambiguous here, and shorter."""
-    assert texts('SELECT * FROM auth_user WHERE ⌶')[:3] == ['id', 'username', 'email']
+def test_a_column_is_qualified_even_with_one_relation() -> None:
+    """
+    A bare name is unambiguous only until a second relation joins, and the
+    caret is usually in a query still being written. The relation's own name
+    stands in when there is no alias.
+    """
+    assert texts('SELECT * FROM auth_user u WHERE ⌶')[:3] == ['u.id', 'u.username', 'u.email']
+    assert texts('SELECT * FROM auth_user WHERE ⌶')[:2] == ['auth_user.id', 'auth_user.username']
+
+
+def test_a_relation_with_no_name_has_nothing_to_qualify_with() -> None:
+    """An unaliased derived table would otherwise produce `.id`."""
+    assert texts('SELECT * FROM (SELECT id FROM auth_user) WHERE ⌶') == ['id']
 
 
 def test_two_relations_qualify_every_column() -> None:
@@ -208,15 +218,15 @@ def test_a_cast_names_the_type_of_its_comparison() -> None:
 def test_a_cast_on_a_column_overrides_the_column_type() -> None:
     """`r.id::text > ` compares text, whatever r.id is."""
     found = texts('SELECT * FROM reports_report r WHERE r.id::text > ⌶')
-    assert 'name' in found
-    assert 'id' not in found
+    assert 'r.name' in found
+    assert 'r.id' not in found
 
 
 def test_a_bare_literal_does_not_narrow() -> None:
     """An unadorned literal is of unknown type in Postgres and coerces to what it meets."""
     found = texts("SELECT * FROM reports_report r WHERE '7 days' > ⌶")
-    assert 'id' in found
-    assert 'name' in found
+    assert 'r.id' in found
+    assert 'r.name' in found
 
 
 def test_ansi_has_no_cast_operator_so_no_type_position() -> None:
@@ -228,10 +238,10 @@ def test_ansi_has_no_cast_operator_so_no_type_position() -> None:
 def test_a_comparison_narrows_to_its_own_type() -> None:
     """`bigint > timestamp` is an error, so a timestamp comparison offers no bigint."""
     found = texts('SELECT * FROM reports_report r WHERE r.id > ⌶')
-    assert 'id' in found
-    assert 'database_id' in found
-    assert 'name' not in found, 'varchar cannot face a bigint'
-    assert 'is_archived' not in found, 'boolean cannot either'
+    assert 'r.id' in found
+    assert 'r.database_id' in found
+    assert 'r.name' not in found, 'varchar cannot face a bigint'
+    assert 'r.is_archived' not in found, 'boolean cannot either'
 
 
 def test_a_temporal_comparison_offers_only_temporal_columns() -> None:
@@ -243,21 +253,21 @@ def test_a_temporal_comparison_offers_only_temporal_columns() -> None:
 def test_an_unqualified_comparand_is_still_resolved() -> None:
     """`WHERE id > ` finds `id` in whatever relation is in scope."""
     found = texts('SELECT * FROM reports_report r WHERE id > ⌶')
-    assert 'name' not in found
-    assert 'id' in found
+    assert 'r.name' not in found
+    assert 'r.id' in found
 
 
 def test_a_column_of_unknown_type_is_never_hidden() -> None:
     """A type the classifier does not recognise must stay reachable."""
     odd = MemoryCatalog({('public', 't'): [('n', 'bigint'), ('weird', 'tsvector')]})
-    assert 'weird' in texts('SELECT * FROM t WHERE n > ⌶', cat=odd)
+    assert 't.weird' in texts('SELECT * FROM t WHERE n > ⌶', cat=odd)
 
 
 def test_narrowing_only_applies_to_a_comparison() -> None:
     """Without one there is nothing to be compatible with."""
     found = texts('SELECT * FROM reports_report r WHERE ⌶')
-    assert 'name' in found
-    assert 'id' in found
+    assert 'r.name' in found
+    assert 'r.id' in found
 
 
 def test_operators_are_offered_after_a_completed_operand() -> None:
@@ -460,13 +470,13 @@ def test_an_unclosed_call_does_not_hide_the_from_clause() -> None:
     losing it means falling back to every column in the database.
     """
     assert texts('SELECT count(⌶ FROM reports_report r') == [
-        'id',
-        'name',
-        'database_id',
-        'text',
-        'executions',
-        'is_archived',
-        'dt_created',
+        'r.id',
+        'r.name',
+        'r.database_id',
+        'r.text',
+        'r.executions',
+        'r.is_archived',
+        'r.dt_created',
     ]
     assert texts('SELECT count(r.⌶ FROM reports_report r')[:2] == ['id', 'name']
 

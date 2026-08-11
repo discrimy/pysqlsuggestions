@@ -113,6 +113,25 @@ that cannot answer offers columns and functions there instead. ClickHouse and
 Trino keep no most-common-values, so ClickHouse answers from its enums and
 Trino from booleans alone.
 
+## Qualified columns
+
+A column is offered as `<alias>.<column>`, or `<relation>.<column>` when there
+is no alias — always, not only when two relations are in view:
+
+```
+SELECT * FROM auth_user u WHERE ⌶       u.id  u.username  u.email
+SELECT * FROM auth_user WHERE ⌶         auth_user.id  auth_user.username
+SELECT * FROM auth_user u WHERE u.⌶     id  username  email
+```
+
+A bare name is unambiguous only until a second relation joins, and the caret is
+usually in a query still being written. Where the qualifier is already typed the
+column comes back bare — it is in the text already — and a relation with no name
+to qualify with, an unaliased derived table, stays bare too.
+
+Matching is unaffected: it runs against the column name, so `usern` still finds
+`u.username`.
+
 ## Browser demo
 
 The same page, with no server and no database — the library has no runtime

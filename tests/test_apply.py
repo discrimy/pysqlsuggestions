@@ -38,7 +38,7 @@ def test_the_tail_survives() -> None:
     sql = 'SELECT em FROM auth_user u'
     found = complete(sql, 9, POSTGRES, catalog())
     new_sql, caret = apply_suggestion(sql, found[0])
-    assert new_sql == 'SELECT email FROM auth_user u'
+    assert new_sql == 'SELECT u.email FROM auth_user u'
     assert new_sql[caret:] == ' FROM auth_user u'
 
 

@@ -98,7 +98,7 @@ def test_each_stop_is_answerable_when_it_is_reached() -> None:
     assert 'au' in [s.text for s in alias]
 
     columns = complete('SELECT  FROM auth_user AS au', 7, POSTGRES, CATALOG)
-    assert 'username' in [s.text for s in columns]
+    assert 'au.username' in [s.text for s in columns]
 
 
 def test_a_snippet_follows_the_document_casing() -> None:

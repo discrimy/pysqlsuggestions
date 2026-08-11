@@ -214,14 +214,18 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     if Kind.COLUMN in request.kinds:
         relations = scope.visible() if scope else ()
         if relations:
-            # With more than one relation in view a bare name may not even parse
-            # — `WHERE id` against two tables that both have one is an ambiguity
-            # error — and it hides the other relation's column behind the first.
-            # One relation needs no qualifier and reads better without.
-            qualify = len(relations) > 1
+            # Always qualified, where the relation has a name to qualify with.
+            # A bare name is ambiguous the moment a second relation joins — and
+            # the caret is usually in a query that is still being written, so
+            # "there is only one table right now" is a fact with a short life.
+            # An unnamed relation, a derived table with no alias, has nothing to
+            # prefix and stays bare.
+            #
+            # Matching is unaffected: it runs against the column name, so `na`
+            # still finds `u.name`. The qualifier is about what gets inserted.
             seen: set[tuple[str, ...]] = set()
             for relation in relations:
-                candidates += _columns_of(relation, reader, seen, qualify=relation.label if qualify else None)
+                candidates += _columns_of(relation, reader, seen, qualify=relation.label or None)
         else:
             candidates += [_column_candidate(c) for c in reader.loose_columns(request.prefix, limit)]
 
