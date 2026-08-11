@@ -18,6 +18,51 @@ export interface Runtime {
   ready: boolean;
 }
 
+/** The library's own floor. A venv below it installs none of the wheels. */
+export const MINIMUM_PYTHON = '3.10';
+
+/**
+ * Whether an interpreter reporting `version` can run the server.
+ *
+ * Checking that `--version` exits zero is not enough, and this is not a
+ * hypothetical: on Windows `python3` is often a Store stub that prints
+ * `Python`, exits zero and installs nothing, and a system `python` of 3.9 will
+ * happily build a venv that then refuses every wheel in the bundle. Both
+ * produce a working-looking extension with no completion in it.
+ */
+export function meetsMinimum(reported: string): boolean {
+  const match = /^(\d+)\.(\d+)/.exec(reported.trim());
+  if (match === null) {
+    return false;
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 3 || (major === 3 && minor >= 10);
+}
+
+/**
+ * The first candidate that runs and is new enough, or undefined.
+ *
+ * `probe` reports an interpreter's version and throws when it cannot run at
+ * all. Failures are swallowed per candidate because only the caller knows
+ * whether running out of them matters.
+ */
+export async function findInterpreter(
+  candidates: readonly string[],
+  probe: (command: string) => Promise<string>,
+): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    try {
+      if (meetsMinimum(await probe(candidate))) {
+        return candidate;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
 export interface EnsureOptions {
   root: string;
   version: string;

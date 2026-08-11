@@ -1,6 +1,14 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { type EnsureOptions, ensureVenv, needsInstall, stampPath, venvPython } from '../../runtime';
+import {
+  type EnsureOptions,
+  ensureVenv,
+  findInterpreter,
+  meetsMinimum,
+  needsInstall,
+  stampPath,
+  venvPython,
+} from '../../runtime';
 
 /** Everything that touches the outside world, stubbed. Override per test. */
 function options(overrides: Partial<EnsureOptions> = {}): EnsureOptions {
@@ -16,6 +24,51 @@ function options(overrides: Partial<EnsureOptions> = {}): EnsureOptions {
     ...overrides,
   };
 }
+
+test('an interpreter at or above the floor is accepted', () => {
+  assert.equal(meetsMinimum('3.12.11'), true);
+  assert.equal(meetsMinimum('3.10.0'), true);
+  assert.equal(meetsMinimum('4.0.0'), true);
+});
+
+test('an interpreter below the floor is rejected', () => {
+  // 3.9 builds a venv happily and then refuses every wheel in the bundle,
+  // leaving a working-looking extension with no completion in it.
+  assert.equal(meetsMinimum('3.9.13'), false);
+  assert.equal(meetsMinimum('2.7.18'), false);
+});
+
+test('a stub that reports no version is rejected', () => {
+  // On Windows `python3` is often a Store stub: it prints `Python`, exits
+  // zero, and installs nothing. Exit status alone cannot tell it apart.
+  assert.equal(meetsMinimum('Python'), false);
+  assert.equal(meetsMinimum(''), false);
+});
+
+test('the first adequate interpreter is chosen', async () => {
+  const probed: string[] = [];
+  const found = await findInterpreter(['python3', 'python'], async (command) => {
+    probed.push(command);
+    return command === 'python3' ? 'Python' : '3.12.1';
+  });
+  assert.equal(found, 'python');
+  assert.deepEqual(probed, ['python3', 'python']);
+});
+
+test('a candidate that cannot run is skipped', async () => {
+  const found = await findInterpreter(['missing', 'python'], async (command) => {
+    if (command === 'missing') {
+      throw new Error('ENOENT');
+    }
+    return '3.11.0';
+  });
+  assert.equal(found, 'python');
+});
+
+test('no adequate interpreter is undefined, not a bad one', async () => {
+  // Returning the too-old one would build a venv that installs nothing.
+  assert.equal(await findInterpreter(['python'], async () => '3.9.13'), undefined);
+});
 
 test('the venv interpreter is where the platform puts it', () => {
   assert.equal(venvPython('/storage', 'linux'), '/storage/venv/bin/python');

@@ -13,7 +13,7 @@ import * as fs from 'node:fs/promises';
 import * as vscode from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions } from 'vscode-languageclient/node';
 import { initializationOptions, readProfiles, resolveProfile } from './profiles';
-import { ensureVenv, stampPath } from './runtime';
+import { MINIMUM_PYTHON, ensureVenv, findInterpreter, stampPath } from './runtime';
 import { promptForPassword, readPassword } from './secrets';
 import { Status } from './status';
 
@@ -38,23 +38,40 @@ function run(command: string, args: string[]): Promise<void> {
   });
 }
 
+/** Run a command and return what it printed. */
+function capture(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = cp.spawn(command, args, { windowsHide: true });
+    let collected = '';
+    child.stdout.on('data', (chunk: Buffer) => (collected += chunk.toString()));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(collected);
+      } else {
+        reject(new Error(`${command} exited ${String(code)}`));
+      }
+    });
+  });
+}
+
 /**
- * The first interpreter that answers, or undefined.
+ * Ask an interpreter what version it is.
  *
- * Failures are silent here because only the caller knows whether running out
- * of candidates matters — and it reports once, not per candidate.
+ * `sys.version_info` rather than `--version`, because the Windows Store stub
+ * answers `--version` with the word `Python` and exit code zero. Asking it to
+ * execute something makes the difference visible.
  */
-async function findPython(configured: string | null): Promise<string | undefined> {
-  const candidates = [configured, 'python3', 'python'].filter((c): c is string => c !== null && c.length > 0);
-  for (const candidate of candidates) {
-    try {
-      await run(candidate, ['--version']);
-      return candidate;
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
+function probePython(command: string): Promise<string> {
+  return capture(command, ['-c', "import sys; print('%d.%d.%d' % sys.version_info[:3])"]);
+}
+
+/** The first interpreter that runs and is new enough, or undefined. */
+function findPython(configured: string | null): Promise<string | undefined> {
+  const candidates = [configured, 'python3', 'python', 'py'].filter(
+    (candidate): candidate is string => candidate !== null && candidate.length > 0,
+  );
+  return findInterpreter(candidates, probePython);
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -102,12 +119,16 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
     status?.set('dormant');
     void vscode.window
       .showErrorMessage(
-        'pysqlsuggestions needs a Python 3.10+ interpreter and could not find one on PATH.',
+        `pysqlsuggestions needs Python ${MINIMUM_PYTHON} or newer and found none on PATH. ` +
+          'Set "pysqlsuggestions.pythonPath" if you have one elsewhere.',
         'Show logs',
+        'Open settings',
       )
       .then((choice) => {
         if (choice === 'Show logs') {
           output?.show();
+        } else if (choice === 'Open settings') {
+          void vscode.commands.executeCommand('workbench.action.openSettings', 'pysqlsuggestions.pythonPath');
         }
       });
     return;
@@ -163,7 +184,14 @@ async function selectConnection(context: vscode.ExtensionContext): Promise<void>
   if (chosen === undefined) {
     return;
   }
-  await settings.update('defaultConnection', chosen, vscode.ConfigurationTarget.Workspace);
+  // Workspace when there is one, so different projects can face different
+  // databases. Global otherwise: a single `.sql` file open with no folder is
+  // an ordinary way to work, and updating workspace settings there throws.
+  const scope =
+    vscode.workspace.workspaceFolders === undefined
+      ? vscode.ConfigurationTarget.Global
+      : vscode.ConfigurationTarget.Workspace;
+  await settings.update('defaultConnection', chosen, scope);
 
   if ((await readPassword(context.secrets, chosen)) === undefined) {
     await promptForPassword(context.secrets, chosen);

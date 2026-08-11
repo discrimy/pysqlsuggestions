@@ -27,3 +27,4 @@ editors/vscode/node_modules/
 editors/vscode/out/
 editors/vscode/bundled/
 editors/vscode/*.vsix
+editors/vscode/.vscode-test/
