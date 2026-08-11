@@ -10,6 +10,17 @@
   "activationEvents": ["onLanguage:sql"],
   "main": "./out/extension.js",
   "contributes": {
+    "views": {
+      "explorer": [
+        { "id": "pysqlsuggestions.connections", "name": "SQL Connections" }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "pysqlsuggestions.connections",
+        "contents": "No database connections yet.\n[Add connection](command:pysqlsuggestions.addConnection)\nOnly PostgreSQL reads a schema in this release; the others complete from the statement."
+      }
+    ],
     "commands": [
       { "command": "pysqlsuggestions.addConnection", "title": "pysqlsuggestions: Add connection" },
       { "command": "pysqlsuggestions.selectConnection", "title": "pysqlsuggestions: Select connection for this workspace" },
