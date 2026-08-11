@@ -6,8 +6,60 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+## 0.2.0
+
+Joins. `JOIN ⌶` answers with the whole clause and `ON ⌶` with the whole
+condition, both read from the foreign keys the database already declares.
+
+Nothing was removed or renamed. The additions are new fields with defaults and a
+new `Kind` member — worth knowing if you exhaustively match on `Kind`, since
+`kind` is what consumers serialise into an editor payload.
+
+### Positions that now answer differently
+
+- **`JOIN ⌶` offers whole clauses.** `FROM booking b JOIN ⌶` proposes
+  `flight f ON b.flight_id = f.id` — relation, alias and condition in one
+  accept — ahead of the relation names it used to list alone. Each proposal is
+  annotated with the constraint it came from.
+- **`ON ⌶` offers the whole condition.** `JOIN auth_user u ON ⌶` proposes
+  `r.author_id = u.id` rather than leaving the comparison to be typed. The
+  columns stay underneath, for a condition the constraints do not describe.
+- **`ON r.⌶` ranks that relation's foreign key columns up**, annotated. A
+  qualifier has committed the left side, so a whole condition is no longer
+  expressible there.
+
+Proposals fire from **both ends** of a constraint, because a constraint is
+directed and a join is not: a query starting at `auth_user` — which holds no
+foreign key columns and is referenced by seven tables in the test fixture — is
+offered the relations that reference *it*. Many-to-one ranks above one-to-many,
+being both more often wanted and unable to multiply the result set. Two
+constraints to the same relation stay two proposals; choosing between them is
+the caller's.
+
+**Postgres only, and deliberately.** ClickHouse and Trino declare no
+constraints, so both positions there behave exactly as before. The obvious
+fallback — matching `<singular>_id` against `<table>.id` — is rejected rather
+than unbuilt: it is right often enough to be inviting and wrong often enough to
+matter, and a wrong join condition is valid SQL that silently returns the wrong
+rows. No parser catches that, and neither does the person reading the result.
+
 ### Added
 
+- `ForeignKey` — one declared relationship, with column tuples on both sides, so
+  a composite key needs no special case and renders as an `AND` chain.
+- `SupportsForeignKeys` — the capability behind the two positions above. Absent,
+  they answer as they did before. A backend that keeps no constraints should not
+  implement it rather than guess.
+- `Kind.JOIN` — a candidate that is a whole clause or condition rather than a
+  name, so a front end can render it distinctly.
+- `Suggestion.note` — why a suggestion outranks its neighbours, as
+  `fk: auth_user.id`. Distinct from `detail`, which says what the thing is.
+- `Candidate.match_text` — what matching runs against when that is neither the
+  text nor the label. A join proposal is hunted for by the relation name and
+  inserts a whole clause; without a field of its own the two collided and the
+  list showed a bare name.
+- `MemoryCatalog(foreign_keys=...)` — declare relationships in a snapshot, which
+  is what makes the two positions testable without a database.
 - `pysqlsuggestions.testing.DialectConformance` — the shared corpus every
   dialect must pass, specified for 0.1 and not built until now. It reads a
   dialect's declarations for mistakes that can only ever do nothing (a
@@ -25,6 +77,21 @@ records: the positions where it now answers differently.
   read the `pysqlsuggestions.dialects` entry-point group. The group has been
   advertised in `pyproject.toml` since 0.1.0 and nothing read it, so a
   third-party dialect could register correctly and never be found.
+
+### Demo
+
+- **The published page reaches nothing.** Pyodide is carried in the site rather
+  than fetched from a CDN, pinned by digest, and the build refuses to assemble a
+  page whose files name any absolute URL. That costs 11.7 MiB against a demo
+  payload of 135 kB and buys a page that works on an air-gapped laptop and
+  cannot be broken by somebody else's outage — which is the claim the demo
+  exists to make. It had already failed the other way: a load where `micropip`
+  could not be fetched left the page booted with a dead editor and nothing a
+  visitor could act on.
+- `micropip` is gone with it. It was loaded only to install one pure-Python
+  wheel with no dependencies, which `unpackArchive` does in three lines.
+- The demo schema declares its foreign keys, including two from one relation to
+  the same target and two that cross a schema boundary.
 
 ## 0.1.1
 

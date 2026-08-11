@@ -35,7 +35,7 @@ async function boot() {
   // Unpacked into a directory we name rather than site-packages, whose real path
   // carries the interpreter version and would break silently on an upgrade.
   // Wheel and demo sources sit beside this file; the build step puts them there.
-  const wheel = await fetch(new URL('./pysqlsuggestions-0.1.1-py3-none-any.whl', import.meta.url));
+  const wheel = await fetch(new URL('./pysqlsuggestions-0.2.0-py3-none-any.whl', import.meta.url));
   py.unpackArchive(await wheel.arrayBuffer(), 'zip', { extractDir: '/wheel' });
   py.runPython('import sys; sys.path.insert(0, "/wheel")');
 
