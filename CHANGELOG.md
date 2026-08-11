@@ -4,6 +4,28 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## Unreleased
+
+### Added
+
+- `pysqlsuggestions.testing.DialectConformance` — the shared corpus every
+  dialect must pass, specified for 0.1 and not built until now. It reads a
+  dialect's declarations for mistakes that can only ever do nothing (a
+  lowercase clause name, a `follows` naming a clause that is absent), then puts
+  it the propositions every caller assumes: an alias reaches its columns, a
+  dotted path narrows one level per segment, a quoted name is the same name,
+  both sides of a join are in scope. The SQL is spelled from what each dialect
+  says about its own namespace and quoting, so a three-level dialect is asked
+  about three levels.
+
+  Shipped rather than kept in `tests/`, so anyone publishing a dialect can hold
+  it to the same standard.
+
+- `pysqlsuggestions.dialects.registry` — `available()` and `named()`, which
+  read the `pysqlsuggestions.dialects` entry-point group. The group has been
+  advertised in `pyproject.toml` since 0.1.0 and nothing read it, so a
+  third-party dialect could register correctly and never be found.
+
 ## 0.1.1
 
 Every change is a fix. Nothing was removed and nothing renamed; the additions
