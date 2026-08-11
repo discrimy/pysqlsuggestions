@@ -65,28 +65,16 @@ SKIP = {
 # Known gaps, grouped by root cause. Each is a real behaviour report_service
 # users have today and this library does not yet — a burn-down, not a wontfix.
 GAPS = {
-    # Not a gap: a deliberate difference, and the only part of qualification the
-    # harness cannot absorb. Two relations that both have `id` give two
-    # suggestions here and one there: their engine returns bare names and
-    # deduplicates, which hides the second relation's column behind the first.
-    # Ours are distinct because they are qualified. These assert the shorter list.
-    'a column name shared by two relations is offered once per relation': [
-        'cte_joined_with_a_real_table',
-        'correlated_outer_relation_visible_inside_a_subquery',
-        'nested_subquery_sees_every_enclosing_level',
-    ],
-    # Not a gap: a deliberate difference. Their engine always lists keywords in
-    # canonical uppercase and adjusts the case when inserting; this one decides
-    # the case in the suggestion, so the list shows what will actually be typed.
-    # Both halves of the assertion hold except that ours reads `where`, not `WHERE`.
-    'keyword case is decided in the suggestion here, not at insertion': [
-        'keywords_stay_prefix_only',
-    ],
     # Not a gap: a deliberate difference, and one asked for directly — "do not
     # suggest columns of incompatible types". Their engine offers every column of
     # the qualified relation; this one drops the ones that cannot face the value
-    # on the left. `u.id = o.<caret>` withholds `o.created`, and `SET total =
-    # EXCLUDED.<caret>` withholds it too, both because Postgres rejects them.
+    # on the left, so `u.id = o.<caret>` and `SET total = EXCLUDED.<caret>` both
+    # withhold `o.created`, which Postgres would reject.
+    #
+    # The only two left. Every other difference is one of spelling, and the
+    # harness normalises those so their assertions keep testing what they were
+    # written to test. This one is content: we return fewer rows, on purpose,
+    # and hiding that in the harness would hide the feature.
     'a comparison narrows by type here, and their engine did not narrow at all': [
         'outer_qualifier_inside_an_exists_subquery',
         'excluded_offers_the_target_columns',
@@ -222,12 +210,26 @@ def bare(suggestion: Suggestion) -> str:
     """
     if suggestion.kind is Kind.COLUMN:
         return _QUALIFIED.sub('', suggestion.text, count=1)
+    if suggestion.kind is Kind.KEYWORD:
+        # Their engine listed keywords in canonical uppercase and adjusted the
+        # case at insertion; this one decides it in the suggestion, so a
+        # lowercase document gets `where`. None of their assertions is about
+        # case — `keywords_stay_prefix_only` is about `her` not reaching WHERE.
+        return suggestion.text.upper()
     return suggestion.text
 
 
 def texts(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> list[str]:
-    """Suggestion texts, unqualified as their engine returned them."""
-    return [bare(s) for s in suggestions(cursor, sql, **kwargs)]
+    """
+    Suggestion texts, spelled as their engine spelled them.
+
+    Deduplicated after unqualifying, because that is what their bare names did
+    on the way out: two relations that both have `id` gave one suggestion there
+    and give two here. Their own expectations say so —
+    `sorted(set(USER_COLUMNS) | set(ALL_ORDER_COLUMNS))` is a set union, and the
+    shared name collapses in it. Order is kept, since some of these assert it.
+    """
+    return list(dict.fromkeys(bare(s) for s in suggestions(cursor, sql, **kwargs)))
 
 
 def kinds(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> dict[str, str]:

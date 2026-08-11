@@ -105,12 +105,26 @@ def bare(suggestion: Suggestion) -> str:
     """
     if suggestion.kind is Kind.COLUMN:
         return _QUALIFIED.sub('', suggestion.text, count=1)
+    if suggestion.kind is Kind.KEYWORD:
+        # Their engine listed keywords in canonical uppercase and adjusted the
+        # case at insertion; this one decides it in the suggestion, so a
+        # lowercase document gets `where`. None of their assertions is about
+        # case — `keywords_stay_prefix_only` is about `her` not reaching WHERE.
+        return suggestion.text.upper()
     return suggestion.text
 
 
 def texts(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> list[str]:
-    """Suggestion texts, unqualified as their engine returned them."""
-    return [bare(s) for s in suggestions(cursor, sql, **kwargs)]
+    """
+    Suggestion texts, spelled as their engine spelled them.
+
+    Deduplicated after unqualifying, because that is what their bare names did
+    on the way out: two relations that both have `id` gave one suggestion there
+    and give two here. Their own expectations say so —
+    `sorted(set(USER_COLUMNS) | set(ALL_ORDER_COLUMNS))` is a set union, and the
+    shared name collapses in it. Order is kept, since some of these assert it.
+    """
+    return list(dict.fromkeys(bare(s) for s in suggestions(cursor, sql, **kwargs)))
 
 
 def kinds(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> dict[str, str]:
@@ -480,7 +494,6 @@ def test_nested_cte_inside_a_cte_body(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['email', 'id']
 
 
-@pytest.mark.xfail(strict=True, reason='a column name shared by two relations is offered once per relation')
 def test_cte_joined_with_a_real_table(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE с JOIN реальной таблицы."""
     sql = 'WITH a AS (SELECT id, email FROM auth_user)\nSELECT * FROM a JOIN orders o ON o.user_id = a.id WHERE '
@@ -1027,7 +1040,6 @@ def test_subquery_relations_drop_out_once_it_closes(cur: MemoryCatalog) -> None:
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='a column name shared by two relations is offered once per relation')
 def test_correlated_outer_relation_visible_inside_a_subquery(cur: MemoryCatalog) -> None:
     """Тестировать видимость outer relation внутри subquery."""
     got = at(cur, 'SELECT * FROM orders o WHERE o.user_id IN (SELECT ‸ FROM auth_user)', limit=50)
@@ -1059,7 +1071,6 @@ def test_any_subquery_relations_drop_out(cur: MemoryCatalog) -> None:
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='a column name shared by two relations is offered once per relation')
 def test_nested_subquery_sees_every_enclosing_level(cur: MemoryCatalog) -> None:
     """Тестировать видимость всех enclosing levels в nested subquery."""
     got = at(
@@ -1110,7 +1121,6 @@ def test_earlier_substring_position_ranks_higher(cur: MemoryCatalog) -> None:
     assert got == ['email', 'username', 'date_joined']
 
 
-@pytest.mark.xfail(strict=True, reason='keyword case is decided in the suggestion here, not at insertion')
 def test_keywords_stay_prefix_only(cur: MemoryCatalog) -> None:
     """Тестировать, что keywords только prefix-matching."""
     assert 'WHERE' in texts(cur, 'select * from auth_user w', limit=50)
