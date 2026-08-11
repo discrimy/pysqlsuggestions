@@ -7,23 +7,35 @@ from tests.queries.harness import ALL_ORDER_COLUMNS, USER_COLUMNS, texts
 
 
 def test_plain_alias_columns(cur: MemoryCatalog) -> None:
-    """An alias qualifier."""
+    """
+    The simplest thing the engine does, and the one everything else is measured
+    against: an alias resolves to its relation and to nothing else.
+    """
     assert sorted(texts(cur, 'select * from auth_user u where u.')) == sorted(USER_COLUMNS)
 
 
 def test_plain_table_name_qualifier(cur: MemoryCatalog) -> None:
-    """A table name used as the qualifier."""
+    """
+    A relation with no alias answers to its own name. Requiring an alias would
+    leave the commonest short query with no qualified completion at all.
+    """
     sql = 'select * from auth_user where auth_user.'
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
 def test_plain_unqualified_columns(cur: MemoryCatalog) -> None:
-    """No qualifier typed."""
+    """
+    With no dot typed, the relation's columns are still what belongs — qualified,
+    because a bare name stops being unambiguous the moment a join is added.
+    """
     assert sorted(texts(cur, 'select * from auth_group where ')) == ['auth_group.id', 'auth_group.name']
 
 
 def test_join_brings_both_relations(cur: MemoryCatalog) -> None:
-    """A join puts both relations in scope."""
+    """
+    Both sides of a join are in scope at once, which is what makes the qualifier
+    necessary: two relations here both have `id`.
+    """
     sql = 'select * from auth_user u join orders o on o.user_id = u.id where '
     got = texts(cur, sql, limit=50)
     assert 'u.username' in got
@@ -31,35 +43,57 @@ def test_join_brings_both_relations(cur: MemoryCatalog) -> None:
 
 
 def test_schema_qualified_table_columns(cur: MemoryCatalog) -> None:
-    """A schema-qualified relation."""
+    """
+    `billing.invoices` is one reference of two segments, and `invoices.` resolves
+    against it. Matching a qualifier against only the last path segment is easy
+    to get wrong in the other direction — by not matching at all.
+    """
     sql = 'select * from billing.invoices where invoices.'
     assert sorted(texts(cur, sql)) == ['amount', 'id', 'order_id']
 
 
 def test_from_offers_tables(cur: MemoryCatalog) -> None:
-    """An empty FROM offers relations."""
+    """
+    A relation position offers relations. Obvious, and the thing most likely to
+    be broken silently by a change to clause detection.
+    """
     assert 'auth_user' in texts(cur, 'select * from ')
 
 
 def test_insert_column_list_uses_the_target_table(cur: MemoryCatalog) -> None:
-    """An INSERT column list takes the target's columns."""
+    """
+    The parenthesis after `INSERT INTO orders` opens a column list, not an
+    argument list and not another relation. A leading WITH makes it harder: the
+    CTE body's own parenthesis is at the same depth.
+    """
     sql = 'WITH a AS (SELECT id FROM auth_user)\nINSERT INTO orders ('
     assert sorted(texts(cur, sql, limit=50)) == ['orders.created', 'orders.id', 'orders.total', 'orders.user_id']
 
 
 def test_delete_using_relation_is_in_scope(cur: MemoryCatalog) -> None:
-    """DELETE ... USING brings a relation into scope."""
+    """
+    `DELETE ... USING` introduces a relation exactly as a join does. It shares a
+    keyword with the join's column list, and only the parenthesis after it tells
+    the two apart.
+    """
     sql = 'DELETE FROM orders o USING auth_user u WHERE u.'
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
 def test_join_using_column_list_is_not_a_relation(cur: MemoryCatalog) -> None:
-    """The join's USING names columns, not relations."""
+    """
+    The other reading of the same word. Treating `(id)` as a relation list loses
+    `orders` and answers `o.` with nothing.
+    """
     sql = 'SELECT * FROM auth_user u JOIN orders o USING (id) WHERE o.'
     assert sorted(texts(cur, sql)) == ALL_ORDER_COLUMNS
 
 
 def test_natural_join_keeps_both_relations(cur: MemoryCatalog) -> None:
-    """A NATURAL JOIN keeps both."""
+    """
+    A NATURAL JOIN has no ON and no USING, so nothing follows the relation to
+    anchor the parse. The join qualifier has to be skipped rather than read as a
+    relation of its own.
+    """
     sql = 'SELECT * FROM auth_user u NATURAL JOIN orders o WHERE o.'
     assert sorted(texts(cur, sql)) == ALL_ORDER_COLUMNS
