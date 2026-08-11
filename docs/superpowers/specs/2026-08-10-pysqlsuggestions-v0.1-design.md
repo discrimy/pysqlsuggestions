@@ -1,12 +1,84 @@
 # pysqlsuggestions v0.1 — design
 
 Date: 2026-08-10
-Status: approved, ready for implementation planning
+Status: **historical**. Built, shipped as 0.1.0 and 0.1.1, and overtaken in the
+places listed below. Read it for why the shape is what it is, not for what the
+code does now — where the two disagree, the code is right and this is old.
+
 Supersedes nothing. Refines `plan.md` into a buildable v0.1.
 
 `plan.md` was the product vision through v0.4. It has since been removed from
 the working tree and is in git history at `f4cb9cd`. This document covers only
 what v0.1 ships, and records where v0.1 deviates from the plan and why.
+
+---
+
+## 0. Where the implementation went elsewhere
+
+Kept here rather than folded into the text above, so the document stays a record
+of what was decided in August 2026 and this stays a record of what happened to
+it. Rewriting the body would lose the first without improving the second.
+
+### Specified and not built
+
+- **`adapters/` with a clickhouse-connect adapter** (§3, M8). Superseded rather
+  than skipped: `catalogs/dbapi.py` reaches ClickHouse through
+  `clickhouse-driver`, and §7.4's integration suite proves the introspection SQL
+  and the paramstyle rewriting against a real container. A second adapter would
+  have to earn its place against that.
+- **`dialects/introspection/`** as a package (§3). The query text and row
+  mappers live inside each dialect module as its `CatalogQueries`. Same data,
+  same hard rule about `relkind` letters never leaking; one file fewer.
+- **`testing/` as a corpus loader** (§3, §7.3). `pysqlsuggestions.testing` is a
+  single module exposing `DialectConformance` and `Case`. It builds its own
+  fixture from the dialect under test rather than loading a corpus file,
+  because the corpus has to be spelled differently for each namespace depth and
+  a data file cannot do that.
+
+### Specified one way and built the other, deliberately
+
+- **§5.5 forbids matching looser than word-boundary subsequence** — *"Nothing
+  looser"*. Rank ships five tiers and the last is substring, scored down by how
+  late the match starts. The helper this library supersedes did substring for
+  every identifier, so `mail` finding `email` is behaviour its users already
+  depend on; four stronger tiers above it keep the failure mode the spec was
+  guarding against out of reach. `engine/rank.py` carries the argument.
+- **§7.5's differential test against the vendored old module** was to be deleted
+  *when the report_service migration lands*. It was deleted before, once its
+  cases had been recovered as ordinary tests in `tests/queries/`. The migration
+  has not landed.
+- **`Catalog.schemas()`** takes a `catalog` argument the spec's signature does
+  not have. Trino's three levels need it; two-level dialects ignore it.
+
+### Built and never specified
+
+The spec predates all of these, so its absence of them says nothing:
+
+- **Insertion planning.** `plan_insertion`, `Insertion`, `Edit`, and
+  `Insertion.expects_more`. §4 has `Suggestion.replace_span` and stops there,
+  which leaves separators, closing parens, namespace dots and template blanks to
+  every front end separately. The demo drifted three times before this existed.
+- **Value suggestions.** `Kind.VALUE`, `ColumnValue`, `SupportsColumnValues`,
+  and the planner-statistics queries behind them — §2 puts value hints out of
+  v0.1 explicitly.
+- **Statement templates.** `Kind.SNIPPET`, `Template`, `Suggestion.stops`, and
+  the LSP-subset `$1`/`$0` expansion.
+- **Five more kinds.** §4 names six; there are eleven. `CTE`, `OPERATOR`,
+  `TYPE`, `SNIPPET` and `VALUE` are each a position the spec's six could not
+  describe — an operator is never cased or quoted, a type belongs only past a
+  cast, and a front end that colours by kind needs to tell them apart.
+- **Expression position.** `Request.expecting`, `comparand`, `continues`,
+  `item_words`, `statement`, `written`, `keyword_case` — §4's Request has six
+  fields and none of these. They are what let the engine tell an operand from an
+  operator from a connective, which is most of what 0.1.1 fixed.
+- **Clause model depth.** `statements`, `repeats`, `opens_an_item`,
+  `aliases_with`, `before_the_item`, and a dialect folding its own vocabulary
+  into `keywords` at construction.
+- **Two correctness harnesses** neither §7 nor anything else asked for:
+  `tests/integration/test_acceptance.py`, which accepts every suggestion and
+  asks Postgres whether the result parses, and `tests/test_writable.py`, which
+  asks offline whether a realistic statement can be written from suggestions
+  alone. Between them they found twenty-seven defects.
 
 ---
 
