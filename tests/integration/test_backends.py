@@ -394,3 +394,38 @@ def test_trino_offers_no_column_search(trino_catalog: DbapiCatalog) -> None:
     """
     assert TRINO.catalog_queries.column_search is None
     assert trino_catalog.search_columns('id', 5) == []
+
+
+def test_postgres_reads_declared_foreign_keys(postgres_catalog: DbapiCatalog) -> None:
+    """The query text itself — only a real server can say whether it runs."""
+    edges = {(e.table, e.columns): (e.ref_table, e.ref_columns) for e in postgres_catalog.foreign_keys('public')}
+    assert edges[('reports_report', ('author_id',))] == ('auth_user', ('id',))
+    assert edges[('reports_report', ('database_id',))] == ('reports_database', ('id',))
+
+
+def test_postgres_reads_a_composite_key_in_order(postgres_catalog: DbapiCatalog) -> None:
+    """WITH ORDINALITY keeps the two sides aligned; a reordered array passes every single-column test."""
+    edges = {(e.table, e.columns): (e.ref_table, e.ref_columns) for e in postgres_catalog.foreign_keys('public')}
+    key = ('reports_queryfilter_usage', ('queryfilter_id', 'database_id'))
+    assert edges[key] == ('reports_queryfilter_databases', ('queryfilter_id', 'database_id'))
+
+
+def test_postgres_joins_a_real_schema(postgres_catalog: DbapiCatalog) -> None:
+    """End to end against the server: the clause the engine writes is the one the schema implies."""
+    found = suggest('SELECT * FROM reports_report r JOIN ⌶', POSTGRES, postgres_catalog)
+    assert 'auth_user au ON r.author_id = au.id' in found[:5]
+
+
+def test_postgres_joins_from_the_referenced_side(postgres_catalog: DbapiCatalog) -> None:
+    """auth_user holds no FK columns and is referenced by seven tables here."""
+    found = suggest('SELECT * FROM auth_user u JOIN ⌶', POSTGRES, postgres_catalog)
+    assert [text for text in found if text.startswith('reports_report rr ON u.id = rr.author_id')]
+
+
+def test_clickhouse_and_trino_declare_no_constraints(
+    clickhouse_catalog: DbapiCatalog,
+    trino_catalog: DbapiCatalog,
+) -> None:
+    """Neither backend keeps them, so neither offers a proposal and both positions are unchanged."""
+    assert list(clickhouse_catalog.foreign_keys('analytics')) == []
+    assert list(trino_catalog.foreign_keys('public')) == []

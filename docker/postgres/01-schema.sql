@@ -159,6 +159,18 @@ CREATE TABLE reports_queryfilter_databases (
     UNIQUE (queryfilter_id, database_id)
 );
 
+-- The only composite foreign key here, and it exists for the introspection
+-- query: conkey and confkey correspond position by position, and a single-column
+-- key cannot tell a query that preserves that order from one that does not.
+CREATE TABLE reports_queryfilter_usage (
+    id              bigserial PRIMARY KEY,
+    queryfilter_id  bigint NOT NULL,
+    database_id     bigint NOT NULL,
+    used_at         timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (queryfilter_id, database_id)
+        REFERENCES reports_queryfilter_databases (queryfilter_id, database_id) ON DELETE CASCADE
+);
+
 CREATE TABLE reports_phonenumber (
     id       bigserial PRIMARY KEY,
     user_id  bigint NOT NULL UNIQUE REFERENCES auth_user (id) ON DELETE CASCADE,
