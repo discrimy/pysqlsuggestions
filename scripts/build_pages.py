@@ -53,6 +53,32 @@ COPIED = (
 
 BOOTSTRAP = '<script type="module" src="./browser.js"></script>'
 
+SCANNED = ('.html', '.js', '.py')
+"""
+Extensions a browser executes or imports from this site.
+
+Not the runtime directory: `pyodide-lock.json` names a URL per package, none of
+which this page fetches, and scanning it would fail every build over strings
+nothing reads.
+"""
+
+EXTERNAL = re.compile(r'https?://[^\s\'"()]+')
+
+
+def external_references(directory: Path) -> list[str]:
+    """
+    Absolute URLs in the files this site executes, as `name: url`.
+
+    Empty is the invariant. A page that reaches another host to start is a page
+    whose availability is somebody else's, and this demo's whole argument is that
+    the library needs nothing at run time.
+    """
+    found: list[str] = []
+    for path in sorted(directory.iterdir()):
+        if path.is_file() and path.suffix in SCANNED:
+            found += [f'{path.name}: {url}' for url in EXTERNAL.findall(path.read_text())]
+    return found
+
 
 def main() -> int:
     """Build `site/`. Returns a process exit status."""
@@ -106,6 +132,13 @@ def main() -> int:
 
     # Jekyll would otherwise swallow files it considers special.
     (SITE / '.nojekyll').write_text('')
+
+    reaching = external_references(SITE)
+    if reaching:
+        print('site/ would reach another host:', file=sys.stderr)  # noqa: T201
+        for reference in reaching:
+            print(f'  {reference}', file=sys.stderr)  # noqa: T201
+        return 1
 
     # Reported apart so a jump in our own payload stays visible next to a
     # constant 11.7 MiB. Added together, the demo's size would never move again.
