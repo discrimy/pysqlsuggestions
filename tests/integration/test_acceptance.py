@@ -65,19 +65,6 @@ this harness cannot judge them and says so rather than guessing.
 
 KNOWN = frozenset(
     {
-        # A clause name of two words, half typed. The first word is read as though
-        # the clause were finished, so a relation position appears where only the
-        # second word belongs.
-        'SELECT count(*) AS n FROM orders GROUP ',
-        'SELECT o.total FROM orders o ORDER ',
-        'SELECT u.id, u.username FROM auth_user AS u WHERE u.is_staff = true ORDER ',
-        'SELECT u.id FROM auth_user u LEFT ',
-        'INSERT ',
-        'DELETE ',
-        # The same, with the second word half typed: `BY` matches inside
-        # `reports_report_favorited_by` and the keyword is replaced by a table.
-        'SELECT count(*) AS n FROM orders GROUP BY',
-        'SELECT o.total FROM orders o ORDER BY',
         # Clauses of one statement form offered in another: GROUP BY, HAVING,
         # WINDOW and the set operators after a finished UPDATE or DELETE.
         'UPDATE orders SET total = 1 WHERE id = 2',

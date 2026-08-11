@@ -58,17 +58,7 @@ GOLDEN = (
     'SELECT o.total FROM orders AS o WHERE o.total IS NOT NULL',
 )
 
-KNOWN = frozenset(
-    {
-        # A clause name of two words, stopped between them. The first word is read
-        # as a clause already finished, so the caret is offered relations or columns
-        # when the only thing that can stand there is the second word.
-        ('GROUP', 'BY'),
-        ('ORDER', 'BY'),
-        ('INSERT', 'INTO'),
-        ('DELETE', 'FROM'),
-    }
-)
+KNOWN: frozenset[tuple[str, str]] = frozenset()
 """
 Gaps the engine has, keyed by the word before the caret and the word wanted.
 

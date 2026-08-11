@@ -196,7 +196,7 @@ def _continues(
     `CASE WHEN` and `CASE x WHEN` are both real, so a column still belongs.
     Everywhere else nothing but these words can parse.
     """
-    found = continues_a_keyword(tokens, caret)
+    found = continues_a_keyword(tokens, caret, dialect)
     if found:
         return found, True
 

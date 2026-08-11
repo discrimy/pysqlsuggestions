@@ -229,7 +229,40 @@ is starting, and the offer is a column name.
 _LONGEST_CONTINUATION = max(len(words) for words in _CONTINUES)
 
 
-def continues_a_keyword(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:
+@cache
+def _half_written_clauses(dialect: Dialect) -> Mapping[tuple[str, ...], tuple[str, ...]]:
+    """
+    Clause names of more than one word, and the words that finish them.
+
+    `GROUP ` can only become `GROUP BY`. Without this the first word reads as a
+    clause already complete, and the caret after it is offered a relation or a
+    column — which is where a typist pauses on the way to writing one.
+
+    Derived from the model rather than listed beside it, so a dialect that adds
+    `ARRAY JOIN` or `DISTINCT ON` gets the same treatment without a second edit,
+    and no list can fall behind the clauses it describes.
+
+    A head that is a phrase in its own right is left out. `ON` begins
+    `ON CONFLICT` and is also a clause, so answering `ON ` with `CONFLICT` alone
+    would forbid the predicate that usually follows it.
+    """
+    phrases = {
+        tuple(phrase.upper().split())
+        for clause in dialect.clauses.clauses
+        for phrase in (clause.name, *clause.followed_by)
+    }
+    phrases |= {tuple(phrase.upper().split()) for phrase in dialect.statement_start}
+
+    table: dict[tuple[str, ...], set[str]] = {}
+    for phrase in phrases:
+        for cut in range(1, len(phrase)):
+            head = phrase[:cut]
+            if head not in phrases:
+                table.setdefault(head, set()).add(' '.join(phrase[cut:]))
+    return {head: tuple(sorted(words)) for head, words in table.items()}
+
+
+def continues_a_keyword(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple[str, ...]:
     """
     The words that finish the half-written construct left of the caret, if any.
 
@@ -241,9 +274,12 @@ def continues_a_keyword(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:
     if index >= 0 and tokens[index].type is TokenType.IDENT and tokens[index].end >= caret:
         index -= 1
 
+    clauses = _half_written_clauses(dialect)
+    longest = max(_LONGEST_CONTINUATION, *(len(head) for head in clauses)) if clauses else _LONGEST_CONTINUATION
+
     written: list[str] = []
     cursor = _skip_back(tokens, index)
-    while cursor >= 0 and len(written) < _LONGEST_CONTINUATION:
+    while cursor >= 0 and len(written) < longest:
         token = tokens[cursor]
         if token.type is not TokenType.IDENT or token.quoted:
             break
@@ -251,7 +287,8 @@ def continues_a_keyword(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:
         cursor = _skip_back(tokens, cursor - 1)
 
     for length in range(len(written), 0, -1):
-        found = _CONTINUES.get(tuple(reversed(written[:length])))
+        head = tuple(reversed(written[:length]))
+        found = _CONTINUES.get(head) or clauses.get(head)
         if found is not None:
             return found
     return ()

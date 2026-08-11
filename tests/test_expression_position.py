@@ -136,3 +136,32 @@ def test_a_nulls_placement_is_not_offered_twice() -> None:
     assert 'NULLS FIRST' not in offered
     assert 'NULLS LAST' not in offered
     assert 'LIMIT' in offered
+
+
+def test_a_clause_name_stopped_between_its_words_takes_only_the_rest() -> None:
+    """
+    `GROUP BY` is one clause with a space in it, and a typist stops in that
+    space constantly.
+
+    The first word read as a clause already complete, so the caret after it was
+    offered whatever that clause admits — every relation in the schema after
+    `GROUP `, and a column after `ORDER `. Nothing but the second word can stand
+    there, and accepting anything else wrote SQL no server parses.
+    """
+    assert texts('SELECT * FROM events GROUP ⌶') == ['BY']
+    assert texts('SELECT * FROM events ORDER ⌶') == ['BY']
+    assert texts('SELECT * FROM events LEFT ⌶') == ['JOIN']
+    assert texts('INSERT ⌶') == ['INTO']
+    assert texts('DELETE ⌶') == ['FROM']
+
+
+def test_a_first_word_that_is_also_a_clause_still_opens_what_follows_it() -> None:
+    """
+    The limit of the same rule, and why it is derived rather than listed.
+
+    `ON` begins `ON CONFLICT` and is a clause in its own right. Answering `ON `
+    with `CONFLICT` alone would refuse the join predicate that almost always
+    follows it, so a head that is itself a phrase is left out of the table.
+    """
+    assert 'CONFLICT' not in texts('SELECT * FROM events e JOIN other o ON ⌶')
+    assert 'e.id' in texts('SELECT * FROM events e JOIN other o ON ⌶')
