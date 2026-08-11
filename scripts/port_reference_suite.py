@@ -12,6 +12,7 @@ Not run in CI: it reads a path outside this repository.
 
 import ast
 import re
+import subprocess
 from pathlib import Path
 
 SRC = Path('/home/user/Projects/report_service/reports/tests/test_autocomplete.py')
@@ -64,57 +65,15 @@ SKIP = {
 # Known gaps, grouped by root cause. Each is a real behaviour report_service
 # users have today and this library does not yet — a burn-down, not a wontfix.
 GAPS = {
-    # Not a gap: a deliberate difference, and one asked for directly — prefer
-    # `<alias>.<column>` so a reference is never ambiguous. Their engine returns
-    # bare names whenever it can. A bare name only reads better while there is
-    # one relation, and the caret is usually in a query still being written; it
-    # also hides a second relation's column behind the first once deduplicated.
-    # These assert the bare names their engine returned.
-    'columns are qualified with the relation they belong to': [
-        'columns_before_any_from_use_the_whole_schema_read',
-        'columns_before_any_from_are_prefix_filtered',
-        'an_oversized_schema_falls_back_to_the_prefix_query',
-        'any_subquery_relations_drop_out',
-        'column_prefix_hit_ranks_above_substring_hit',
-        'correlated_outer_relation_visible_inside_a_subquery',
-        'cte_and_derived_table_both_in_scope',
-        'cte_columns_in_group_by',
-        'cte_columns_in_having',
-        'cte_columns_in_order_by',
-        'cte_from_a_previous_statement_is_not_visible',
+    # Not a gap: a deliberate difference, and the only part of qualification the
+    # harness cannot absorb. Two relations that both have `id` give two
+    # suggestions here and one there: their engine returns bare names and
+    # deduplicates, which hides the second relation's column behind the first.
+    # Ours are distinct because they are qualified. These assert the shorter list.
+    'a column name shared by two relations is offered once per relation': [
         'cte_joined_with_a_real_table',
-        'cursor_inside_cte_body_unqualified',
-        'derived_table_does_not_leak',
-        'dollar_quoted_string_with_an_apostrophe',
-        'except_second_branch',
-        'function_in_from_unqualified_scope',
-        'function_without_alias_is_harmless',
-        'inner_relation_does_not_leak_outward',
-        'insert_column_list_uses_the_target_table',
-        'join_brings_both_relations',
-        'json_operator_then_column',
+        'correlated_outer_relation_visible_inside_a_subquery',
         'nested_subquery_sees_every_enclosing_level',
-        'numbered_parameter_is_not_a_dollar_quote',
-        'outer_scope_after_two_ctes',
-        'parenthesised_union_branches',
-        'partition_by_sees_the_relation_after_the_cursor',
-        'plain_unqualified_columns',
-        'psycopg_named_parameter',
-        'psycopg_positional_parameter',
-        'report_placeholder_does_not_break_scope',
-        'report_placeholder_mentioning_from',
-        'report_query_unqualified_scope',
-        'scalar_subquery_in_select_list_does_not_leak',
-        'second_statement_does_not_see_the_first',
-        'string_literal_mentioning_sql_does_not_add_relations',
-        'subquery_relations_drop_out_once_it_closes',
-        'tagged_dollar_quote',
-        'union_first_branch_scope',
-        'union_inside_a_cte_body',
-        'union_of_two_ctes',
-        'union_second_branch_scope',
-        'union_second_branch_where',
-        'uppercase_unqualified_columns',
     ],
     # Not a gap: a deliberate difference. Their engine always lists keywords in
     # canonical uppercase and adjusts the case when inserting; this one decides
@@ -156,7 +115,7 @@ for name, body in blocks:
 
 print(f'ported {len(out)}, skipped {len(skipped)}: {sorted(skipped)}')
 
-HEADER = '''"""
+HEADER = r'''"""
 report_service's autocomplete suite, translated onto this library's API.
 
 Ported wholesale rather than rewritten. It encodes edge cases nobody would think
@@ -175,6 +134,7 @@ field names and Catalog protocol rather than on any behaviour.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -182,7 +142,7 @@ import pytest
 from pysqlsuggestions.api import apply_suggestion, complete, derive_request
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.types import Suggestion
+from pysqlsuggestions.types import Kind, Suggestion
 
 CATALOG = {
     ('public', 'auth_user'): [
@@ -241,14 +201,38 @@ def suggestions(
     return complete(sql, len(sql) if pos is None else pos, POSTGRES, cursor, limit=limit)
 
 
+_QUALIFIED = re.compile(r'^[A-Za-z_][\w$]*\.')
+
+
+def bare(suggestion: Suggestion) -> str:
+    """
+    A suggestion's text with the qualifier this library adds taken back off.
+
+    Their engine returned bare column names; this one writes `u.email`, which is
+    a deliberate difference recorded once in our own suite. Normalising it here
+    is harness work of exactly the kind this file already does — `FakeCatalog`
+    became `MemoryCatalog`, `autocomplete()` became `complete()` — and it is
+    what keeps forty-four of their tests testing what they were written to test:
+    which columns are in scope after a UNION, across a semicolon, inside a
+    dollar-quoted string. Asserting the spelling forty-four times over would
+    guard one decision and abandon all of that.
+
+    Only an unquoted leading identifier is stripped, so a quoted column whose
+    own name contains a dot survives intact.
+    """
+    if suggestion.kind is Kind.COLUMN:
+        return _QUALIFIED.sub('', suggestion.text, count=1)
+    return suggestion.text
+
+
 def texts(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> list[str]:
-    """Suggestion texts."""
-    return [s.text for s in suggestions(cursor, sql, **kwargs)]
+    """Suggestion texts, unqualified as their engine returned them."""
+    return [bare(s) for s in suggestions(cursor, sql, **kwargs)]
 
 
 def kinds(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> dict[str, str]:
     """Text -> kind."""
-    return {s.text: s.kind.value for s in suggestions(cursor, sql, **kwargs)}
+    return {bare(s): s.kind.value for s in suggestions(cursor, sql, **kwargs)}
 
 
 def at(cursor: MemoryCatalog, marked: str, **kwargs: Any) -> list[str]:
@@ -302,4 +286,9 @@ OUT.parent.mkdir(parents=True, exist_ok=True)
     encoding='utf-8',
 )
 OUT.write_text(HEADER + '\n\n' + '\n\n\n'.join(out) + '\n', encoding='utf-8')
+
+# Their source wraps long SQL across implicit-concatenated strings; ours does not
+# want to. Formatting here means regenerating is one step rather than two, and
+# the file in the tree is always what the generator produces.
+subprocess.run(['uv', 'run', 'ruff', 'format', '--quiet', str(OUT)], check=False)  # noqa: S603, S607
 print(f'wrote {OUT}')

@@ -17,6 +17,7 @@ field names and Catalog protocol rather than on any behaviour.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -24,7 +25,7 @@ import pytest
 from pysqlsuggestions.api import apply_suggestion, complete, derive_request
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.types import Suggestion
+from pysqlsuggestions.types import Kind, Suggestion
 
 CATALOG = {
     ('public', 'auth_user'): [
@@ -83,14 +84,38 @@ def suggestions(
     return complete(sql, len(sql) if pos is None else pos, POSTGRES, cursor, limit=limit)
 
 
+_QUALIFIED = re.compile(r'^[A-Za-z_][\w$]*\.')
+
+
+def bare(suggestion: Suggestion) -> str:
+    """
+    A suggestion's text with the qualifier this library adds taken back off.
+
+    Their engine returned bare column names; this one writes `u.email`, which is
+    a deliberate difference recorded once in our own suite. Normalising it here
+    is harness work of exactly the kind this file already does — `FakeCatalog`
+    became `MemoryCatalog`, `autocomplete()` became `complete()` — and it is
+    what keeps forty-four of their tests testing what they were written to test:
+    which columns are in scope after a UNION, across a semicolon, inside a
+    dollar-quoted string. Asserting the spelling forty-four times over would
+    guard one decision and abandon all of that.
+
+    Only an unquoted leading identifier is stripped, so a quoted column whose
+    own name contains a dot survives intact.
+    """
+    if suggestion.kind is Kind.COLUMN:
+        return _QUALIFIED.sub('', suggestion.text, count=1)
+    return suggestion.text
+
+
 def texts(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> list[str]:
-    """Suggestion texts."""
-    return [s.text for s in suggestions(cursor, sql, **kwargs)]
+    """Suggestion texts, unqualified as their engine returned them."""
+    return [bare(s) for s in suggestions(cursor, sql, **kwargs)]
 
 
 def kinds(cursor: MemoryCatalog, sql: str, **kwargs: Any) -> dict[str, str]:
     """Text -> kind."""
-    return {s.text: s.kind.value for s in suggestions(cursor, sql, **kwargs)}
+    return {bare(s): s.kind.value for s in suggestions(cursor, sql, **kwargs)}
 
 
 def at(cursor: MemoryCatalog, marked: str, **kwargs: Any) -> list[str]:
@@ -312,7 +337,6 @@ def test_cte_name_offered_after_join(cur: MemoryCatalog) -> None:
     assert 'totals' in texts(cur, sql)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_inner_relation_does_not_leak_outward(cur: MemoryCatalog) -> None:
     """Тестировать, что relations внутри CTE не попадают в outer scope."""
     sql = 'WITH a as (select id from auth_user)\nSELECT * FROM a WHERE '
@@ -331,14 +355,12 @@ def test_cursor_inside_cte_body_sees_body_relations(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_cursor_inside_cte_body_unqualified(cur: MemoryCatalog) -> None:
     """Тестировать видимость колонок для unqualified курсора внутри тела CTE."""
     sql = 'WITH a as (select * from auth_user where '
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_outer_scope_after_two_ctes(cur: MemoryCatalog) -> None:
     """Тестировать outer scope после двух CTE."""
     sql = 'WITH a as (select id from auth_user), b as (select total from orders)\nSELECT * FROM b WHERE '
@@ -363,7 +385,6 @@ def test_derived_table_with_as_keyword(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['id']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_derived_table_does_not_leak(cur: MemoryCatalog) -> None:
     """Тестировать, что derived table колонки не попадают в outer scope."""
     sql = 'SELECT * FROM (select id from auth_user) s WHERE '
@@ -387,13 +408,11 @@ def test_plain_table_name_qualifier(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_plain_unqualified_columns(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для plain unqualified запроса."""
     assert sorted(texts(cur, 'select * from auth_group where ')) == ['id', 'name']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_join_brings_both_relations(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для двух relations в join."""
     sql = 'select * from auth_user u join orders o on o.user_id = u.id where '
@@ -461,7 +480,7 @@ def test_nested_cte_inside_a_cte_body(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['email', 'id']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
+@pytest.mark.xfail(strict=True, reason='a column name shared by two relations is offered once per relation')
 def test_cte_joined_with_a_real_table(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE с JOIN реальной таблицы."""
     sql = 'WITH a AS (SELECT id, email FROM auth_user)\nSELECT * FROM a JOIN orders o ON o.user_id = a.id WHERE '
@@ -513,7 +532,6 @@ def test_cte_body_with_comment_mentioning_another_table(cur: MemoryCatalog) -> N
     assert texts(cur, sql) == ['id']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_string_literal_mentioning_sql_does_not_add_relations(cur: MemoryCatalog) -> None:
     """Тестировать, что sql в string literal не добавляет relations."""
     sql = "SELECT * FROM auth_user WHERE email = 'select * from orders' AND "
@@ -533,14 +551,12 @@ def test_cursor_in_the_middle_of_the_statement(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql, pos=len(head))) == ['email', 'id']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_second_statement_does_not_see_the_first(cur: MemoryCatalog) -> None:
     """Тестировать изоляцию запросов, разделённых точкой с запятой."""
     sql = 'SELECT * FROM auth_user; SELECT * FROM orders WHERE '
     assert sorted(texts(cur, sql, limit=50)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_cte_from_a_previous_statement_is_not_visible(cur: MemoryCatalog) -> None:
     """Тестировать невидимость CTE предыдущего statement в следующем."""
     sql = 'WITH a AS (SELECT id FROM auth_user) SELECT * FROM a;\nSELECT * FROM orders WHERE '
@@ -602,7 +618,6 @@ def test_cte_chain_three_deep(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['email', 'id']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_union_of_two_ctes(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для UNION двух CTE."""
     sql = (
@@ -630,21 +645,18 @@ def test_cte_quoted_output_name_is_requoted(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['"Foo Bar"']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_cte_columns_in_group_by(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE в GROUP BY."""
     sql = 'WITH a AS (SELECT id, total FROM orders)\nSELECT id FROM a GROUP BY '
     assert sorted(texts(cur, sql, limit=50)) == ['id', 'total']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_cte_columns_in_having(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE в HAVING."""
     sql = 'WITH a AS (SELECT id, total FROM orders)\nSELECT id FROM a GROUP BY id HAVING '
     assert sorted(texts(cur, sql, limit=50)) == ['id', 'total']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_cte_columns_in_order_by(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для CTE в ORDER BY."""
     sql = 'WITH a AS (SELECT id, total FROM orders)\nSELECT id FROM a ORDER BY '
@@ -698,14 +710,12 @@ def test_derived_table_joined_to_a_cte(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['total']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_cte_and_derived_table_both_in_scope(cur: MemoryCatalog) -> None:
     """Тестировать видимость CTE и derived table одновременно."""
     sql = 'WITH a AS (SELECT id FROM auth_user)\nSELECT * FROM a JOIN (SELECT total FROM orders) d ON true WHERE '
     assert sorted(texts(cur, sql, limit=50)) == ['id', 'total']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_insert_column_list_uses_the_target_table(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для INSERT с CTE."""
     sql = 'WITH a AS (SELECT id FROM auth_user)\nINSERT INTO orders ('
@@ -741,7 +751,6 @@ def test_uppercase_plain_table_columns(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, 'SELECT * FROM AUTH_USER U WHERE U.')) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_uppercase_unqualified_columns(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для uppercase unqualified запроса."""
     got = texts(cur, 'SELECT * FROM AUTH_GROUP WHERE ', limit=50)
@@ -779,7 +788,6 @@ def test_function_in_from_does_not_swallow_the_rest_of_the_list(cur: MemoryCatal
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_function_in_from_unqualified_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для function in FROM без qualifier."""
     sql = 'SELECT * FROM generate_series(1, 10) g, auth_group WHERE '
@@ -798,7 +806,6 @@ def test_function_column_definition_list_keeps_later_items(cur: MemoryCatalog) -
     assert sorted(texts(cur, sql)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_function_without_alias_is_harmless(cur: MemoryCatalog) -> None:
     """Тестировать, что function без alias не ломает scope."""
     sql = 'SELECT * FROM generate_series(1, 10), auth_group WHERE '
@@ -841,14 +848,12 @@ def test_cyrillic_cte_name_offered_in_from(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['отчёт']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_report_placeholder_does_not_break_scope(cur: MemoryCatalog) -> None:
     """Тестировать, что report placeholder не ломает scope."""
     sql = 'SELECT * FROM auth_user WHERE date_joined > %Дата|ДАТА|% AND '
     assert sorted(texts(cur, sql, limit=50)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_report_placeholder_mentioning_from(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок при placeholder с from в значении."""
     sql = 'SELECT * FROM auth_user WHERE username = %Кто|СТРОКА|% AND u'
@@ -861,35 +866,30 @@ def test_placeholder_inside_a_cte(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ['email', 'id']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_psycopg_named_parameter(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок с psycopg named parameter."""
     sql = 'SELECT * FROM auth_user WHERE id = %(user_id)s AND '
     assert sorted(texts(cur, sql, limit=50)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_psycopg_positional_parameter(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок с psycopg positional parameter."""
     sql = 'SELECT * FROM auth_user WHERE id = %s AND '
     assert sorted(texts(cur, sql, limit=50)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_numbered_parameter_is_not_a_dollar_quote(cur: MemoryCatalog) -> None:
     """Тестировать, что $1 параметр не parse как dollar quote."""
     sql = 'SELECT * FROM auth_user WHERE id = $1 AND username = $2 AND '
     assert sorted(texts(cur, sql, limit=50)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_dollar_quoted_string_with_an_apostrophe(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок при dollar quote с apostrophe."""
     sql = "SELECT $$it's fine$$ FROM auth_user WHERE "
     assert sorted(texts(cur, sql, limit=50)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_tagged_dollar_quote(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для tagged dollar quote."""
     sql = 'SELECT $body$ select * from orders $body$ FROM auth_user WHERE '
@@ -914,7 +914,6 @@ def test_excluded_offers_the_target_columns(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_json_operator_then_column(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок после JSON operator."""
     sql = "SELECT * FROM auth_user WHERE data->>'k' = 'v' AND "
@@ -927,7 +926,6 @@ def test_cast_before_a_qualified_column(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_partition_by_sees_the_relation_after_the_cursor(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для PARTITION BY."""
     sql = 'SELECT row_number() OVER (PARTITION BY ) FROM auth_group'
@@ -962,7 +960,6 @@ def test_report_query_second_cte_columns(cur: MemoryCatalog) -> None:
     assert texts(cur, REPORT_SQL + 's.') == ['user_id', 'итого', 'штук']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_report_query_unqualified_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для unqualified запроса в report query."""
     assert sorted(texts(cur, REPORT_SQL, limit=50)) == sorted(
@@ -982,21 +979,18 @@ def test_report_query_inside_the_second_cte_body(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, head + '     WHERE o.', limit=50)) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_union_second_branch_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для second branch UNION."""
     got = at(cur, 'SELECT id FROM auth_user UNION SELECT ‸ FROM orders', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_union_first_branch_scope(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для first branch UNION."""
     got = at(cur, 'SELECT ‸ FROM auth_user UNION SELECT id FROM orders', limit=50)
     assert sorted(got) == sorted(USER_COLUMNS)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_union_second_branch_where(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для second branch UNION WHERE."""
     got = at(cur, 'SELECT id FROM auth_user UNION SELECT id FROM orders WHERE ‸', limit=50)
@@ -1009,35 +1003,31 @@ def test_union_qualified_in_second_branch(cur: MemoryCatalog) -> None:
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_parenthesised_union_branches(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для parenthesised UNION branches."""
     got = at(cur, '(SELECT id FROM auth_user) UNION (SELECT ‸ FROM orders)', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_except_second_branch(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для EXCEPT second branch."""
     got = at(cur, 'SELECT id FROM auth_user EXCEPT SELECT ‸ FROM orders', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_union_inside_a_cte_body(cur: MemoryCatalog) -> None:
     """Тестировать предложение колонок для UNION внутри тела CTE."""
     got = at(cur, 'WITH a AS (SELECT id FROM auth_user UNION SELECT ‸ FROM orders) SELECT * FROM a', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_subquery_relations_drop_out_once_it_closes(cur: MemoryCatalog) -> None:
     """Тестировать падение relations subquery после его закрытия."""
     got = at(cur, 'SELECT * FROM orders o WHERE o.user_id IN (SELECT id FROM auth_user) AND ‸', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
+@pytest.mark.xfail(strict=True, reason='a column name shared by two relations is offered once per relation')
 def test_correlated_outer_relation_visible_inside_a_subquery(cur: MemoryCatalog) -> None:
     """Тестировать видимость outer relation внутри subquery."""
     got = at(cur, 'SELECT * FROM orders o WHERE o.user_id IN (SELECT ‸ FROM auth_user)', limit=50)
@@ -1051,7 +1041,6 @@ def test_outer_qualifier_inside_an_exists_subquery(cur: MemoryCatalog) -> None:
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_scalar_subquery_in_select_list_does_not_leak(cur: MemoryCatalog) -> None:
     """Тестировать, что scalar subquery не leaking в outer scope."""
     got = at(cur, 'SELECT (SELECT name FROM auth_group), ‸ FROM orders', limit=50)
@@ -1064,14 +1053,13 @@ def test_clause_after_a_closed_subquery_is_still_select(cur: MemoryCatalog) -> N
     assert analyze(sql).clause == 'SELECT'
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_any_subquery_relations_drop_out(cur: MemoryCatalog) -> None:
     """Тестировать падение relations ANY subquery после закрытия."""
     got = at(cur, 'SELECT * FROM orders o WHERE o.id = ANY (SELECT id FROM auth_user) AND ‸', limit=50)
     assert sorted(got) == ALL_ORDER_COLUMNS
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
+@pytest.mark.xfail(strict=True, reason='a column name shared by two relations is offered once per relation')
 def test_nested_subquery_sees_every_enclosing_level(cur: MemoryCatalog) -> None:
     """Тестировать видимость всех enclosing levels в nested subquery."""
     got = at(
@@ -1104,7 +1092,6 @@ def test_substring_match_on_columns(cur: MemoryCatalog) -> None:
     assert texts(cur, 'select * from auth_user u where u.mail') == ['email']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_column_prefix_hit_ranks_above_substring_hit(cur: MemoryCatalog) -> None:
     """Тестировать приоритет column prefix hit над substring hit."""
     got = texts(cur, 'select * from orders where id', limit=10)
@@ -1146,7 +1133,6 @@ def test_substring_match_does_not_cross_the_dot(cur: MemoryCatalog) -> None:
     assert texts(cur, 'select * from auth_group g where g.mail') == []
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_columns_before_any_from_use_the_whole_schema_read(cur: MemoryCatalog) -> None:
     """Тестировать использование whole schema read для предложений до FROM."""
     got = texts(cur, 'select ema', limit=20)
@@ -1155,14 +1141,12 @@ def test_columns_before_any_from_use_the_whole_schema_read(cur: MemoryCatalog) -
     assert not any(call[0] == 'search_columns' for call in cur.calls)
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_columns_before_any_from_are_prefix_filtered(cur: MemoryCatalog) -> None:
     """Тестировать prefix filtering для предложений до FROM."""
     got = texts(cur, 'select user_i', limit=20)
     assert got == ['user_id']
 
 
-@pytest.mark.xfail(strict=True, reason='columns are qualified with the relation they belong to')
 def test_an_oversized_schema_falls_back_to_the_prefix_query() -> None:
     """Тестировать fallback к prefix query при oversized schema."""
     cur = fake_catalog(oversized=True)
