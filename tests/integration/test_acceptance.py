@@ -74,7 +74,6 @@ KNOWN = frozenset(
         'SELECT u.id FROM auth_user u LEFT ',
         'INSERT ',
         'DELETE ',
-        'UPDATE ',
         # The same, with the second word half typed: `BY` matches inside
         # `reports_report_favorited_by` and the keyword is replaced by a table.
         'SELECT count(*) AS n FROM orders GROUP BY',
@@ -95,10 +94,9 @@ KNOWN = frozenset(
         'SELECT * ',
         'SELECT o.total FROM orders o ORDER BY o.total ASC NULLS LAST LIMIT ',
         'SELECT o.total FROM orders o ORDER BY o.total ASC NULLS LAST LIMIT 10',
-        # UPDATE's own shape: SET comes before FROM and WHERE, its assignments take
-        # `=` and nothing else, and its target takes no alias without AS.
+        # UPDATE's own shape: SET comes before FROM and WHERE, and its target
+        # takes no alias without AS.
         'UPDATE orders ',
-        'UPDATE orders SET ',
         'UPDATE orders SET total ',
         'INSERT INTO orders ',
         'INSERT INTO orders (user_id, total)',

@@ -67,10 +67,6 @@ KNOWN = frozenset(
         ('ORDER', 'BY'),
         ('INSERT', 'INTO'),
         ('DELETE', 'FROM'),
-        # `UPDATE ` names a relation and offers the clauses that follow one instead.
-        ('UPDATE', 'orders'),
-        # `SET ` assigns to a column and offers only the `=` that comes after it.
-        ('SET', 'total'),
     }
 )
 """

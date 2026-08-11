@@ -288,7 +288,19 @@ class Dialect:
     namespace: Namespace = field(default_factory=Namespace)
     clauses: ClauseModel = field(default_factory=ClauseModel)
     keywords: frozenset[str] = frozenset()
-    """Offered as completions. Ideally introspected; the static set is the offline fallback."""
+    """
+    Offered as completions. Ideally introspected; the static set is the offline
+    fallback.
+
+    Every word the clause model can put on screen is added to it at
+    construction, because this set is also how the analyser tells a keyword from
+    a name. A word the model suggests and this set omits reads as an identifier
+    the moment the author writes it: `UPDATE ` looked like a finished operand,
+    so the caret after it was offered the clauses that follow a relation instead
+    of the relation itself, and `SET ` was offered an operator rather than the
+    column to assign to. The two sets have to agree, so they are not maintained
+    separately.
+    """
     reserved: frozenset[str] = frozenset()
     """Lowercased. Drives quoting decisions, which must be made before any connection exists."""
     statement_start: tuple[str, ...] = ()
@@ -309,6 +321,19 @@ class Dialect:
     composite and enum types belong in this list too.
     """
     catalog_queries: CatalogQueries = field(default_factory=CatalogQueries)
+
+    def __post_init__(self) -> None:
+        """Fold the clause model's own vocabulary into `keywords`."""
+        spoken = {
+            word.upper()
+            for clause in self.clauses.clauses
+            for phrase in (clause.name, *clause.followed_by, *clause.after_operand)
+            for word in phrase.split()
+        }
+        spoken |= {word.upper() for phrase in self.statement_start for word in phrase.split()}
+        # Runs on `dataclasses.replace` too, which is how every dialect is built,
+        # so a clause added by one cannot leave its words unrecognised.
+        object.__setattr__(self, 'keywords', self.keywords | spoken)
 
     @property
     def reserved_upper(self) -> frozenset[str]:
