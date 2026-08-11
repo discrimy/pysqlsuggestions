@@ -6,6 +6,86 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A VS Code extension
+
+`editors/vscode/` drives the language server from an editor. It builds its own
+Python environment from wheels shipped inside the VSIX — no network, and the
+project's own environment is never touched — and needs Python 3.10+ on PATH.
+
+PostgreSQL only, for anything that reads a schema. The other backends' drivers
+are not pure Python, so bundling them would mean one build per operating system;
+their dialects still select, and still bring the right keywords and quoting.
+
+- **Connections are managed from a view**, not by editing JSON: add, edit,
+  remove, set and clear a password, choose which one is in use.
+
+- **A connection can be asked whether it works, and answers in words.** Every
+  kind of failure looks identical from an editor — completion simply stops
+  being schema-aware — so the message is the feature. A missing password says
+  so; pg8000's own answer is `'NoneType' object has no attribute 'decode'`,
+  which sent this project's author debugging in the wrong direction. A rejected
+  password, a database that is not there and a port with nothing behind it are
+  each named distinctly.
+
+- **Health and use are shown separately.** The icon is the last test result;
+  the label says which connection the server holds. The one in use may be the
+  broken one, and that is the case most worth seeing.
+
+- **Verdicts are never remembered across sessions.** A tick from last week is a
+  claim nobody checked today.
+
+- **Passwords have nowhere to live but secret storage.** The settings schema has
+  no field for one, a test asserts it stays that way, and removing a connection
+  removes its password — an orphan would be inherited by the next connection
+  reusing that name.
+
+### A language server
+
+The engine now speaks LSP, so an editor can drive it. `pysqlsuggestions-lsp` is
+a second distribution in `lsp/` rather than a module in `src/`: a server needs
+pygls and a driver, and the library's promise is that importing it pulls in
+neither. Two tests hold that line — the versions must agree, and `src/` may not
+name the server package.
+
+The library itself is unchanged. Nothing was added to it, renamed in it, or
+removed from it.
+
+- **Completion at a caret, over stdio.** The connection profile arrives in
+  `initializationOptions`; without one the server completes from the statement
+  alone, which is the library's documented degraded mode rather than an error.
+
+- **A completion request never fails.** An unreachable database, a rejected
+  password or a dialect with no driver all fall back to that same mode. The
+  failure is recorded rather than retried, because retrying means a blocking
+  connection attempt for every character typed.
+
+- **The database is not contacted until the first completion.** Opening a
+  document opens no socket, so a backend that is down costs a completion rather
+  than a hung editor.
+
+- **The engine's ranking survives the trip.** Items carry `sortText`, since a
+  client re-sorts by its own fuzzy score otherwise, and `filterText` set to the
+  term the engine matched — the column name, so `usern` still finds
+  `u.username`. Items carry a `textEdit` with an explicit range and never an
+  `insertText`: re-deriving a word boundary is what drops a qualifier.
+
+- **`plan_insertion`'s second edit reaches the editor.** A column accepted
+  before any FROM exists writes the clause it needs as an `additionalTextEdit`,
+  and a suggestion carrying template blanks — a statement shape, `Kind.SNIPPET`
+  — becomes a snippet placeholder. A join proposal carries none: it inserts a
+  finished clause, alias and condition included.
+
+- **Statements are cut at semicolon tokens, not characters.** Scope comes from
+  the whole statement, and a semicolon inside a literal, a comment or a quoted
+  identifier is not a boundary. The dialect's own lexer decides.
+
+- **A `pg8000` extra.** Pure Python, so the wheels an editor extension bundles
+  are platform-independent. psycopg2 remains the documented choice for library
+  users; this only governs what a bundle carries. ClickHouse is consequently a
+  dialect the library serves and the server does not, its driver not being pure
+  Python — the dialect still resolves, so keywords and quoting are right, and
+  only the catalog is absent.
+
 ## 0.2.1
 
 The library is unchanged — `src/` is byte-identical to 0.2.0. This release exists

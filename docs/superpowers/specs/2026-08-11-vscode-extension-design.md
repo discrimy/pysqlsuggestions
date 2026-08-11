@@ -92,10 +92,12 @@ not on speculation.
 **Notebook cells.** Separate URI scheme and lifecycle, plus stripping the `%%sql`
 magic before the engine sees the text.
 
-**ClickHouse in the bundled venv.** `clickhouse-driver` is not pure Python; see
-§4. ClickHouse remains fully supported for library users, and arrives in the
-extension when either a pure-Python driver or platform-targeted VSIXs are worth
-the cost.
+**ClickHouse and Trino in the bundled venv.** Neither has a pure-Python
+dependency tree; see §4. Both remain fully supported for library users, and
+arrive in the extension when either a pure-Python driver or platform-targeted
+VSIXs are worth the cost. The server already handles this shape: a dialect
+resolves and its catalog does not, so keywords and quoting stay right while
+schema awareness is absent.
 
 **Multiple simultaneous connections per window.** One profile per server process.
 
@@ -128,11 +130,18 @@ makes this repo no longer the source of truth.
 
 LSP wins on a detail that is easy to miss: it has a message shape for everything
 the engine already produces. `plan_insertion` returns *two* edits when a column
-needs a FROM clause — LSP has `additionalTextEdits`. Join proposals carry
+needs a FROM clause — LSP has `additionalTextEdits`. A statement snippet carries
 template `stops` — LSP has snippet placeholders. `replace_span` travels with the
 suggestion precisely so an editor does not re-derive a word boundary and drop the
 qualifier — LSP has `textEdit` with an explicit range. Nothing has to be
 flattened or dropped in translation.
+
+> **Corrected during implementation.** This section first claimed *join
+> proposals* carry stops. They do not: measured against the docker Postgres,
+> `Kind.JOIN` arrives with `stops=()` and inserts a finished clause — relation,
+> alias and condition — with nothing left to fill in. Only `Kind.SNIPPET` carries
+> stops. The conversion is written generically, so the code was right and only
+> this sentence was wrong.
 
 The price is a Python interpreter on the user's machine. §4 is about paying it.
 
@@ -154,8 +163,17 @@ and architecture — six builds, six pipelines, six things to get wrong at relea
 — because the venv's contents would no longer be portable.
 
 `pg8000` is a pure-Python PEP 249 driver, and `DbapiCatalog` accepts any PEP 249
-cursor. With `pg8000` and `trino` — also pure — every bundled wheel is
-platform-independent and **one universal VSIX serves every machine**.
+cursor. Its whole tree is pure — measured, not assumed: `pygls` and `pg8000`
+resolve to ten wheels and every one of them is `none-any`, so **one universal
+VSIX serves every machine**.
+
+> **Corrected during implementation.** This paragraph first included `trino` in
+> that claim. The trino *client* is pure Python; its dependencies are not. It
+> hard-requires `lz4`, `orjson` and `zstandard` — plain `Requires-Dist`, not
+> extras — and all three ship compiled. Bundling Trino would therefore mean
+> platform-targeted VSIXs, which is the cost this design exists to avoid, so
+> Trino joins ClickHouse as a backend the library serves and the bundle does
+> not. The same reasoning that rejected psycopg2, applied consistently.
 
 pyproject's own comment anticipated this:
 
