@@ -8,7 +8,9 @@
 // Defined before index.html's own script runs, which is what makes it pick this
 // up as `window.DRIVER` instead of talking to an API that is not there.
 
-const PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.28.3/full/';
+// Vendored beside this file by scripts/vendor_pyodide.py. The page reaches no
+// host but the one serving it, which is the claim the demo exists to make.
+const PYODIDE = new URL('./pyodide/', import.meta.url).href;
 
 const status = () => document.getElementById('boot');
 
@@ -25,10 +27,17 @@ async function boot() {
   const py = await loadPyodide({ indexURL: PYODIDE });
 
   say('installing pysqlsuggestions…');
-  await py.loadPackage('micropip');
-  const micropip = py.pyimport('micropip');
+  // A wheel is a zip and this one is pure Python with no dependencies, so
+  // unpacking it onto sys.path is the whole install. micropip would add a
+  // package download and a resolver to reach the same place — and did, until it
+  // failed to fetch one morning and left the page booted with a dead editor.
+  //
+  // Unpacked into a directory we name rather than site-packages, whose real path
+  // carries the interpreter version and would break silently on an upgrade.
   // Wheel and demo sources sit beside this file; the build step puts them there.
-  await micropip.install(new URL('./pysqlsuggestions-0.1.1-py3-none-any.whl', import.meta.url).href);
+  const wheel = await fetch(new URL('./pysqlsuggestions-0.1.1-py3-none-any.whl', import.meta.url));
+  py.unpackArchive(await wheel.arrayBuffer(), 'zip', { extractDir: '/wheel' });
+  py.runPython('import sys; sys.path.insert(0, "/wheel")');
 
   say('loading the demo schema…');
   const modules = ['payload.py', 'schema.py', 'browser.py'];

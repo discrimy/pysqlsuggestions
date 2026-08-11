@@ -16,3 +16,6 @@ htmlcov/
 # Built by scripts/build_pages.py and `uv build`
 site/
 dist/
+
+# Fetched by scripts/vendor_pyodide.py, verified against scripts/pyodide.lock
+.pyodide/
