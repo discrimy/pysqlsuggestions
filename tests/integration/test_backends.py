@@ -292,9 +292,14 @@ def test_postgres_offers_enum_labels_without_statistics(postgres_catalog: DbapiC
 
     Postgres reports the column's type as the enum's *name*, so unlike
     ClickHouse the labels are a read of their own — of `pg_enum`, not the table.
+
+    This column is also analysed, so both sources can answer and the query has to
+    choose one of them entire: ranked rather than chosen, every label arrives
+    twice — once named by the type, once measured by the planner.
     """
-    if not any(c.name == 'status' for c in postgres_catalog.columns('public', 'reports_runlog')):
-        pytest.skip('the reports_runlog fixture predates this seed: docker compose down -v && up')
+    assert any(c.name == 'status' for c in postgres_catalog.columns('public', 'reports_runlog')), (
+        'the reports_runlog fixture predates this seed: docker compose -f docker/docker-compose.yml down -v && up'
+    )
     assert [v.text for v in postgres_catalog.common_values('public', 'reports_runlog', 'status', 30)] == [
         'queued',
         'running',

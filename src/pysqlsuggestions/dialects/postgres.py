@@ -102,9 +102,13 @@ QUERIES = CatalogQueries(
     # WITH ORDINALITY is what carries that order through the unnest. Neither
     # touches the table, and pg_stats already restricts itself to what the
     # connected role may read.
+    #
+    # `source` picks one of them whole rather than ranking a mixture. An analysed
+    # enum column answers both branches with the same labels, and merely ordering
+    # by source leaves each value in the list twice — once named, once measured.
     values=Query(
         sql="""
-            SELECT q.value, q.freq FROM (
+            WITH candidates AS (
                 SELECT e.enumlabel::text AS value, NULL::float8 AS freq, 0 AS source, e.enumsortorder::float8 AS ord
                 FROM pg_attribute a
                 JOIN pg_class c ON c.oid = a.attrelid
@@ -122,8 +126,10 @@ QUERIES = CatalogQueries(
                     WITH ORDINALITY AS v(value, freq, ord)
                 WHERE s.tablename = $2 AND s.attname = $3
                   AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
-            ) q
-            ORDER BY q.source, q.ord
+            )
+            SELECT q.value, q.freq FROM candidates q
+            WHERE q.source = (SELECT min(source) FROM candidates)
+            ORDER BY q.ord
             LIMIT 50
         """,
         row=lambda row: ColumnValue(text=str(row[0]), frequency=float(row[1]) if row[1] is not None else None),
