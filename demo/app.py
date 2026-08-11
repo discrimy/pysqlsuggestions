@@ -18,18 +18,17 @@ from __future__ import annotations
 
 import os
 import threading
-import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from demo.payload import backend_entry, respond
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from pysqlsuggestions.api import complete, derive_request
 from pysqlsuggestions.catalogs.dbapi import Cursor, DbapiCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
@@ -204,15 +203,15 @@ def backends() -> dict[str, Any]:
     """Which backends exist and which are currently reachable."""
     return {
         'backends': [
-            {
-                'key': backend.key,
-                'label': backend.label,
-                'note': backend.note,
-                'levels': list(backend.dialect.namespace.levels),
-                'paramstyle': PARAMSTYLE[backend.key],
-                'example': _examples.get(backend.key, EXAMPLES[backend.key]),
-                'available': _catalog(backend.key) is not None,
-            }
+            backend_entry(
+                backend.key,
+                backend.label,
+                backend.dialect,
+                backend.note,
+                _examples.get(backend.key, EXAMPLES[backend.key]),
+                available=_catalog(backend.key) is not None,
+                paramstyle=PARAMSTYLE[backend.key],
+            )
             for backend in BACKENDS.values()
         ],
     }
@@ -231,78 +230,8 @@ def suggest(payload: SuggestRequest) -> JSONResponse:
     if backend is None:
         return JSONResponse({'error': f'unknown backend {payload.backend!r}'}, status_code=400)
 
-    caret = max(0, min(payload.caret, len(payload.sql)))
-    started = time.perf_counter()
-    request = derive_request(payload.sql, caret, backend.dialect)
+    caret = payload.caret
     catalog = _catalog(backend.key)
     cache = _caches.setdefault(backend.key, {})
 
-    suggestions = complete(
-        payload.sql,
-        caret,
-        backend.dialect,
-        catalog,
-        cache=cache,
-        identity='demo',
-        limit=payload.limit,
-    )
-    elapsed_ms = (time.perf_counter() - started) * 1000
-
-    return JSONResponse(
-        {
-            'available': catalog is not None,
-            'elapsed_ms': round(elapsed_ms, 2),
-            'request': _describe(request),
-            'suggestions': [
-                {
-                    'text': s.text,
-                    'kind': s.kind.value,
-                    'detail': s.detail,
-                    'score': s.score,
-                    'replace_span': list(s.replace_span),
-                    'takes_arguments': s.takes_arguments,
-                    'stops': list(s.stops),
-                    'label': s.label or s.text,
-                }
-                for s in suggestions
-            ],
-        },
-    )
-
-
-def _describe(request: Any) -> dict[str, Any]:
-    """The Request, flattened for the page."""
-    return {
-        'clause': request.clause,
-        'expecting': request.expecting,
-        'prefix': request.prefix,
-        'qualifier': list(request.qualifier),
-        'kinds': [kind.value for kind in request.kinds],
-        'replace_span': list(request.replace_span),
-        'relations': [
-            {
-                'label': relation.label,
-                'path': list(relation.path),
-                'source': relation.source,
-                'projection': _projection(relation),
-            }
-            for relation in _visible(request.scope)
-        ],
-        'ctes': sorted(request.scope.ctes) if request.scope else [],
-    }
-
-
-def _visible(scope: Any) -> Iterator[Any]:
-    if scope is None:
-        return
-    yield from scope.visible()
-
-
-def _projection(relation: Any) -> dict[str, Any] | None:
-    """How much of this relation the statement described itself."""
-    if relation.projection is None:
-        return None
-    return {
-        'columns': list(relation.projection.columns),
-        'stars': [star.label for star in relation.projection.stars],
-    }
+    return JSONResponse(respond(payload.sql, caret, backend.dialect, catalog, cache=cache, limit=payload.limit))

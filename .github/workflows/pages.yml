@@ -1,0 +1,57 @@
+name: demo
+
+# Publishes the browser demo to GitHub Pages.
+#
+# No database and no server: Pages serves files only, so the page loads the
+# library under Pyodide and completes against `demo/snapshot.json`, exported
+# from the docker fixtures and checked in. That is why this job needs no
+# services — and why nothing here can reach a real database, which is the point.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'demo/**'
+      - 'scripts/build_pages.py'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build the wheel the page installs
+        run: uv build --wheel
+
+      - name: Assemble site/
+        run: uv run --no-project python scripts/build_pages.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

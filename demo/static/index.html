@@ -86,6 +86,9 @@
   .k-value { color: var(--value); } .k-type { color: var(--type); }
   .k-snippet { color: var(--snippet); }
 
+  .boot { color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .boot[data-done="yes"] { display: none; }
+
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
   .panel h2 {
     font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
@@ -127,6 +130,7 @@
   <section>
     <div class="tabs" id="tabs" role="tablist"></div>
     <div class="warn" id="warn" hidden></div>
+    <div class="boot" id="boot" data-done="no"></div>
 
     <div class="editor-wrap">
       <textarea id="sql" spellcheck="false" autocomplete="off"
@@ -165,7 +169,7 @@
   </aside>
 </main>
 
-<script>
+<script type="module">
 const $ = (id) => document.getElementById(id);
 const sql = $('sql'), pop = $('pop'), tabs = $('tabs'), warn = $('warn');
 
@@ -192,8 +196,22 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 
+// One page, two transports. The server build posts to FastAPI; the static build
+// runs the same Python in the page under Pyodide and answers from a snapshot.
+// Whichever is present defines `window.DRIVER` before this runs.
+let DRIVER_IMPL = {
+  backends: async () => (await fetch('/api/backends')).json(),
+  suggest: async (body) => (await fetch('/api/suggest', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+  })).json(),
+};
+const DRIVER = {
+  backends: (...a) => DRIVER_IMPL.backends(...a),
+  suggest: (...a) => DRIVER_IMPL.suggest(...a),
+};
+
 async function loadBackends() {
-  const data = await (await fetch('/api/backends')).json();
+  const data = await DRIVER.backends();
   tabs.innerHTML = '';
   data.backends.forEach((b, i) => {
     const el = document.createElement('button');
@@ -210,7 +228,9 @@ async function loadBackends() {
   const anyUp = data.backends.some((b) => b.available);
   warn.hidden = anyUp;
   if (!anyUp) {
-    warn.textContent = 'No backend reachable. Run: docker compose -f docker/docker-compose.yml up -d --wait';
+    warn.textContent = window.DRIVER
+      ? 'Snapshot failed to load.'
+      : 'No backend reachable. Run: docker compose -f docker/docker-compose.yml up -d --wait';
   }
 }
 
@@ -238,14 +258,10 @@ function request(quiet) {
 
 async function fire(quiet) {
   const mine = ++seq;
-  const body = JSON.stringify({
+  const data = await DRIVER.suggest({
     sql: sql.value, caret: sql.selectionStart, backend, limit: 25,
   });
-  const res = await fetch('/api/suggest', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body,
-  });
   if (mine !== seq) return;
-  const data = await res.json();
   if (data.error) return;
   paintRequest(data);
   items = quiet ? [] : data.suggestions;
@@ -395,6 +411,11 @@ sql.addEventListener('keydown', (e) => {
 });
 sql.addEventListener('blur', () => setTimeout(() => { pop.hidden = true; }, 120));
 
+// Both scripts are modules, so they run in document order: `browser.js` has
+// already assigned DRIVER_READY by the time this executes. The server build
+// ships no browser.js, leaves it undefined, and starts straight away.
+await Promise.resolve(window.DRIVER_READY).catch(() => {});
+if (window.DRIVER) DRIVER_IMPL = window.DRIVER;
 loadBackends();
 </script>
 </body>

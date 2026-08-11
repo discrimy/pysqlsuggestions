@@ -12,3 +12,7 @@ dist/
 htmlcov/
 .idea/
 .vscode/
+
+# Built by scripts/build_pages.py and `uv build`
+site/
+dist/

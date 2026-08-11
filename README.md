@@ -113,6 +113,29 @@ that cannot answer offers columns and functions there instead. ClickHouse and
 Trino keep no most-common-values, so ClickHouse answers from its enums and
 Trino from booleans alone.
 
+## Browser demo
+
+The same page, with no server and no database — the library has no runtime
+dependencies and its core is pure, so the whole pipeline loads into the page
+under Pyodide and completes against a snapshot of the docker fixtures:
+
+```bash
+uv build --wheel
+uv run python scripts/build_pages.py
+python -m http.server -d site 8001
+```
+
+`.github/workflows/pages.yml` publishes `site/` to GitHub Pages on every push
+to `main`. Nothing in it can reach a database, which is what makes it safe to
+publish: `demo/snapshot.json` holds the fixture schemas only, and is
+regenerated with `scripts/export_snapshot.py` against docker.
+
+Never point that exporter at a real database. `most_common_vals` holds literal
+values out of the rows, and the snapshot is published.
+
+Trino is server-only. Its namespace has three levels and `MemoryCatalog` is
+keyed by two, so a static Trino would mean bending the library to suit a demo.
+
 ## Design
 
 See `docs/request-pipeline.md` for how the stages fit together,
