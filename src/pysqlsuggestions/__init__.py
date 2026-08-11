@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.api import apply_suggestion, complete, derive_request
+from pysqlsuggestions.api import apply_suggestion, complete, derive_request, plan_insertion
 from pysqlsuggestions.ports import (
     Cache,
     Catalog,
     SupportsColumnSearch,
+    SupportsColumnValues,
     SupportsKeywords,
 )
 from pysqlsuggestions.types import (
     Candidate,
     Column,
+    ColumnValue,
     Function,
+    Insertion,
     Kind,
     Projection,
     Relation,
@@ -29,7 +32,9 @@ __all__ = [
     'Candidate',
     'Catalog',
     'Column',
+    'ColumnValue',
     'Function',
+    'Insertion',
     'Kind',
     'Projection',
     'Relation',
@@ -37,10 +42,12 @@ __all__ = [
     'Scope',
     'Suggestion',
     'SupportsColumnSearch',
+    'SupportsColumnValues',
     'SupportsKeywords',
     'Table',
     '__version__',
     'apply_suggestion',
     'complete',
     'derive_request',
+    'plan_insertion',
 ]
