@@ -17,7 +17,7 @@ import time
 from collections.abc import Iterator, Sequence
 from typing import Any
 
-from pysqlsuggestions.api import complete, derive_request
+from pysqlsuggestions.api import complete, derive_request, plan_insertion
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.ports import Catalog
 from pysqlsuggestions.types import Relation, Request, Scope, Suggestion
@@ -32,6 +32,7 @@ def respond(
     cache: dict[Any, Any] | None = None,
     identity: str = 'demo',
     limit: int = 25,
+    pending: Sequence[int] = (),
 ) -> dict[str, Any]:
     """
     Suggestions for the caret, plus the Request that produced them.
@@ -39,6 +40,11 @@ def respond(
     The Request travels alongside so the page can show what the pure stages
     decided before anything was fetched — the part of a completion engine you
     normally cannot see.
+
+    Each suggestion carries the edit that applies it, planned against this same
+    text. A front end splices and moves the caret; it decides nothing, which is
+    the only way a rule about separators or namespaces or template blanks stays
+    in one place.
     """
     caret = max(0, min(caret, len(sql)))
     started = time.perf_counter()
@@ -48,12 +54,19 @@ def respond(
         'available': catalog is not None,
         'elapsed_ms': round((time.perf_counter() - started) * 1000, 2),
         'request': describe(request),
-        'suggestions': [_suggestion(s) for s in suggestions],
+        'suggestions': [_suggestion(s, sql, pending) for s in suggestions],
     }
 
 
-def _suggestion(suggestion: Suggestion) -> dict[str, Any]:
+def _suggestion(suggestion: Suggestion, sql: str, pending: Sequence[int]) -> dict[str, Any]:
+    plan = plan_insertion(sql, suggestion, pending=pending)
     return {
+        'insertion': {
+            'span': list(plan.span),
+            'text': plan.text,
+            'caret': plan.caret,
+            'pending': list(plan.pending),
+        },
         'text': suggestion.text,
         'kind': suggestion.kind.value,
         'detail': suggestion.detail,

@@ -78,10 +78,19 @@ class Demo:
         ]
         return json.dumps({'backends': rows})
 
-    def suggest(self, sql: str, caret: int, backend: str, limit: int) -> str:
+    def suggest(self, sql: str, caret: int, backend: str, limit: int, pending: list[int] | None = None) -> str:
         """Suggestions plus the derived Request, as JSON, in the server's shape."""
         dialect = DIALECTS.get(backend)
         catalog = self._catalogs.get(backend)
         if dialect is None or catalog is None:
             return json.dumps({'error': f'unknown backend {backend!r}'})
-        return json.dumps(respond(sql, caret, dialect, catalog, cache=self._caches[backend], limit=limit))
+        found = respond(
+            sql,
+            caret,
+            dialect,
+            catalog,
+            cache=self._caches[backend],
+            limit=limit,
+            pending=tuple(pending or ()),
+        )
+        return json.dumps(found)

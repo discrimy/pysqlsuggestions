@@ -259,7 +259,7 @@ function request(quiet) {
 async function fire(quiet) {
   const mine = ++seq;
   const data = await DRIVER.suggest({
-    sql: sql.value, caret: sql.selectionStart, backend, limit: 25,
+    sql: sql.value, caret: sql.selectionStart, backend, limit: 25, pending,
   });
   if (mine !== seq) return;
   if (data.error) return;
@@ -334,61 +334,27 @@ function place() {
   pop.style.left = `${Math.min(14 + col * ch, sql.clientWidth - 340)}px`;
 }
 
-// Mirrors pysqlsuggestions.apply_suggestion. Splicing at the server's span
-// rather than at a word boundary is what keeps a qualifier in place:
-// `where u.crea` accepting `created_at` gives `where u.created_at`.
+// Splice and move the caret. Nothing else — every judgement about separators,
+// parentheses, namespaces and template blanks was made by the library and
+// arrives as `insertion`. Each rule this file used to mirror is one that drifted
+// from the one that mattered, three times, before this existed.
 function accept(i) {
   const s = items[i];
   if (!s) return;
-  const [from, to] = s.replace_span;
-  const tail = sql.value.slice(to);
-  let insert = s.text, caret = null;
-  // Mirrors api._separated: with nothing being replaced, butting a name against
-  // the character before it merges two tokens. `id > 1` accepting `AND` must
-  // give `1 AND` — Postgres reads `1AND` as junk after a numeric literal.
-  if (from === to && from > 0 && /[\w$"`']/.test(sql.value[from - 1]) && /[\w$"`]/.test(insert[0])) {
-    insert = ' ' + insert;
-  }
-  if (s.kind === 'function' && !tail.trimStart().startsWith('(')) {
-    insert += '()';
-    // Only park inside when there is an argument to type. `now()` is finished.
-    if (s.takes_arguments) caret = from + insert.length - 1;
-  }
-  // Mirrors api.apply_suggestion: a schema is never the end of a reference, so
-  // it brings its own dot and the caret lands past it, ready for the next level.
-  const unfinished = s.kind === 'schema';
-  if (unfinished) {
-    if (tail.startsWith('.')) caret = from + insert.length + 1;
-    else insert += '.';
-  }
-  if (s.stops && s.stops.length) {
-    // A template brings its own stops, relative to the insertion point.
-    pending = s.stops.map((o) => from + o);
-    caret = pending.shift();
-  } else if (pending.length) {
-    const delta = insert.length - (to - from);
-    pending = pending.map((p) => (p >= to ? p + delta : p));
-    // A schema has not filled the blank — `FROM warehouse.` still needs its
-    // table — so the stop stays where it is and the caret waits there. Anything
-    // else finished the slot, so move on to the next.
-    if (!unfinished) caret = pending.shift();
-    else if (caret === null) caret = from + insert.length;
-  }
-
-  sql.value = sql.value.slice(0, from) + insert + tail;
+  const { span, text, caret } = s.insertion;
+  sql.value = sql.value.slice(0, span[0]) + text + sql.value.slice(span[1]);
+  pending = s.insertion.pending;
   measured = sql.value.length;
-  const parked = caret !== null;          // caret left inside parens or at a stop
-  if (caret === null) caret = from + insert.length;
   sql.setSelectionRange(caret, caret);
   sql.dataset.example = 'no';
   pop.hidden = true;
   items = [];
   active = -1;
   sql.focus();
-  // Accepting `count()` parks the caret between the parens, where the arguments
-  // are worth offering, and a schema leaves the next namespace level to pick.
-  // Accepting a name finishes it, so stay closed.
-  request(!parked && !unfinished);
+  // Reopen where the caret was left somewhere with more to say: inside a
+  // function's parentheses, after a namespace's dot, or in a template blank.
+  const parked = caret !== span[0] + text.length;
+  request(!parked);
 }
 
 function move(delta) {

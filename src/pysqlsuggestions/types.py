@@ -288,6 +288,33 @@ class Candidate:
 
 
 @dataclass(frozen=True, slots=True)
+class Insertion:
+    """
+    A suggestion turned into an edit, with no decisions left for the caller.
+
+    Splice `text` over `span` and put the caret at `caret`. That is the whole
+    contract: whether a separator was needed, whether parentheses closed,
+    whether a namespace continued, which of a template's blanks comes next —
+    all of it is already decided. Every such rule that leaks into a front end
+    is one that has to be reimplemented there and then kept in step.
+    """
+
+    span: tuple[int, int]
+    """What to replace. Always a valid slice of the SQL it was planned against."""
+    text: str
+    """What to put there. Ready to insert, including any separator or closing bracket."""
+    caret: int
+    """Where the caret goes afterwards, as an offset into the spliced text."""
+    pending: tuple[int, ...] = ()
+    """
+    Template blanks still to visit, as absolute offsets into the spliced text.
+
+    Carried through rather than recomputed: a blank that was not filled keeps
+    its place, and the ones after it move by however much the text grew.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class Suggestion:
     """A ranked suggestion, ready for an editor."""
 

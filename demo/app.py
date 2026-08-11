@@ -159,6 +159,8 @@ class SuggestRequest(BaseModel):
     caret: int = 0
     backend: str = 'postgres'
     limit: int = DEFAULT_LIMIT
+    pending: list[int] = Field(default_factory=list)
+    """Template blanks still outstanding, as the last insertion handed them back."""
 
 
 def _warm(key: str) -> None:
@@ -234,4 +236,14 @@ def suggest(payload: SuggestRequest) -> JSONResponse:
     catalog = _catalog(backend.key)
     cache = _caches.setdefault(backend.key, {})
 
-    return JSONResponse(respond(payload.sql, caret, backend.dialect, catalog, cache=cache, limit=payload.limit))
+    return JSONResponse(
+        respond(
+            payload.sql,
+            caret,
+            backend.dialect,
+            catalog,
+            cache=cache,
+            limit=payload.limit,
+            pending=tuple(payload.pending),
+        ),
+    )

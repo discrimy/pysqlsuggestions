@@ -10,13 +10,24 @@ unsupported-database path is in today.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.engine.local import local_candidates
 from pysqlsuggestions.engine.rank import rank
 from pysqlsuggestions.engine.request import derive_request
 from pysqlsuggestions.ports import Cache, Catalog
 from pysqlsuggestions.resolve import resolve
-from pysqlsuggestions.types import Candidate, Column, Function, Kind, Request, Suggestion, Table
+from pysqlsuggestions.types import (
+    Candidate,
+    Column,
+    Function,
+    Insertion,
+    Kind,
+    Request,
+    Suggestion,
+    Table,
+)
 
 DEFAULT_LIMIT = 40
 
@@ -92,41 +103,32 @@ def _candidates(
     return [*local, *(c for c in fetched if (c.kind, c.text) not in known)]
 
 
-def apply_suggestion(
+def plan_insertion(
     sql: str,
     suggestion: Suggestion,
     *,
+    pending: Sequence[int] = (),
     close_parens: bool = True,
-) -> tuple[str, int]:
+) -> Insertion:
     """
-    Insert `suggestion` into `sql`. Returns (new sql, new caret offset).
+    Turn `suggestion` into an edit an editor can apply without deciding anything.
 
-    Splicing at `suggestion.replace_span` rather than at a word boundary is what
-    keeps a qualifier in place: `where u.crea` accepting `created_at` gives
-    `where u.created_at`, not `where created_at`. Editors that re-derive the
-    span from their own idea of a word get that wrong, which is why the span
-    travels with the suggestion.
-
-    A function gets its parentheses closed, unless the author already typed an
-    opening one. The caret is parked between them only when the function takes
-    arguments: `now()` is finished on insertion and leaving the caret inside
-    would mean typing past a bracket that is already correct.
+    `pending` is the template blanks still outstanding, as the previous
+    insertion handed them back. A suggestion that fills the blank it was
+    offered for moves the caret to the next one; one that only half fills it —
+    a catalog where a relation belongs — keeps its place.
     """
     start, end = suggestion.replace_span
     text = _separated(sql, start, end, suggestion.text)
     tail = sql[end:]
     caret: int | None = None
 
-    # A snippet says where to stop; the first is where insertion leaves you, and
-    # a front end that can cycle the rest reads them off `Suggestion.stops`.
-    if suggestion.stops:
-        return sql[:start] + text + tail, start + suggestion.stops[0]
-
     if suggestion.kind is Kind.FUNCTION and close_parens and not tail.lstrip().startswith('('):
         text += '()'
         if suggestion.takes_arguments:
             caret = start + len(text) - 1
 
+    finished = True
     if suggestion.kind is Kind.SCHEMA:
         # A schema is never the end of a relation reference — something follows
         # it, and the dot is the only thing it can be. Leaving the caret on the
@@ -136,12 +138,48 @@ def apply_suggestion(
         #
         # Where the dot is already written the caret steps over it instead, so
         # either way the next level is what comes next.
+        finished = False
         if tail.startswith('.'):
             caret = start + len(text) + 1
         else:
             text += '.'
 
-    return sql[:start] + text + tail, caret if caret is not None else start + len(text)
+    default = start + len(text)
+    if suggestion.stops:
+        # A template opens its own blanks, relative to where it was spliced.
+        opened = tuple(start + offset for offset in suggestion.stops)
+        return Insertion(span=(start, end), text=text, caret=opened[0], pending=opened[1:])
+
+    moved = tuple(p + len(text) - (end - start) if p >= end else p for p in pending)
+    if moved and finished:
+        # Accepting *is* filling that blank, so the caret goes to the next one.
+        return Insertion(span=(start, end), text=text, caret=moved[0], pending=moved[1:])
+    return Insertion(span=(start, end), text=text, caret=caret if caret is not None else default, pending=moved)
+
+
+def apply_suggestion(
+    sql: str,
+    suggestion: Suggestion,
+    *,
+    close_parens: bool = True,
+) -> tuple[str, int]:
+    """
+    Insert `suggestion` into `sql`. Returns (new sql, new caret offset).
+
+    The convenience form of `plan_insertion` for callers holding the whole
+    statement. An editor should prefer the plan: it carries the span to splice
+    and the template blanks still outstanding, neither of which survives being
+    reduced to a finished string.
+
+    Splicing at `suggestion.replace_span` rather than at a word boundary is what
+    keeps a qualifier in place: `where u.crea` accepting `created_at` gives
+    `where u.created_at`, not `where created_at`. Editors that re-derive the
+    span from their own idea of a word get that wrong, which is why the span
+    travels with the suggestion.
+    """
+    plan = plan_insertion(sql, suggestion, close_parens=close_parens)
+    start, end = plan.span
+    return sql[:start] + plan.text + sql[end:], plan.caret
 
 
 def _separated(sql: str, start: int, end: int, text: str) -> str:
@@ -162,4 +200,4 @@ def _separated(sql: str, start: int, end: int, text: str) -> str:
     return f' {text}' if merges else text
 
 
-__all__ = ['DEFAULT_LIMIT', 'apply_suggestion', 'complete', 'derive_request']
+__all__ = ['DEFAULT_LIMIT', 'apply_suggestion', 'complete', 'derive_request', 'plan_insertion']
