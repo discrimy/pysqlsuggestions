@@ -65,10 +65,6 @@ this harness cannot judge them and says so rather than guessing.
 
 KNOWN = frozenset(
     {
-        # Clauses of one statement form offered in another: GROUP BY, HAVING,
-        # WINDOW and the set operators after a finished UPDATE or DELETE.
-        'UPDATE orders SET total = 1 WHERE id = 2',
-        'DELETE FROM orders WHERE id = 1',
         # A word offered where its own clause has no room for it. LATERAL precedes
         # the relation rather than following it; DISTINCT may only follow SELECT
         # itself; `*` takes no alias; OFFSET and FETCH need a count first.

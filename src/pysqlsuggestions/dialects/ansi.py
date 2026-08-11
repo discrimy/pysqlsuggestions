@@ -61,6 +61,15 @@ def _onwards(name: str) -> tuple[str, ...]:
 
 _AFTER_RELATION = ('AS', *_JOINS, *_onwards('WHERE'))
 
+_QUERY = frozenset({'SELECT'})
+"""
+The statement form that has a result set to shape.
+
+GROUP BY, ORDER BY, LIMIT and the rest belong to a query and to nothing else.
+An UPDATE or a DELETE has no result to group or order, and every one of these
+offered after a finished one wrote SQL the server refuses.
+"""
+
 CLAUSES = ClauseModel(
     clauses=(
         Clause(name='WITH', suggests=()),
@@ -126,31 +135,39 @@ CLAUSES = ClauseModel(
             after_operand=_CONTINUES_PREDICATE,
             followed_by=('AND', 'OR', *_onwards('GROUP BY')),
         ),
+        # Everything from here to FETCH shapes a result set, which only a query
+        # has. Offering them after `UPDATE t SET x = 1 WHERE id = 2 ` writes SQL
+        # no server accepts — and `statements` is read against the form of the
+        # statement the caret is in, so a SELECT nested inside an INSERT or a
+        # CTE still gets them.
         Clause(
             name='GROUP BY',
             follows=frozenset({'FROM', 'WHERE'}),
+            statements=_QUERY,
             suggests=COLUMN_EXPRESSION,
             followed_by=_onwards('HAVING'),
         ),
         Clause(
             name='HAVING',
             follows=frozenset({'GROUP BY'}),
+            statements=_QUERY,
             suggests=COLUMN_EXPRESSION,
             operators=_COMPARISON,
             after_operand=_CONTINUES_PREDICATE,
             followed_by=('AND', 'OR', *_onwards('WINDOW')),
         ),
-        Clause(name='WINDOW', suggests=COLUMN_EXPRESSION, followed_by=_onwards('UNION')),
+        Clause(name='WINDOW', statements=_QUERY, suggests=COLUMN_EXPRESSION, followed_by=_onwards('UNION')),
         Clause(
             name='ORDER BY',
+            statements=_QUERY,
             suggests=COLUMN_EXPRESSION,
             followed_by=('ASC', 'DESC', 'NULLS FIRST', 'NULLS LAST', *_onwards('LIMIT')),
         ),
         # A window spec, not a statement: what follows is the frame, never LIMIT.
         Clause(name='PARTITION BY', suggests=COLUMN_EXPRESSION, followed_by=('ORDER BY', 'ROWS', 'RANGE')),
-        Clause(name='LIMIT', suggests=(Kind.KEYWORD,), followed_by=_onwards('OFFSET')),
-        Clause(name='OFFSET', suggests=(Kind.KEYWORD,), followed_by=_onwards('FETCH')),
-        Clause(name='FETCH', suggests=(Kind.KEYWORD,)),
+        Clause(name='LIMIT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=_onwards('OFFSET')),
+        Clause(name='OFFSET', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=_onwards('FETCH')),
+        Clause(name='FETCH', statements=_QUERY, suggests=(Kind.KEYWORD,)),
         Clause(
             name='SET',
             follows=frozenset({'UPDATE'}),
@@ -160,9 +177,10 @@ CLAUSES = ClauseModel(
             operators=('=',),
         ),
         Clause(name='VALUES', statements=frozenset({'INSERT INTO'}), suggests=COLUMN_EXPRESSION),
-        Clause(name='UNION', suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
-        Clause(name='INTERSECT', suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
-        Clause(name='EXCEPT', suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
+        # A set operator combines two result sets, so it needs one to its left.
+        Clause(name='UNION', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
+        Clause(name='INTERSECT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
+        Clause(name='EXCEPT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
     ),
 )
 

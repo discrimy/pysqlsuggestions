@@ -165,3 +165,33 @@ def test_a_first_word_that_is_also_a_clause_still_opens_what_follows_it() -> Non
     """
     assert 'CONFLICT' not in texts('SELECT * FROM events e JOIN other o ON ⌶')
     assert 'e.id' in texts('SELECT * FROM events e JOIN other o ON ⌶')
+
+
+def test_a_clause_that_shapes_a_result_set_needs_a_result_set() -> None:
+    """
+    GROUP BY, ORDER BY, LIMIT and the set operators belong to a query.
+
+    A finished `UPDATE ... WHERE id = 2` was offered all of them, and an UPDATE
+    has no result to group or order — every one of them wrote SQL the server
+    refuses. RETURNING is the mirror image and was already declared, which is
+    how the omission stayed invisible: the mechanism worked, and these clauses
+    simply never said which statements they belong to.
+    """
+    updating = texts('UPDATE events SET name = 1 WHERE id = 2 ⌶')
+    assert updating == ['AND', 'OR', 'RETURNING']
+    assert texts('DELETE FROM events WHERE id = 1 ⌶') == ['AND', 'OR', 'RETURNING']
+
+    querying = texts('SELECT * FROM events WHERE id = 1 ⌶')
+    assert {'GROUP BY', 'ORDER BY', 'UNION'} <= set(querying)
+
+
+def test_a_query_inside_a_statement_of_another_form_keeps_its_own_clauses() -> None:
+    """
+    The form is read at the caret, not at the head of the text.
+
+    `INSERT INTO t SELECT ...` is a query from the SELECT onward, and filtering
+    its clauses by the statement's first word would leave the commonest way of
+    writing an INSERT unable to group or order anything.
+    """
+    assert 'GROUP BY' in texts('INSERT INTO events SELECT * FROM events WHERE id = 1 ⌶')
+    assert 'ORDER BY' in texts('UPDATE events SET name = (SELECT name FROM events WHERE id = 1 ⌶')
