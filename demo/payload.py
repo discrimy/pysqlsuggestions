@@ -93,6 +93,7 @@ def _suggestion(suggestion: Suggestion, sql: str, dialect: Dialect, pending: Seq
         'text': suggestion.text,
         'kind': suggestion.kind.value,
         'detail': suggestion.detail,
+        'note': suggestion.note,
         'score': suggestion.score,
         'replace_span': list(suggestion.replace_span),
         'takes_arguments': suggestion.takes_arguments,

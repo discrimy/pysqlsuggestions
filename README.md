@@ -10,9 +10,9 @@ fallback so an unknown backend degrades instead of failing.
 ## Status
 
 The whole pipeline works end to end against real servers: lex, analyse, request,
-resolve, rank. Value hints landed since; still to come are physical layout
-ranking, FK-derived joins and history ranking, plus per-role availability and
-the syntax extensions.
+resolve, rank. Value hints and FK-derived joins landed since; still to come are
+physical layout ranking and history ranking, plus per-role availability and the
+syntax extensions.
 
 ## Usage
 
@@ -148,6 +148,39 @@ to qualify with, an unaliased derived table, stays bare too.
 
 Matching is unaffected: it runs against the column name, so `usern` still finds
 `u.username`.
+
+## Joins
+
+Type `JOIN` and the whole clause comes back — relation, alias and condition in
+one accept — from the foreign keys the database already declares:
+
+```
+SELECT * FROM booking b JOIN ⌶
+
+  flight f ON b.flight_id = f.id              fk: flight.id
+  passenger p ON b.passenger_id = p.id        fk: passenger.id
+  baggage bag ON b.id = bag.booking_id        fk: baggage.booking_id
+  revenue.refund r ON b.id = r.booking_id     fk: refund.booking_id
+```
+
+At `ON ⌶` the whole condition arrives the same way, and once a qualifier has
+committed the left side — `ON b.⌶` — it degrades to ranking that relation's
+foreign key columns up, since a condition is no longer expressible there.
+
+A constraint is directed and a join is not, so proposals fire from both ends: a
+query starting at `airline` is offered the tables that reference *it*.
+Many-to-one ranks above one-to-many, being both more often wanted and unable to
+multiply the result set. Two constraints to the same target stay two proposals
+with different aliases, because choosing between them is the user's to make.
+
+**Postgres only, and deliberately.** ClickHouse and Trino declare no
+constraints, so both positions there behave exactly as they always have. The
+tempting fallback — matching `<singular>_id` against `<table>.id` — is rejected
+rather than unbuilt: it is right often enough to be inviting and wrong often
+enough to matter, and a wrong join condition is valid SQL that silently returns
+the wrong rows. No parser catches that, and neither does the person reading the
+result. Observed joins mined from query history would be a real answer here; an
+inferred one is not.
 
 ## Browser demo
 

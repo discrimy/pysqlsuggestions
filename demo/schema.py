@@ -10,13 +10,14 @@ step that could be pointed at a database by mistake.
 Shaped to exercise the engine rather than to be realistic: enums and booleans so
 values come from the type, columns with skewed frequencies so they come from
 statistics, relations three orders of magnitude apart in size, two schemas for
-the namespace, a view, and joins that are obvious from the column names.
+the namespace, a view, and declared foreign keys — including two from one
+relation to the same target, and two that cross a schema boundary.
 """
 
 from __future__ import annotations
 
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
-from pysqlsuggestions.types import ColumnValue, Function
+from pysqlsuggestions.types import ColumnValue, ForeignKey, Function
 
 _STATUS = "Enum8('scheduled' = 1, 'boarding' = 2, 'departed' = 3, 'landed' = 4, 'cancelled' = 5)"
 
@@ -283,6 +284,43 @@ FUNCTIONS = tuple(
 )
 
 
+def _fk(table: str, column: str, ref_table: str, ref_column: str, *, schema: str = 'public') -> ForeignKey:
+    """One single-column edge, which is every edge this schema has."""
+    return ForeignKey(
+        schema=schema,
+        table=table,
+        columns=(column,),
+        ref_schema='public',
+        ref_table=ref_table,
+        ref_columns=(ref_column,),
+    )
+
+
+POSTGRES_FOREIGN_KEYS = (
+    _fk('aircraft', 'airline_id', 'airline', 'id'),
+    _fk('flight', 'airline_id', 'airline', 'id'),
+    _fk('flight', 'aircraft_id', 'aircraft', 'id'),
+    # Two edges from one relation to one target, so the page shows what a single
+    # guess would get wrong half the time: a flight leaves one airport and lands
+    # at another, and both proposals are real answers.
+    _fk('flight', 'origin', 'airport', 'code'),
+    _fk('flight', 'destination', 'airport', 'code'),
+    _fk('booking', 'passenger_id', 'passenger', 'id'),
+    _fk('booking', 'flight_id', 'flight', 'id'),
+    _fk('baggage', 'booking_id', 'booking', 'id'),
+    # Across a schema boundary, so the proposal has to qualify its target.
+    _fk('invoice', 'airline_id', 'airline', 'id', schema='revenue'),
+    _fk('refund', 'booking_id', 'booking', 'id', schema='revenue'),
+)
+"""
+Only Postgres declares these, because only Postgres has them.
+
+ClickHouse and Trino keep no constraints, so the demo must offer no join
+proposals there — a page that showed the feature working on all three would be
+advertising something the real backends cannot do.
+"""
+
+
 def postgres() -> MemoryCatalog:
     """The flight-booking schema as Postgres would report it."""
     return MemoryCatalog(
@@ -291,6 +329,7 @@ def postgres() -> MemoryCatalog:
         table_kinds={('revenue', 'DailyTotals'): 'materialized view'},
         table_rows=POSTGRES_ROWS,
         values=POSTGRES_VALUES,
+        foreign_keys=POSTGRES_FOREIGN_KEYS,
     )
 
 
