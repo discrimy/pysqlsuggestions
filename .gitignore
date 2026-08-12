@@ -28,3 +28,9 @@ editors/vscode/out/
 editors/vscode/bundled/
 editors/vscode/*.vsix
 editors/vscode/.vscode-test/
+
+# Atomic-write scratch copies. An editor writing `foo.py` may leave a
+# `foo.py.tmp.<pid>.<hash>` beside it, and one of these was committed once —
+# invisible to ruff, mypy and pytest, because none of them looks at a file that
+# does not end in `.py`.
+*.py.tmp.*
