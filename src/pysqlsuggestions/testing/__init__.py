@@ -28,11 +28,22 @@ from dataclasses import dataclass
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.types import Function, Kind
 
 __all__ = ['Case', 'DialectConformance']
 
 USERS = (('id', 'integer'), ('email', 'varchar'), ('is_staff', 'boolean'))
 ORDERS = (('id', 'integer'), ('user_id', 'integer'), ('total', 'numeric'))
+
+SEQUENCE = 'orders_id_seq'
+"""
+A sequence in the fixture, so every dialect is asked to keep one out of a
+relation position — including the dialects that have no sequences at all. A
+proposition that only applied to backends with the feature could not catch the
+dialect that grows it next.
+"""
+PROCEDURE = 'recalculate_totals'
+"""A callable that may only be invoked, never evaluated."""
 
 SCHEMA = 'shop'
 OTHER = 'vault'
@@ -84,15 +95,34 @@ class DialectConformance:
         `OTHER` sits outside the search path on purpose: a relation the bare
         position cannot see is the only way a case can tell a dialect that
         searches from one that merely lists.
+
+        A sequence and a procedure are always present, whether or not the
+        dialect has either. Both exist to be *excluded* from the ordinary
+        positions, and a fixture that only held them for backends with the
+        feature could not make that proposition at all.
         """
         snapshot = {
             (SCHEMA, 'users'): list(USERS),
             (SCHEMA, 'orders'): list(ORDERS),
             (OTHER, 'archived_orders'): list(ORDERS),
+            (SCHEMA, SEQUENCE): [('last_value', 'bigint')],
         }
+        kinds = {(SCHEMA, SEQUENCE): 'sequence'}
+        # `order_count` rather than `total`: the fixture already has a column
+        # called `total`, and a forbid clause that could be satisfied by the
+        # wrong thing proves nothing.
+        functions = (
+            Function(schema=SCHEMA, name=PROCEDURE, args='', result=None, kind='procedure'),
+            Function(schema=SCHEMA, name='order_count', args='', result='integer'),
+        )
         if len(dialect.namespace.levels) >= 3:  # noqa: PLR2004
-            return MemoryCatalog(snapshot, catalogs={CATALOG: [SCHEMA, OTHER]})
-        return MemoryCatalog(snapshot, search_path=(SCHEMA,))
+            return MemoryCatalog(
+                snapshot,
+                table_kinds=kinds,
+                functions=functions,
+                catalogs={CATALOG: [SCHEMA, OTHER]},
+            )
+        return MemoryCatalog(snapshot, table_kinds=kinds, functions=functions, search_path=(SCHEMA,))
 
     @staticmethod
     def reference(dialect: Dialect, table: str) -> str:
@@ -161,6 +191,11 @@ class DialectConformance:
                 expect=(CATALOG if len(levels) >= 3 else SCHEMA,),  # noqa: PLR2004
             ),
             Case(
+                name='a relation position never offers a sequence',
+                sql='SELECT * FROM ',
+                forbid=(SEQUENCE,),
+            ),
+            Case(
                 name='a join position offers what a relation position offers',
                 sql=f'SELECT * FROM {users} AS u JOIN ',
                 expect=(CATALOG if len(levels) >= 3 else SCHEMA,),  # noqa: PLR2004
@@ -187,6 +222,34 @@ class DialectConformance:
                     name='a prefix reaches a relation outside the search path',
                     sql='SELECT * FROM archiv',
                     expect=('archived_orders',),
+                ),
+            )
+        declared = next(iter(dialect.literal_arguments), None)
+        if declared is not None:
+            cases.append(
+                Case(
+                    # A prefix, and one that matches a relation as well as the
+                    # sequence. A three-level fixture has no default namespace
+                    # at all — `tables(None)` is empty there, as it is against a
+                    # real Trino — so an empty prefix could only ever be
+                    # answered by a two-level dialect. `orders` also makes the
+                    # forbid live: it is a relation this position must not offer.
+                    name='a literal argument offers what the dialect says it names',
+                    sql=f"SELECT {declared.function}('orders",
+                    expect=(SEQUENCE,),
+                    forbid=('orders',),
+                ),
+            )
+        # Found by what the clause suggests rather than by the name `CALL`, so a
+        # dialect spelling its call statement differently is still covered.
+        calls = next((c.name for c in dialect.clauses.clauses if Kind.PROCEDURE in c.suggests), None)
+        if calls is not None:
+            cases.append(
+                Case(
+                    name='a procedure position offers procedures and not functions',
+                    sql=f'{calls} ',
+                    expect=(PROCEDURE,),
+                    forbid=('order_count',),
                 ),
             )
         # A dotted path narrows one level per segment, however many there are.
@@ -248,6 +311,15 @@ class DialectConformance:
                     f'so it can never end and is never lexed',
                 )
 
+        for declared in dialect.literal_arguments:
+            if len(declared.function.split()) != 1 or not declared.function.isidentifier():
+                problems.append(
+                    f'literal argument {declared.function!r} is not a single word, '
+                    f'so it can never equal the name of an enclosing call',
+                )
+            if not declared.suggests:
+                problems.append(f'literal argument {declared.function!r} suggests nothing, so it can never answer')
+
         return [f'{dialect.name}: {problem}' for problem in problems]
 
     @staticmethod
@@ -263,7 +335,10 @@ class DialectConformance:
         failures: list[str] = DialectConformance.structure(dialect)
         for case in DialectConformance.cases(dialect):
             found = [s.text for s in complete(case.sql, len(case.sql), dialect, catalog, limit=limit)]
-            plain = {text.rsplit('.', 1)[-1] for text in found}
+            # A name written into a string literal — a sequence inside
+            # `nextval('…')` — is still that name, and every proposition here is
+            # about the name. The quotes belong to the position, not the answer.
+            plain = {text.rsplit('.', 1)[-1].strip('\'"') for text in found}
             missing = [want for want in case.expect if want not in plain]
             present = [deny for deny in case.forbid if deny in plain]
             if missing or present:
