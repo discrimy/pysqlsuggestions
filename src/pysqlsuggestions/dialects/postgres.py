@@ -6,7 +6,15 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
+from pysqlsuggestions.dialects.base import (
+    CatalogQueries,
+    Clause,
+    LiteralArgument,
+    Namespace,
+    Placeholder,
+    Query,
+    Syntax,
+)
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
 
 _PROKIND = {'f': 'function', 'a': 'aggregate', 'w': 'window', 'p': 'procedure'}
@@ -342,5 +350,14 @@ POSTGRES = replace(
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,
     types=TYPES,
+    # The three calls that name a sequence in a string. Their argument is a
+    # `regclass`, which the server will accept for any relation — so the fact
+    # that only a sequence is *valid* here is knowledge about these functions
+    # rather than about their signature, which is why it is written down.
+    literal_arguments=(
+        LiteralArgument(function='nextval', suggests=(Kind.SEQUENCE,)),
+        LiteralArgument(function='currval', suggests=(Kind.SEQUENCE,)),
+        LiteralArgument(function='setval', suggests=(Kind.SEQUENCE,)),
+    ),
     catalog_queries=QUERIES,
 )

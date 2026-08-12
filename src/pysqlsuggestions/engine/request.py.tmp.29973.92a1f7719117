@@ -141,69 +141,29 @@ def _inside_a_literal(
     clause: str | None,
     scope: Scope | None,
     comparand: tuple[str, ...],
-    dialect: Dialect,
 ) -> Request:
     """
     What a caret inside a literal or a comment admits.
 
-    Nothing, except in the two places a literal is being written as something
-    other than free text. A declared call names an object in its first argument
-    — `nextval('<caret>` is asking which sequences exist — and a comparison's
-    right-hand side is asking which values that column holds. Going silent the
-    moment the opening quote is typed makes either feature look broken.
-
-    The declared call is read first. It is the narrower fact: it depends on the
-    identity of the enclosing function rather than on what the position usually
-    admits, and a call written inside a comparison is still a call.
-
-    The span covers the literal in both cases, so the answer replaces it rather
-    than nesting inside it.
+    Nothing, except in the one place a literal is being written *as* a value:
+    `WHERE type = 'clic<caret>` is asking which values that column holds, and
+    going silent the moment the opening quote is typed makes the feature look
+    broken. The span covers the literal, so the answer replaces it rather than
+    nesting inside it.
     """
     written = string_under(tokens, caret)
-    if written is None:
+    if written is None or not comparand:
         return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
     quote = written.text[0]
     typed = written.text[1 : caret - written.start]
-    prefix = typed.replace(quote * 2, quote)
-    span = (written.start, written.end if written.terminated else caret)
-
-    named = _literal_argument_kinds(tokens, caret, dialect)
-    if named:
-        return Request(
-            kinds=named,
-            prefix=prefix,
-            replace_span=span,
-            clause=clause,
-            scope=scope,
-            writes_a_literal=True,
-        )
-    if not comparand:
-        return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
     return Request(
         kinds=(Kind.VALUE,),
-        prefix=prefix,
-        replace_span=span,
+        prefix=typed.replace(quote * 2, quote),
+        replace_span=(written.start, written.end if written.terminated else caret),
         clause=clause,
         scope=scope,
         comparand=comparand,
-        writes_a_literal=True,
     )
-
-
-def _literal_argument_kinds(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple[Kind, ...]:
-    """
-    What the dialect says this call's first argument names, if it says anything.
-
-    Matched case-insensitively, because `NEXTVAL('x')` and `nextval('x')` are the
-    same call and a dialect should not have to spell both.
-    """
-    called = literal_argument_call(tokens, caret)
-    if called is None:
-        return ()
-    for declared in dialect.literal_arguments:
-        if declared.function.upper() == called:
-            return declared.suggests
-    return ()
 
 
 def _expecting(

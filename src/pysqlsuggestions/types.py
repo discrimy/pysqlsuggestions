@@ -348,6 +348,14 @@ class Request:
     Without it `u.*` expanded bare — and since the span covers the qualifier
     too, the `u.` the author wrote was deleted rather than repeated.
     """
+    writes_a_literal: bool = False
+    """
+    Whether the span replaces a string literal, so an answer needs quoting into one.
+
+    `nextval('<caret>` and `DROP SEQUENCE <caret>` both want sequences and write
+    them differently — one inside quotes, one bare — and the kind cannot say
+    which, because it is the same kind. Only the position knows.
+    """
 
 
 @dataclass(frozen=True, slots=True)

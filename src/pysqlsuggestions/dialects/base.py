@@ -54,6 +54,26 @@ whose SQL is templated composes it in, which is how a dialect is extended here:
 
 
 @dataclass(frozen=True, slots=True)
+class LiteralArgument:
+    """
+    A call whose first argument is a name written inside a string literal.
+
+    `nextval('users_id_seq')` names a relation in a place the grammar calls a
+    string, so nothing about the syntax marks it — only the identity of the
+    function does, which makes it dialect data.
+
+    Deliberately not inferred from the declared argument type. `nextval` takes a
+    `regclass`, and reading that would offer every relation in the database
+    where only a sequence is valid: a wrong answer replacing a missing one.
+    """
+
+    function: str
+    """The bare function name, matched case-insensitively."""
+    suggests: tuple[Kind, ...]
+    """What the first argument names. Most relevant first."""
+
+
+@dataclass(frozen=True, slots=True)
 class Syntax:
     """Everything the lexer needs. No other stage reads this record."""
 
@@ -423,6 +443,13 @@ class Dialect:
     Static here, so a cast position still answers with no connection at all. A
     backend that can introspect its types should prefer that, since a user's own
     composite and enum types belong in this list too.
+    """
+    literal_arguments: tuple[LiteralArgument, ...] = ()
+    """
+    Calls whose first argument is a name in a literal. Empty for most dialects.
+
+    Empty means a caret inside a string admits nothing but the values a compared
+    column holds, which is what every position did before this existed.
     """
     catalog_queries: CatalogQueries = field(default_factory=CatalogQueries)
 

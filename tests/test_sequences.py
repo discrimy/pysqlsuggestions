@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
-from pysqlsuggestions.types import Table
+from pysqlsuggestions.engine.request import derive_request
+from pysqlsuggestions.types import Kind, Request, Table
 
 SNAPSHOT = {
     ('public', 'auth_user'): [('id', 'bigint'), ('email', 'varchar')],
@@ -113,3 +115,50 @@ def test_both_clauses_can_start_a_statement() -> None:
     assert 'DROP SEQUENCE' in POSTGRES.statement_start
     assert 'ALTER SEQUENCE' in POSTGRES.statement_start
     assert 'DROP SEQUENCE' not in TRINO.statement_start
+
+
+def request(sql: str) -> Request:
+    """The request at the end of `sql`."""
+    return derive_request(sql, len(sql), POSTGRES)
+
+
+def test_a_literal_naming_a_sequence_is_a_position() -> None:
+    """`nextval` takes a regclass, and the dialect is where that fact lives."""
+    found = request("SELECT nextval('")
+    assert found.kinds == (Kind.SEQUENCE,)
+    assert found.writes_a_literal is True
+
+
+def test_what_is_typed_inside_the_literal_is_the_prefix() -> None:
+    """The quote is not part of what the user is hunting for."""
+    assert request("SELECT nextval('aut").prefix == 'aut'
+
+
+def test_the_span_covers_the_whole_literal() -> None:
+    """The answer replaces the literal rather than nesting a second one inside it."""
+    sql = "SELECT nextval('aut"
+    assert request(sql).replace_span == (15, len(sql))
+
+
+def test_a_later_argument_is_not_the_position() -> None:
+    """
+    `setval('seq', 1)` names its sequence first. What the first argument names
+    says nothing about the second, so a caret past a comma keeps its silence.
+    """
+    assert request("SELECT setval('s', '").kinds == ()
+
+
+def test_an_undeclared_function_is_not_the_position() -> None:
+    """A literal inside `lower('…')` is a string, and offering a relation there is nonsense."""
+    assert request("SELECT lower('").kinds == ()
+
+
+def test_a_dialect_declaring_none_has_no_such_position() -> None:
+    """ANSI has no nextval, so the same SQL is an ordinary literal there."""
+    assert derive_request("SELECT nextval('", 16, ANSI).kinds == ()
+
+
+def test_a_comparison_literal_still_offers_values() -> None:
+    """The older reading of a caret inside a literal is untouched by the new one."""
+    found = derive_request("SELECT * FROM auth_user WHERE email = 'a", 40, POSTGRES)
+    assert found.kinds == (Kind.VALUE,)
