@@ -8,6 +8,8 @@ reused. An editor session that opened a file must not have opened a socket.
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
@@ -138,3 +140,37 @@ def test_every_declared_driver_names_a_paramstyle_dbapi_accepts() -> None:
     """`render` raises on anything else, from inside a catalog read."""
     for dialect, (module, paramstyle) in DRIVERS.items():
         assert paramstyle in PARAMSTYLES, f'{dialect} ({module}) declares {paramstyle!r}'
+
+
+def test_one_connection_is_opened_when_queries_arrive_together() -> None:
+    """
+    `open_cursor` checks whether it has connected and then connects — so two
+    callers arriving together both connect, and only the first is ever used
+    again. The second is leaked: never closed, still holding a session.
+
+    Driven through the catalog rather than through a `Session`, because the
+    fault is in this closure and would otherwise be masked by the server's own
+    lock.
+    """
+    opened: list[FakeConnection] = []
+    ready = threading.Barrier(8)
+
+    def connect(profile: Profile) -> FakeConnection:
+        time.sleep(0.05)
+        connection = FakeConnection()
+        opened.append(connection)
+        return connection
+
+    catalog = open_catalog(Profile(dialect='postgres', host='db'), connect=connect)
+    assert catalog is not None
+
+    def read() -> None:
+        ready.wait()
+        catalog.schemas()
+
+    threads = [threading.Thread(target=read) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(opened) == 1

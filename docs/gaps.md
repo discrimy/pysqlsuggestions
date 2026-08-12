@@ -134,9 +134,15 @@ paragraph, repeated here so the whole list lives in one place:
   to decide where the caret lands.
 - **Syntax extensions and the report macro**, both still exactly where the
   design left them.
-- **Async.** Every catalog call is synchronous. An LSP server that blocks its
-  event loop on a slow introspection query is a real cost now that `lsp/`
-  exists.
+- **Async.** Every catalog call is synchronous, and that is a decision rather
+  than a gap — the port is documented, and the bridge for async callers is to
+  pre-fetch into a `MemoryCatalog`.
+
+  This entry used to say that a synchronous call "blocks its event loop on a
+  slow introspection query", and named async as the fix. The blocking was real
+  and the fix was wrong: pygls dispatches a thread-marked handler to a pool, and
+  the completion handler simply was not marked. It is now, and the state that
+  concurrency exposed is locked. Nothing here became asynchronous.
 
 ## Not gaps
 
