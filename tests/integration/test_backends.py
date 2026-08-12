@@ -161,6 +161,26 @@ def test_postgres_writes_a_sequence_literal_the_server_accepts(postgres_catalog:
         cursor.execute(f'EXPLAIN {written}')
 
 
+def test_postgres_plans_a_reference_to_one_of_two_same_named_relations(
+    postgres_catalog: DbapiCatalog,
+) -> None:
+    """
+    The whole slice, end to end. `SELECT invoices.amount FROM public.invoices,
+    billing.invoices` is refused with `table reference "invoices" is ambiguous`,
+    and that is what the engine used to write.
+
+    The acceptance sweep cannot catch this — it reports syntax errors only, and
+    an ambiguous reference is semantic — so this is the guard.
+    """
+    psycopg2 = pytest.importorskip('psycopg2')
+    sql = 'SELECT amou FROM public.invoices, billing.invoices'
+    found = [s for s in complete(sql, 11, POSTGRES, postgres_catalog) if s.text.endswith('.amount')]
+    assert {s.text for s in found} == {'public.invoices.amount', 'billing.invoices.amount'}
+    with psycopg2.connect(POSTGRES_DSN) as connection, connection.cursor() as cursor:
+        for suggestion in found:
+            cursor.execute(f'EXPLAIN {apply_suggestion(sql, suggestion, dialect=POSTGRES)[0]}')
+
+
 def test_postgres_reaches_a_relation_off_the_search_path(postgres_catalog: DbapiCatalog) -> None:
     """
     `billing` is not on the fixture's search path, so `FROM invo` used to find nothing.

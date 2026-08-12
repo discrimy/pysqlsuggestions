@@ -204,6 +204,16 @@ CREATE TABLE billing."MonthlyTotals" (
     "Amount" numeric(12, 2) NOT NULL
 );
 
+-- A relation named like one in `billing`, so a statement can put both in scope.
+-- Postgres allows that — it aliases the second internally — and then refuses
+-- every bare reference to either, which is the one case where this engine used
+-- to write SQL that does not run.
+CREATE TABLE public.invoices (
+    id      bigserial PRIMARY KEY,
+    amount  numeric(12, 2) NOT NULL DEFAULT 0,
+    period  date
+);
+
 CREATE VIEW public.reports_active AS
 SELECT r.id, r.name, r.database_id, r.executions
 FROM reports_report r
