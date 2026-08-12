@@ -56,6 +56,37 @@ the engines a ClickHouse installation has, and one that tried would empty its
 FROM clause.
 """
 
+_NOT_QUERYABLE = frozenset({_SEQUENCE})
+"""
+Relation kinds that live in the catalog and cannot be read from.
+
+Still a negative test, for the reason the single-kind version was: `Table.kind`
+is the storage engine name on ClickHouse — `mergetree`, `replacingmergetree` —
+so no positive list of ours could enumerate what a given installation has, and
+one that tried would empty its FROM clause.
+"""
+
+
+def _admits(table: Table, wanted: tuple[str, ...]) -> bool:
+    """
+    Whether this relation belongs where `wanted` kinds are admitted.
+
+    Empty `wanted` is the default relation position: anything queryable. A
+    clause that names kinds gets exactly those and does not consult the
+    exclusion at all — `DROP INDEX` wants precisely what the exclusion exists
+    to hide.
+    """
+    if wanted:
+        return table.kind in wanted
+    return table.kind not in _NOT_QUERYABLE
+
+
+def _relation_kinds(request: Request, dialect: Dialect) -> tuple[str, ...]:
+    """The kinds the governing clause admits, or none — which means the default."""
+    clause = dialect.clauses.get(request.clause) if request.clause else None
+    return clause.relation_kinds if clause else ()
+
+
 _T = TypeVar('_T')
 
 
@@ -288,7 +319,9 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         candidates += [_column_candidate(column) for column in reader.columns(None, request.qualifier[-1])]
     if Kind.TABLE in request.kinds:
         candidates += [
-            _table_candidate(table) for table in reader.tables(request.qualifier[-1]) if table.kind != _SEQUENCE
+            _table_candidate(table)
+            for table in reader.tables(request.qualifier[-1])
+            if _admits(table, _relation_kinds(request, dialect))
         ]
     if Kind.SCHEMA in request.kinds:
         # The qualifier is the level above: `prod.<caret>` lists prod's schemas.
@@ -415,7 +448,8 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             candidates += _loose_columns(request, reader, limit)
 
     if Kind.TABLE in request.kinds:
-        listed = [table for table in reader.tables(None) if table.kind != _SEQUENCE]
+        wanted = _relation_kinds(request, dialect)
+        listed = [table for table in reader.tables(None) if _admits(table, wanted)]
         candidates += [_table_candidate(table) for table in listed]
         # A relation in the default namespace comes back from both calls, and
         # the two render differently — `invoices` and `public.invoices` — so
@@ -424,7 +458,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         candidates += [
             _table_candidate(table, qualify=(table.schema,))
             for table in reader.search_relations(request.prefix, limit)
-            if table.kind != _SEQUENCE and (table.schema, table.name) not in here
+            if _admits(table, wanted) and (table.schema, table.name) not in here
         ]
         candidates += [
             Candidate(text=name, kind=Kind.CTE, detail='cte', origin='local') for name in (scope.ctes if scope else {})

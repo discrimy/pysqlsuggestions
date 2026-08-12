@@ -210,6 +210,20 @@ class Clause:
     not after one. `followed_by` cannot serve both without offering `AS` inside
     the body and the body's words after a written name.
     """
+    relation_kinds: tuple[str, ...] = ()
+    """
+    Which `Table.kind` values this clause's relation position admits.
+
+    Empty means the default: every relation that can be queried. A clause
+    naming kinds gets exactly those — `DROP VIEW` takes a view, and the server
+    refuses it a table.
+
+    Positive rather than negative, and therefore local to a dialect that knows
+    its own vocabulary. `Table.kind` is whatever the backend reports: `table`
+    and `view` on Postgres and Trino, `mergetree` on ClickHouse. A clause naming
+    `table` in the shared baseline would empty that position on ClickHouse,
+    which is why `DROP TABLE` declares this in `postgres.py` and not here.
+    """
     aliases_with: str = ''
     """
     The word that gives this clause's relation an alias, where it takes one.
