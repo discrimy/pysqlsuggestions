@@ -208,10 +208,27 @@ CLAUSES = ClauseModel(
         # its form as EXPLAIN and lose every clause declaring
         # `statements={'SELECT'}`: GROUP BY, ORDER BY, LIMIT.
         Clause(name='EXPLAIN', suggests=(Kind.SNIPPET, Kind.KEYWORD), followed_by=EXPLAINABLE),
+        # DDL that names one relation. Each `followed_by` is load-bearing rather
+        # than decorative: `_clause_kinds` answers a written relation with
+        # keywords only when the clause has continuations, so an empty list
+        # leaves `DROP TABLE users ` offering a second relation, which cannot
+        # follow without a comma.
+        Clause(name='DROP TABLE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
+        Clause(name='TRUNCATE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
+        # Two words each, and neither head is a phrase of its own. A bare `DROP`
+        # here would make `('DROP',)` a phrase, and `_half_written_clauses`
+        # skips a head that is already a phrase — so `DROP ` would stop
+        # answering `TABLE`, for the same reason `ON ` does not answer
+        # `CONFLICT` alone. `ALTER` would collide with `ALTER TABLE` the same
+        # way.
+        #
+        # `DROP COLUMN` and `ALTER COLUMN` are the casualties, and they are the
+        # DDL-authoring territory this dialect deliberately stops short of.
+        Clause(name='ALTER TABLE', suggests=RELATION_REFERENCE, followed_by=('ADD COLUMN', 'RENAME TO')),
     ),
 )
 
-STATEMENT_START = EXPLAINABLE
+STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'TRUNCATE', 'ALTER TABLE')
 
 TYPES = (
     'varchar',

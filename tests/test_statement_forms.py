@@ -71,3 +71,64 @@ def test_postgres_offers_its_own_explain_modifiers() -> None:
     middle of a select list. Offered behind a prefix only, like DISTINCT.
     """
     assert 'ANALYZE' in offered('EXPLAIN ana')
+
+
+def test_drop_table_offers_relations() -> None:
+    """It offered `SELECT`, and accepting wrote `DROP TABLE SELECT`."""
+    found = offered('DROP TABLE ')
+    assert 'users' in found
+    assert 'orders' in found
+    assert 'SELECT' not in found
+
+
+def test_truncate_offers_relations() -> None:
+    """Postgres allows the bare form; the ANSI `TRUNCATE TABLE` spelling also works."""
+    assert 'users' in offered('TRUNCATE ')
+    assert 'users' in offered('TRUNCATE TABLE ')
+
+
+def test_alter_table_offers_relations() -> None:
+    """The relation comes first whatever the alteration turns out to be."""
+    assert 'users' in offered('ALTER TABLE ')
+
+
+def test_drop_offers_the_word_that_finishes_it() -> None:
+    """
+    Derived from the clause name by `_half_written_clauses`, the same way
+    `GROUP ⌶` offers `BY`. No entry of its own.
+    """
+    assert offered('DROP ') == ['TABLE']
+
+
+def test_a_written_relation_is_not_followed_by_another() -> None:
+    """
+    `DROP TABLE users orders` parses as nothing. The clause's `followed_by` is
+    what makes the position after a relation answer with keywords instead — a
+    clause with an empty one keeps offering relations.
+    """
+    found = offered('DROP TABLE users ')
+    assert 'CASCADE' in found
+    assert 'orders' not in found
+
+
+def test_the_ddl_forms_are_offered_where_a_statement_may_begin() -> None:
+    """An empty editor is exactly where `DROP TABLE` is a useful suggestion."""
+    found = offered('')
+    assert 'DROP TABLE' in found
+    assert 'TRUNCATE' in found
+    assert 'ALTER TABLE' in found
+
+
+def test_explain_does_not_offer_ddl() -> None:
+    """`EXPLAIN DROP TABLE users` is a syntax error, confirmed against the server."""
+    assert 'DROP TABLE' not in offered('EXPLAIN ')
+
+
+def test_a_ddl_statement_is_not_offered_query_clauses() -> None:
+    """
+    `Clause.statements` already refuses RETURNING after a SELECT's WHERE, and it
+    does the same here: a DROP has no result set to group or order.
+    """
+    found = offered('DROP TABLE users ')
+    assert 'GROUP BY' not in found
+    assert 'ORDER BY' not in found
