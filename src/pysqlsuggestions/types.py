@@ -22,6 +22,14 @@ class Kind(Enum):
     """A relation the statement defined itself. Distinct from TABLE so a UI can say so."""
     SCHEMA = 'schema'
     FUNCTION = 'function'
+    PROCEDURE = 'procedure'
+    """
+    A callable that a statement invokes rather than evaluates.
+
+    Distinct from FUNCTION because the two are not interchangeable in either
+    direction: `SELECT my_procedure()` is refused outright, and `CALL now()` is
+    too. A front end that colours by kind should say which one it found.
+    """
     ALIAS = 'alias'
     KEYWORD = 'keyword'
     OPERATOR = 'operator'

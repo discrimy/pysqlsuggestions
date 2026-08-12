@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pysqlsuggestions.api import complete
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Query
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
@@ -77,3 +79,39 @@ def test_the_detail_drops_the_arrow_when_there_is_no_result() -> None:
     assert unknown.detail == 'count()  aggregate'
     known = _function_candidate(Function(schema='pg_catalog', name='now', args='', result='timestamptz'))
     assert known.detail == 'now() -> timestamptz'
+
+
+PROCEDURES = (
+    Function(schema='public', name='archive_old_reports', args='IN cutoff date', result=None, kind='procedure'),
+    Function(schema='pg_catalog', name='count', args='"any"', result='bigint', kind='aggregate'),
+)
+
+
+def catalog() -> MemoryCatalog:
+    """A snapshot with one procedure and one aggregate, so both directions can be asserted."""
+    return MemoryCatalog({('public', 'auth_user'): [('id', 'bigint'), ('email', 'varchar')]}, functions=PROCEDURES)
+
+
+def offered(sql: str) -> list[str]:
+    """Suggestion texts at the end of `sql`."""
+    return [s.text for s in complete(sql, len(sql), POSTGRES, catalog())]
+
+
+def test_an_expression_position_does_not_offer_a_procedure() -> None:
+    """
+    Server-verified: `SELECT archive_old_reports(current_date)` is refused with
+    `… is a procedure. HINT: To call a procedure, use CALL.`
+
+    So this is not a missing answer being added — it is a wrong one being kept
+    out while the catalog starts reporting procedures at all.
+    """
+    found = offered('SELECT ')
+    assert 'count' in found
+    assert 'archive_old_reports' not in found
+
+
+def test_the_postgres_query_now_asks_for_procedures() -> None:
+    """The filter downstream is what makes widening this safe, so the two go together."""
+    query = POSTGRES.catalog_queries.functions
+    assert query is not None
+    assert "'p'" in query.sql

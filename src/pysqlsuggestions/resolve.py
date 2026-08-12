@@ -332,7 +332,10 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         candidates += [_schema_candidate(name) for name in reader.schemas()]
 
     if Kind.FUNCTION in request.kinds:
-        candidates += [_function_candidate(function) for function in reader.functions()]
+        # Procedures are excluded rather than merely unranked. A procedure in an
+        # expression is not a poor suggestion, it is one the server refuses:
+        # `SELECT archive_old_reports(…)` answers `… is a procedure`.
+        candidates += [_function_candidate(f) for f in reader.functions() if f.kind != 'procedure']
 
     if Kind.SNIPPET in request.kinds:
         candidates += [

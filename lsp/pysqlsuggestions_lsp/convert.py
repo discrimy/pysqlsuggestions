@@ -38,6 +38,7 @@ ITEM_KINDS: dict[Kind, CompletionItemKind] = {
     Kind.CTE: CompletionItemKind.Class,
     Kind.SCHEMA: CompletionItemKind.Module,
     Kind.FUNCTION: CompletionItemKind.Function,
+    Kind.PROCEDURE: CompletionItemKind.Method,
     Kind.ALIAS: CompletionItemKind.Variable,
     Kind.KEYWORD: CompletionItemKind.Keyword,
     Kind.OPERATOR: CompletionItemKind.Operator,
@@ -47,7 +48,14 @@ ITEM_KINDS: dict[Kind, CompletionItemKind] = {
     Kind.JOIN: CompletionItemKind.Snippet,
     Kind.EXPANSION: CompletionItemKind.Snippet,
 }
-"""Every Kind the engine can emit. A test fails if one is added and not mapped."""
+"""
+Every Kind the engine can emit. A test fails if one is added and not mapped.
+
+LSP has no procedure and no sequence, so those two are mapped for visual
+distinctness rather than for a natural fit: every closer name is taken by
+something the new kind would be confused with — `Class` is a table, `Function`
+is a function, `Value` is a literal.
+"""
 
 _SNIPPET_SPECIALS = str.maketrans({'\\': r'\\', '$': r'\$', '}': r'\}'})
 

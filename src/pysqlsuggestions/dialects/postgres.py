@@ -82,7 +82,7 @@ QUERIES = CatalogQueries(
             FROM pg_proc p
             JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE ($1 = '' AND n.nspname IN ('pg_catalog', 'public') OR n.nspname = $1)
-              AND p.prokind IN ('f', 'a', 'w')
+              AND p.prokind IN ('f', 'a', 'w', 'p')
               AND p.prorettype NOT IN (
                   'internal'::regtype, 'cstring'::regtype, 'trigger'::regtype,
                   'language_handler'::regtype, 'fdw_handler'::regtype,
