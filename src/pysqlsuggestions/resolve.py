@@ -17,7 +17,7 @@ from typing import TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
-from pysqlsuggestions.engine.rank import quote_if_needed
+from pysqlsuggestions.engine.rank import MAX_POSITION_PENALTY, quote_if_needed
 from pysqlsuggestions.ports import (
     Cache,
     Catalog,
@@ -296,6 +296,80 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     return candidates
 
 
+_OFF_SEARCH_PATH = MAX_POSITION_PENALTY
+"""
+How far to demote a column whose schema is not in the default namespace.
+
+Equal to the largest penalty `position` can express, so every in-path column
+outranks every out-of-path one — and deliberately not larger, because the
+penalty saturates there and a bigger number would say something the scoring
+cannot hear. A table with more than fifty columns can tie, which is a fair
+price for not inventing a second ranking signal.
+"""
+
+
+def _loose_columns(request: Request, reader: _Reader, limit: int) -> list[Candidate]:
+    """
+    Columns with no relation in scope — `SELECT <caret>` before any FROM.
+
+    Each carries the relation it would need there, which insertion writes as a
+    FROM clause. Two relations of the same name in different schemas therefore
+    produce two entries, and they have to be told apart: rendering both as
+    `invoices.amount` is what made ranking drop one of them, silently and
+    whichever the user wanted.
+
+    Lengthened only where they would collide — the same `(table, column)` pair
+    under more than one schema. A shared table name is not enough:
+    `public.invoices.amount` and `billing.invoices.period` can never render
+    alike, so neither is touched.
+    """
+    columns = list(reader.loose_columns(request.prefix, limit))
+    schemas: dict[tuple[str, str], set[str]] = {}
+    for column in columns:
+        schemas.setdefault((column.table, column.name), set()).add(column.schema)
+    here = {(table.schema, table.name) for table in reader.tables(None)}
+    return [
+        _column_candidate(
+            column,
+            qualify=(column.schema, column.table) if len(schemas[column.table, column.name]) > 1 else (column.table,),
+            relation=(column.schema, column.table),
+            position=column.position + (0 if (column.schema, column.table) in here else _OFF_SEARCH_PATH),
+        )
+        for column in columns
+    ]
+
+
+def _ambiguous_labels(relations: Sequence[Relation]) -> frozenset[str]:
+    """
+    Labels naming more than one catalog relation here.
+
+    Only catalog relations can collide. A CTE or derived table has a name unique
+    within the statement, and an aliased relation answers to its alias — so this
+    is empty for every query but the one that puts two same-named relations from
+    different schemas in the same FROM. Postgres accepts that and then refuses
+    every bare reference to either, which is the whole reason this exists.
+    """
+    counted: dict[str, int] = {}
+    for relation in relations:
+        if relation.projection is None and relation.label:
+            counted[relation.label] = counted.get(relation.label, 0) + 1
+    return frozenset(label for label, count in counted.items() if count > 1)
+
+
+def _qualifier_for(relation: Relation, ambiguous: frozenset[str]) -> tuple[str, ...]:
+    """
+    What a reference to this relation must be prefixed with.
+
+    Its label, which is what the author would write — or its whole declared
+    path, when that label names something else too. The full path rather than
+    the shortest disambiguating one: what counts as short enough depends on the
+    search path, which this engine models only in part.
+    """
+    if relation.label in ambiguous:
+        return relation.path
+    return (relation.label,) if relation.label else ()
+
+
 def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
     """No dot typed: everything the clause admits, from whatever is in scope."""
     candidates: list[Candidate] = []
@@ -325,21 +399,20 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             # Matching is unaffected: it runs against the column name, so `na`
             # still finds `u.name`. The qualifier is about what gets inserted.
             seen: set[tuple[str, ...]] = set()
+            ambiguous = _ambiguous_labels(relations)
             for relation in relations:
-                candidates += _columns_of(relation, reader, seen, qualify=relation.label or None)
+                candidates += _columns_of(relation, reader, seen, qualify=_qualifier_for(relation, ambiguous))
         else:
             # Nothing is in the FROM yet, so each column carries the relation it
             # would need there. Choosing one is choosing its table as well — and
             # the schema with it, because a searched column may live outside the
             # default namespace and `FROM invoices` would not resolve.
             #
-            # The reference itself stays bare: a qualified FROM entry answers to
-            # its relation name, so `SELECT invoices.amount FROM billing.invoices`
-            # is what this writes and what Postgres plans.
-            candidates += [
-                _column_candidate(c, qualify=c.table, relation=(c.schema, c.table))
-                for c in reader.loose_columns(request.prefix, limit)
-            ]
+            # The reference stays bare where it can: a qualified FROM entry
+            # answers to its relation name, so `SELECT invoices.amount FROM
+            # billing.invoices` is what this writes and what Postgres plans. It
+            # lengthens only when two schemas would render the same reference.
+            candidates += _loose_columns(request, reader, limit)
 
     if Kind.TABLE in request.kinds:
         listed = [table for table in reader.tables(None) if table.kind != _SEQUENCE]
@@ -349,7 +422,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         # rank's dedupe, which keys on the rendered text, cannot collapse them.
         here = {(table.schema, table.name) for table in listed}
         candidates += [
-            _table_candidate(table, qualify=table.schema)
+            _table_candidate(table, qualify=(table.schema,))
             for table in reader.search_relations(request.prefix, limit)
             if table.kind != _SEQUENCE and (table.schema, table.name) not in here
         ]
@@ -553,6 +626,11 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     column needs its own — so expanding bare there would not simplify the
     reference, it would delete it.
 
+    Two relations sharing a label are named in full, for the reason an ordinary
+    reference is — and it fixes a second fault here. Rendering both as
+    `invoices` made a star over them emit `invoices.amount` twice, so the list
+    was not merely ambiguous but wrong about how many columns it had.
+
     Rendered here rather than in `rank` because the result is not an identifier.
     `literal` carries it through untouched, which makes quoting each name this
     function's job for the same reason it is `joins.py`'s — and `snippet` would
@@ -561,13 +639,15 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     """
     relations = request.star_of
     qualify = request.star_qualifier is not None or len(relations) > 1
+    ambiguous = _ambiguous_labels(relations)
     seen: set[tuple[str, ...]] = set()
     names: list[str] = []
     for relation in relations:
-        label = relation.label if qualify else ''
+        path = _qualifier_for(relation, ambiguous) if qualify else ()
+        prefix = '.'.join(quote_if_needed(part, dialect) for part in path)
         for column in _columns_of(relation, reader, seen):
             rendered = quote_if_needed(column.text, dialect)
-            names.append(f'{quote_if_needed(label, dialect)}.{rendered}' if label else rendered)
+            names.append(f'{prefix}.{rendered}' if prefix else rendered)
     if not names:
         # An expansion to nothing would delete the star and leave `SELECT  FROM t`.
         return []
@@ -613,7 +693,10 @@ def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         if table.kind == _SEQUENCE and (table.schema, table.name) not in here
     ]
     if not request.writes_a_literal:
-        return [_table_candidate(table, qualify=qualify, kind=Kind.SEQUENCE) for table, qualify in found]
+        return [
+            _table_candidate(table, qualify=(qualify,) if qualify else (), kind=Kind.SEQUENCE)
+            for table, qualify in found
+        ]
     return [_sequence_literal(table, qualify, dialect) for table, qualify in found]
 
 
@@ -750,7 +833,7 @@ def _columns_of(
     reader: _Reader,
     seen: set[tuple[str, ...]],
     label: str | None = None,
-    qualify: str | None = None,
+    qualify: tuple[str, ...] = (),
 ) -> list[Candidate]:
     """
     The columns a relation offers.
@@ -788,7 +871,7 @@ def _from_projection(
     label: str,
     reader: _Reader,
     seen: set[tuple[str, ...]],
-    qualify: str | None = None,
+    qualify: tuple[str, ...] = (),
 ) -> list[Candidate]:
     """Named outputs need no fetch; unresolved stars are expanded against their sources."""
     candidates = [
@@ -824,21 +907,22 @@ def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
 def _column_candidate(
     column: Column,
     label: str | None = None,
-    qualify: str | None = None,
+    qualify: tuple[str, ...] = (),
     relation: tuple[str, ...] = (),
+    position: int | None = None,
 ) -> Candidate:
     return Candidate(
         text=column.name,
         kind=Kind.COLUMN,
         detail=f'{label or column.table}.{column.name} :: {column.type}',
-        position=column.position,
+        position=column.position if position is None else position,
         type=column.type,
         qualifier=qualify,
         relation=relation,
     )
 
 
-def _table_candidate(table: Table, qualify: str | None = None, kind: Kind = Kind.TABLE) -> Candidate:
+def _table_candidate(table: Table, qualify: tuple[str, ...] = (), kind: Kind = Kind.TABLE) -> Candidate:
     """
     One relation, qualified when a bare reference would not reach it.
 

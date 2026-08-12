@@ -67,6 +67,16 @@ class Case:
     """Texts that must appear."""
     forbid: tuple[str, ...] = ()
     """Texts that must not."""
+    expect_exact: tuple[str, ...] = ()
+    """
+    Texts that must appear *verbatim*, qualifier and all.
+
+    `expect` and `forbid` compare against the last segment, which is right for
+    almost everything — the proposition is usually about which thing is offered.
+    This one is about how it is written: `invoices.amount` and
+    `public.invoices.amount` name the same column and only one of them runs when
+    two same-named relations are in scope.
+    """
 
 
 class DialectConformance:
@@ -100,11 +110,17 @@ class DialectConformance:
         dialect has either. Both exist to be *excluded* from the ordinary
         positions, and a fixture that only held them for backends with the
         feature could not make that proposition at all.
+
+        `OTHER` also holds a relation named like one in `SCHEMA`. Two relations
+        of the same name in one FROM is a state every backend here allows and
+        every backend here then refuses a bare reference in, so the fixture has
+        to be able to produce it.
         """
         snapshot = {
             (SCHEMA, 'users'): list(USERS),
             (SCHEMA, 'orders'): list(ORDERS),
             (OTHER, 'archived_orders'): list(ORDERS),
+            (OTHER, 'users'): list(USERS),
             (SCHEMA, SEQUENCE): [('last_value', 'bigint')],
         }
         kinds = {(SCHEMA, SEQUENCE): 'sequence'}
@@ -125,9 +141,9 @@ class DialectConformance:
         return MemoryCatalog(snapshot, table_kinds=kinds, functions=functions, search_path=(SCHEMA,))
 
     @staticmethod
-    def reference(dialect: Dialect, table: str) -> str:
+    def reference(dialect: Dialect, table: str, schema: str = SCHEMA) -> str:
         """A fully qualified relation reference, however many levels that takes."""
-        parts = [SCHEMA, table]
+        parts = [schema, table]
         if len(dialect.namespace.levels) >= 3:  # noqa: PLR2004
             parts.insert(0, CATALOG)
         return '.'.join(parts)
@@ -194,6 +210,11 @@ class DialectConformance:
                 name='a relation position never offers a sequence',
                 sql='SELECT * FROM ',
                 forbid=(SEQUENCE,),
+            ),
+            Case(
+                name='a reference to one of two same-named relations is not ambiguous',
+                sql=f'SELECT * FROM {users}, {DialectConformance.reference(dialect, "users", schema=OTHER)} WHERE ',
+                expect_exact=(f'{users}.id',),
             ),
             Case(
                 name='a join position offers what a relation position offers',
@@ -264,7 +285,7 @@ class DialectConformance:
                     expect=(wanted,),
                 ),
             )
-        return [case for case in cases if case.expect or case.forbid]
+        return [case for case in cases if case.expect or case.forbid or case.expect_exact]
 
     @staticmethod
     def structure(dialect: Dialect) -> list[str]:
@@ -341,11 +362,12 @@ class DialectConformance:
             plain = {text.rsplit('.', 1)[-1].strip('\'"') for text in found}
             missing = [want for want in case.expect if want not in plain]
             present = [deny for deny in case.forbid if deny in plain]
-            if missing or present:
+            exact = [want for want in case.expect_exact if want not in found]
+            if missing or present or exact:
                 failures.append(
                     f'{dialect.name}: {case.name}\n'
                     f'    sql      {case.sql!r}\n'
-                    f'    missing  {missing}\n'
+                    f'    missing  {missing + exact}\n'
                     f'    unwanted {present}\n'
                     f'    offered  {found[:8]}',
                 )

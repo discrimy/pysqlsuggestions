@@ -242,3 +242,28 @@ def test_a_dialect_declaring_no_literal_arguments_gets_no_case() -> None:
     """
     assert not [case for case in DialectConformance.cases(TRINO) if 'literal' in case.name]
     assert [case for case in DialectConformance.cases(POSTGRES) if 'literal' in case.name]
+
+
+def test_the_corpus_asks_every_dialect_for_an_unambiguous_reference() -> None:
+    """
+    Two same-named relations in one FROM is a state every backend here allows
+    and every backend here refuses a bare reference in. A dialect that got this
+    wrong would write SQL that does not run.
+    """
+    for dialect in SHIPPED:
+        assert [case for case in DialectConformance.cases(dialect) if 'ambiguous' in case.name]
+
+
+def test_the_ambiguity_case_is_not_one_a_dialect_can_break() -> None:
+    """
+    Recorded because it is a real limit of this half of the file.
+
+    Every other broken-dialect test below turns a declaration wrong and watches
+    the corpus notice. This rule lives in `resolve`, not in any dialect, so no
+    declaration can switch it off — which makes the case a regression guard
+    shared with third-party dialects rather than a detector of their mistakes.
+    It still earns its place: a dialect whose namespace depth is wrong writes
+    the wrong path here, and that the corpus does catch.
+    """
+    for dialect in SHIPPED:
+        assert not DialectConformance.check(dialect), dialect.name

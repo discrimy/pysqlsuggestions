@@ -393,9 +393,18 @@ class Candidate:
     front end displays, so the list showed a bare relation name and two proposals
     to the same table were indistinguishable.
     """
-    qualifier: str | None = None
+    qualifier: tuple[str, ...] = ()
     """
-    Relation label to prefix on insertion, when a bare name would be ambiguous.
+    Path to prefix on insertion, when a bare name would be ambiguous.
+
+    Usually one segment — the relation's label. Two when that label names more
+    than one relation in scope: `FROM public.invoices, billing.invoices` makes
+    `invoices.amount` a reference the server refuses, and only
+    `public.invoices.amount` says which one is meant.
+
+    A tuple rather than a dotted string because each segment is quoted
+    separately. `quote_if_needed('public.invoices')` would produce
+    `"public.invoices"` — one name containing a dot, which resolves to nothing.
 
     Matching still runs against `text`, so typing `na` finds `r.name`: the
     qualifier is about what gets inserted, not what has to be typed to find it.

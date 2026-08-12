@@ -44,7 +44,14 @@ silently demote it; smaller than `_LOCAL_BONUS`, because a CTE the user wrote
 themselves is still the better answer at the same position.
 """
 
-_MAX_POSITION_PENALTY = 50
+MAX_POSITION_PENALTY = 50
+"""
+The largest penalty a candidate's `position` can express.
+
+Public because `resolve` reads it: a column outside the search path is demoted
+by exactly this much, and the two numbers have to agree or the demotion either
+does nothing or saturates something else. Shared rather than repeated.
+"""
 _POSITION_WEIGHT = 0.1
 
 _PLACEHOLDER = re.compile(r'\$(\d+)')
@@ -79,7 +86,7 @@ def rank(
         if strength is None:
             continue
         score = strength + _kind_bonus(candidate.kind, kind_rank, len(request.kinds))
-        score -= min(candidate.position, _MAX_POSITION_PENALTY) * _POSITION_WEIGHT
+        score -= min(candidate.position, MAX_POSITION_PENALTY) * _POSITION_WEIGHT
         if candidate.origin == 'local':
             score += _LOCAL_BONUS
         if candidate.kind is Kind.JOIN:
@@ -256,7 +263,8 @@ def _render(candidate: Candidate, request: Request, dialect: Dialect) -> tuple[s
         return (candidate.text.lower() if _typing_lowercase(request) else candidate.text.upper()), ()
     text = quote_if_needed(candidate.text, dialect)
     if candidate.qualifier:
-        return f'{quote_if_needed(candidate.qualifier, dialect)}.{text}', ()
+        prefix = '.'.join(quote_if_needed(part, dialect) for part in candidate.qualifier)
+        return f'{prefix}.{text}', ()
     return text, ()
 
 
