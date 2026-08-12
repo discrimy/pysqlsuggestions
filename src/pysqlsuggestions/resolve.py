@@ -296,6 +296,37 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     return candidates
 
 
+def _ambiguous_labels(relations: Sequence[Relation]) -> frozenset[str]:
+    """
+    Labels naming more than one catalog relation here.
+
+    Only catalog relations can collide. A CTE or derived table has a name unique
+    within the statement, and an aliased relation answers to its alias — so this
+    is empty for every query but the one that puts two same-named relations from
+    different schemas in the same FROM. Postgres accepts that and then refuses
+    every bare reference to either, which is the whole reason this exists.
+    """
+    counted: dict[str, int] = {}
+    for relation in relations:
+        if relation.projection is None and relation.label:
+            counted[relation.label] = counted.get(relation.label, 0) + 1
+    return frozenset(label for label, count in counted.items() if count > 1)
+
+
+def _qualifier_for(relation: Relation, ambiguous: frozenset[str]) -> tuple[str, ...]:
+    """
+    What a reference to this relation must be prefixed with.
+
+    Its label, which is what the author would write — or its whole declared
+    path, when that label names something else too. The full path rather than
+    the shortest disambiguating one: what counts as short enough depends on the
+    search path, which this engine models only in part.
+    """
+    if relation.label in ambiguous:
+        return relation.path
+    return (relation.label,) if relation.label else ()
+
+
 def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
     """No dot typed: everything the clause admits, from whatever is in scope."""
     candidates: list[Candidate] = []
@@ -325,8 +356,9 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             # Matching is unaffected: it runs against the column name, so `na`
             # still finds `u.name`. The qualifier is about what gets inserted.
             seen: set[tuple[str, ...]] = set()
+            ambiguous = _ambiguous_labels(relations)
             for relation in relations:
-                candidates += _columns_of(relation, reader, seen, qualify=(relation.label,) if relation.label else ())
+                candidates += _columns_of(relation, reader, seen, qualify=_qualifier_for(relation, ambiguous))
         else:
             # Nothing is in the FROM yet, so each column carries the relation it
             # would need there. Choosing one is choosing its table as well — and
