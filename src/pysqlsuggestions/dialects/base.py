@@ -350,6 +350,15 @@ class CatalogQueries:
     Absent means that position offers no columns, which is the right answer for
     a backend where finding out would mean asking every catalog in turn.
     """
+    relation_search: Query | None = None
+    """
+    Relations matching a substring, across every visible namespace. `$1` is what has been typed.
+
+    For `FROM ord<caret>` where `orders` is outside the search path. Absent means
+    that position sees the default namespace only — the right answer for a
+    backend where looking further costs more than a keystroke can spend, which
+    on Trino means one `information_schema` query per catalog.
+    """
     foreign_keys: Query | None = None
     """
     Declared relationships whose referencing side is in one schema. `$1` is the schema.
