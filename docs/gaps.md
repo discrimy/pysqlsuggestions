@@ -55,6 +55,24 @@ first in its key, and for the same reason.
 Kept rather than deleted, because a list whose entries only ever disappear tells
 a later reader nothing about what was decided.
 
+- **Relation kinds finer than one notch.** `DROP VIEW ⌶`, `DROP INDEX ⌶` and
+  `DROP MATERIALIZED VIEW ⌶` offer what they mean, and `DROP TABLE ⌶` stopped
+  offering views — which the server refuses, so that half was a wrong answer
+  rather than a missing one.
+
+  The entry said the shape was undecided: a `Kind` per relation type, or a list
+  of kinds on `Clause`. ClickHouse decided it. Its `Table.kind` holds storage
+  engine names — `mergetree`, `replacingmergetree` — so a positive list naming
+  `table` would empty that position there, which is why `DROP TABLE`'s
+  narrowing lives in `postgres.py` and only `DROP VIEW` reaches the baseline.
+  A `Kind` per type was rejected for a different reason: a view is queryable, so
+  the same relation would carry one kind in a `FROM` list and another in a
+  `DROP VIEW`.
+
+  Indexes are fetched now and reach exactly one position. There are more of them
+  than tables — 31 against 19 in the fixture — so the default exclusion covers
+  them beside sequences.
+
 - **Procedures and sequences.** `CALL ⌶` offers procedures, `nextval('⌶` offers
   sequences, and `DROP SEQUENCE ⌶` and `ALTER SEQUENCE ⌶` offer them too. Both
   halves are one filter over two records — the catalog reports a subtype, and
@@ -115,13 +133,6 @@ a later reader nothing about what was decided.
 Carried from the v0.1 design's out-of-scope list and the README's status
 paragraph, repeated here so the whole list lives in one place:
 
-- **Relation-kind filtering finer than one notch.** `DROP VIEW ⌶` and
-  `DROP INDEX ⌶` still answer nothing. `Table.kind` already carries `view`,
-  `materialized view` and `foreign table`, so the catalog half is done, and the
-  filter exists — it is what keeps sequences out of `FROM`. What is undecided is
-  the shape: a `Kind` per relation type, or a list of kinds on `Clause`. Two
-  kinds is what there were users for, and choosing between those shapes with one
-  hypothetical consumer is how a field gets designed wrong.
 - **Physical layout ranking.** `Table.rows` is fetched and stored; nothing
   scores on it. A relation with millions of rows and one with dozens are
   currently indistinguishable in a ranked list.
