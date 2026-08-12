@@ -53,6 +53,19 @@ not HAVING, LIMIT or OFFSET: every one of them was a separate chance to forget.
 _JOINS = ('JOIN', 'LEFT JOIN', 'INNER JOIN', 'CROSS JOIN')
 """A join may follow another join's ON, so these are added back where the order alone would not."""
 
+EXPLAINABLE = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
+"""
+The statement forms a query planner will accept.
+
+Named separately from `STATEMENT_START` because `EXPLAIN` takes these and not
+the DDL forms — `EXPLAIN DROP TABLE users` is a syntax error. Written this way
+round, adding a statement form later cannot silently start offering it after
+`EXPLAIN`.
+
+Declared above the clause model rather than beside `STATEMENT_START`, because
+`EXPLAIN` names it and a clause cannot reference what is defined below it.
+"""
+
 
 def _onwards(name: str) -> tuple[str, ...]:
     """Every clause that may follow, in canonical order, starting at `name`."""
@@ -189,10 +202,16 @@ CLAUSES = ClauseModel(
         Clause(name='UNION', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='INTERSECT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='EXCEPT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
+        # A wrapper rather than a statement: it takes one and reports on it.
+        # Deliberately absent from `statement_start` — `statement_form` returns
+        # the first start that is not WITH, so an EXPLAIN'd query would report
+        # its form as EXPLAIN and lose every clause declaring
+        # `statements={'SELECT'}`: GROUP BY, ORDER BY, LIMIT.
+        Clause(name='EXPLAIN', suggests=(Kind.SNIPPET, Kind.KEYWORD), followed_by=EXPLAINABLE),
     ),
 )
 
-STATEMENT_START = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
+STATEMENT_START = EXPLAINABLE
 
 TYPES = (
     'varchar',
