@@ -18,7 +18,7 @@ import pytest
 
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.dialects.ansi import ANSI
-from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace
+from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace, Placeholder, Syntax
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.registry import available, named
@@ -142,3 +142,30 @@ def test_no_join_is_proposed_without_a_declared_constraint(dialect: Dialect) -> 
     catalog = DialectConformance.catalog(dialect)
     sql = f'SELECT * FROM {DialectConformance.reference(dialect, "users")} AS u JOIN '
     assert not [s for s in complete(sql, len(sql), dialect, catalog) if s.kind is Kind.JOIN]
+
+
+def test_a_placeholder_that_can_never_end_is_reported() -> None:
+    """An 'any' body with no closing delimiter is never lexed — silent, like every case here."""
+    broken = replace(ANSI, syntax=Syntax(placeholders=(Placeholder(opens='@', body='any'),)))
+    problems = DialectConformance.structure(broken)
+    assert any('closing delimiter' in problem for problem in problems)
+
+
+def test_a_placeholder_that_can_never_end_fails_the_corpus_too() -> None:
+    """
+    Both halves catch the same bad declaration, from different directions.
+
+    `structure` reads it and says it can never end; the behavioural case writes
+    `@is` and finds `is_staff` offered inside what the dialect calls a parameter.
+    A dialect claiming a spelling the lexer cannot act on is worse than one
+    claiming none, because the claim is what a caller reads.
+
+    Stripping the spellings entirely is deliberately *not* caught here. The
+    corpus builds each case from what the dialect says about itself, so a
+    dialect that declares no parameter gets no parameter case — the same reason
+    Trino gets none for `?`, which has no interior to put a caret in.
+    """
+    broken = replace(ANSI, syntax=replace(ANSI.syntax, placeholders=(Placeholder(opens='@', body='any'),)))
+    assert not DialectConformance.check(ANSI)
+    failures = DialectConformance.check(broken)
+    assert any('bound parameter' in failure for failure in failures)

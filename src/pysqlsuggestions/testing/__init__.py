@@ -86,6 +86,25 @@ class DialectConformance:
         return '.'.join(parts)
 
     @staticmethod
+    def parameter(dialect: Dialect) -> str:
+        """
+        A half-written bound parameter whose stem matches a fixture column, or ''.
+
+        The stem matters: a parameter named `param` collides with nothing in the
+        fixture, so a dialect that had forgotten the rule entirely would still
+        pass. `is` is a prefix of `is_staff`, which is exactly what must not be
+        offered.
+
+        Spellings whose body is `none` are skipped. `?` has no interior, so
+        there is no caret inside one to make a proposition about — which is the
+        honest answer for Trino rather than a gap in the corpus.
+        """
+        for placeholder in dialect.syntax.placeholders:
+            if placeholder.body in ('name', 'any'):
+                return f'{placeholder.opens}is'
+        return ''
+
+    @staticmethod
     def cases(dialect: Dialect) -> list[Case]:
         """The corpus, spelled for `dialect`."""
         users = DialectConformance.reference(dialect, 'users')
@@ -136,6 +155,15 @@ class DialectConformance:
                 forbid=('email',),
             ),
         ]
+        spelled = DialectConformance.parameter(dialect)
+        if spelled:
+            cases.append(
+                Case(
+                    name='a caret inside a bound parameter offers no columns',
+                    sql=f'SELECT * FROM {users} AS u WHERE u.is_staff = {spelled}',
+                    forbid=('is_staff',),
+                ),
+            )
         # A dotted path narrows one level per segment, however many there are.
         walked: list[str] = []
         for depth, level in enumerate(levels[:-1]):
@@ -187,6 +215,13 @@ class DialectConformance:
         for phrase in dialect.statement_start:
             if phrase.upper() not in names:
                 problems.append(f'statement may start with {phrase!r}, which no clause here declares')
+
+        for placeholder in dialect.syntax.placeholders:
+            if placeholder.body == 'any' and not placeholder.closes:
+                problems.append(
+                    f'placeholder {placeholder.opens!r} has an "any" body and no closing delimiter, '
+                    f'so it can never end and is never lexed',
+                )
 
         return [f'{dialect.name}: {problem}' for problem in problems]
 

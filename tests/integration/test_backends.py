@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import pytest
 
-from pysqlsuggestions.api import complete
+from pysqlsuggestions.api import apply_suggestion, complete
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
 from pysqlsuggestions.types import Kind
 from tests.corpus.cases import split_caret
+from tests.integration.conftest import POSTGRES_DSN
 
 pytestmark = pytest.mark.integration
 
@@ -107,6 +108,37 @@ def test_postgres_functions(postgres_catalog: DbapiCatalog) -> None:
     names = {f.name for f in postgres_catalog.functions()}
     assert 'count' in names
     assert 'now' in names
+
+
+def test_postgres_accepts_an_expanded_star(postgres_catalog: DbapiCatalog) -> None:
+    """
+    The one thing only a server can settle: that the list we write is a query it runs.
+
+    The acceptance sweep cannot reach this. It truncates each statement at the
+    caret, so the FROM clause that gives the star its meaning is cut away and no
+    expansion is ever offered there.
+
+    Two relations, so every column comes out qualified — and `reports_database`
+    has a column called `user`, which is reserved and must arrive quoted or the
+    statement does not parse.
+    """
+    psycopg2 = pytest.importorskip('psycopg2')
+    sql = 'SELECT * FROM reports_report r JOIN reports_database d ON r.database_id = d.id'
+    caret = sql.index('*') + 1
+    offered = [s for s in complete(sql, caret, POSTGRES, postgres_catalog) if s.kind is Kind.EXPANSION]
+    assert len(offered) == 1
+
+    written = apply_suggestion(sql, offered[0], dialect=POSTGRES)[0]
+    assert 'r.id' in written, 'a two-relation expansion must qualify'
+    assert 'd."user"' in written, 'a reserved column name must arrive quoted'
+
+    connection = psycopg2.connect(POSTGRES_DSN)
+    try:
+        with connection.cursor() as cursor:
+            # EXPLAIN plans and does not execute, so this stays a read.
+            cursor.execute(f'EXPLAIN {written}')
+    finally:
+        connection.close()
 
 
 # --------------------------------------------------------------------------- #

@@ -24,10 +24,15 @@ from pysqlsuggestions.engine.analyse import (
     continues_a_keyword,
     depth_at,
     in_literal,
+    in_placeholder,
     inside_a_cast_awaiting_as,
     predicate_complete,
     qualifier_and_prefix,
     scope_of,
+    star_at,
+    star_qualifier,
+    star_relations,
+    star_span,
     statement_at,
     statement_form,
     string_under,
@@ -60,17 +65,33 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     scope = scope_of(tokens, lo, hi, caret, dialect) if tokens else None
 
     comparand, comparand_type = comparand_at(tokens, caret, dialect)
+    if in_placeholder(tokens, caret):
+        # Above the literal check rather than folded into it: a half-written
+        # literal has an answer — the values that column holds — and a
+        # half-written parameter has none. Keeping them apart is what stops an
+        # edit to one silently changing the other.
+        return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
     if in_literal(tokens, caret):
         return _inside_a_literal(tokens, caret, clause, scope, comparand)
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
     continues, only = _continues(tokens, lo, hi, caret, dialect, clause, prefix)
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
+
+    star = star_at(tokens, caret, dialect)
+    star_of = star_relations(tokens, star, scope) if star is not None else ()
+    if not star_of:
+        # A star standing for no relation is not a star worth recording. `SELECT *`
+        # before any FROM has nothing to expand, and dropping it here keeps the
+        # kind out of the list rather than leaving resolve to answer nothing.
+        star = None
+
     return Request(
         kinds=_continued_kinds(
             continues,
             only,
-            _values_first(comparand, expecting, qualifier)
+            _expansion_first(star)
+            + _values_first(comparand, expecting, qualifier)
             + _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
         ),
         prefix=prefix,
@@ -86,6 +107,9 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         statement=statement_form(tokens, lo, hi, caret, dialect),
         written=clauses_written(tokens, lo, hi, caret, dialect),
         keyword_case=_keyword_case(tokens, caret, dialect),
+        star=star_span(tokens, star) if star is not None else None,
+        star_of=star_of,
+        star_qualifier=star_qualifier(tokens, star) if star is not None else None,
     )
 
 
@@ -159,6 +183,17 @@ _CASE_CONTINUATIONS = {
     'then': ('WHEN', 'ELSE', 'END'),
     'else': ('END',),
 }
+
+
+def _expansion_first(star: int | None) -> tuple[Kind, ...]:
+    """
+    A star under the caret leads, because putting it there is what asks for this.
+
+    Beside `_values_first` and for the same reason: both are positions where one
+    kind comes first on the strength of something in the text that the clause
+    model cannot see.
+    """
+    return (Kind.EXPANSION,) if star is not None else ()
 
 
 def _values_first(comparand: tuple[str, ...], expecting: str, qualifier: tuple[str, ...]) -> tuple[Kind, ...]:

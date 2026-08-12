@@ -220,4 +220,32 @@ CASES: tuple[GoldenRequest, ...] = (
         relations=(':t',),
         note='inside a comment: nothing',
     ),
+    GoldenRequest(
+        sql='SELECT * FROM users u WHERE u.id = :us⌶',
+        kinds=(),
+        clause='WHERE',
+        relations=('u:users',),
+        note='a caret inside a bound parameter admits nothing',
+    ),
+    GoldenRequest(
+        sql='SELECT * FROM users u WHERE u.id = :user_id ⌶',
+        kinds=('keyword',),
+        clause='WHERE',
+        relations=('u:users',),
+        note='past the parameter the predicate is finished, so a connective follows',
+    ),
+    GoldenRequest(
+        sql='SELECT *⌶ FROM users u',
+        kinds=('expansion', 'keyword'),
+        clause='SELECT',
+        relations=('u:users',),
+        note='the caret on a star asks for the columns it stands for',
+    ),
+    GoldenRequest(
+        sql='SELECT * ⌶FROM users u',
+        kinds=('keyword',),
+        clause='SELECT',
+        relations=('u:users',),
+        note='one space past the star is the position that wants FROM',
+    ),
 )

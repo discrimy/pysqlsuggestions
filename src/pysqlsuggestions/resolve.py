@@ -17,6 +17,7 @@ from typing import TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
+from pysqlsuggestions.engine.rank import quote_if_needed
 from pysqlsuggestions.ports import (
     Cache,
     Catalog,
@@ -263,6 +264,9 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     elif request.clause == 'ON' and Kind.COLUMN in request.kinds:
         candidates += joins.join_conditions(scope, _edges(scope, reader), dialect)
 
+    if Kind.EXPANSION in request.kinds:
+        candidates += _expansion(request, reader, dialect)
+
     if Kind.VALUE in request.kinds:
         candidates += _values(request, reader)
 
@@ -466,6 +470,56 @@ def _unchosen(words: tuple[str, ...], written: frozenset[str]) -> tuple[str, ...
         for group in sequence[: max(made) + 1] if made else ():
             settled |= group
     return tuple(word for word in words if word not in settled)
+
+
+def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
+    """
+    The column list a `*` stands for, as one accept.
+
+    Qualified once the star covers more than one relation: two relations in a
+    join very often share `id`, and the unqualified list is a statement the
+    server refuses. A single relation expands bare, which is what `SELECT *` in
+    a one-table query should read as.
+
+    A star the author qualified themselves stays qualified however few relations
+    it covers. The span covers the `u.` as well as the star — every expanded
+    column needs its own — so expanding bare there would not simplify the
+    reference, it would delete it.
+
+    Rendered here rather than in `rank` because the result is not an identifier.
+    `literal` carries it through untouched, which makes quoting each name this
+    function's job for the same reason it is `joins.py`'s — and `snippet` would
+    be wrong, since `expand_snippet` strips `$1`-shaped runs and Postgres allows
+    a `$` inside a column name.
+    """
+    relations = request.star_of
+    qualify = request.star_qualifier is not None or len(relations) > 1
+    seen: set[tuple[str, ...]] = set()
+    names: list[str] = []
+    for relation in relations:
+        label = relation.label if qualify else ''
+        for column in _columns_of(relation, reader, seen):
+            rendered = quote_if_needed(column.text, dialect)
+            names.append(f'{quote_if_needed(label, dialect)}.{rendered}' if label else rendered)
+    if not names:
+        # An expansion to nothing would delete the star and leave `SELECT  FROM t`.
+        return []
+    covered = ', '.join(dict.fromkeys(relation.declared_name for relation in relations))
+    written = f'{request.star_qualifier}.*' if request.star_qualifier else '*'
+    return [
+        Candidate(
+            text=', '.join(names),
+            kind=Kind.EXPANSION,
+            detail=f'{len(names)} columns of {covered}',
+            # The star as the author wrote it, because a list a hundred
+            # characters wide is not a thing to show in a popup. The detail
+            # names the relations, which is what a reader cannot already see.
+            label=f'expand {written}',
+            match_text='*',
+            literal=True,
+            span=request.star,
+        ),
+    ]
 
 
 def _values(request: Request, reader: _Reader) -> list[Candidate]:

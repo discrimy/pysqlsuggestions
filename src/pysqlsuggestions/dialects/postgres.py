@@ -6,7 +6,7 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Query, Syntax
+from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
 
 _RELKIND = {
@@ -241,6 +241,10 @@ POSTGRES = replace(
         escape_string_prefix='E',
         unquoted_extra='$',
         unquoted_non_ascii=True,
+        # No `?`. It is the JSONB existence operator, and `data ? 'key'` is a
+        # predicate people write — reading it as a parameter would silence a
+        # position that has a real answer.
+        placeholders=(Placeholder(opens='$', body='digits'), Placeholder(opens=':')),
     ),
     namespace=Namespace(levels=('schema', 'table')),
     clauses=ANSI.clauses.extend(

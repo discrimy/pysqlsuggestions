@@ -75,20 +75,37 @@ def depth_at(tokens: Sequence[Token], caret: int) -> int:
     return token.depth
 
 
-def in_literal(tokens: Sequence[Token], caret: int) -> bool:
+def _inside(token: Token, caret: int) -> bool:
     """
-    Whether the caret sits inside a string literal or a comment.
+    Whether `caret` is within `token` rather than past it.
 
-    A caret at the closing delimiter of a *terminated* literal is outside it —
-    `'ab'<caret>` is back in ordinary SQL. A caret at the end of an unterminated
-    one is inside, because there is no delimiter to have passed.
+    A caret at the closing delimiter of a *terminated* token is outside it —
+    `'ab'<caret>` is back in ordinary SQL. At the end of an unterminated one it
+    is inside, because there is no delimiter to have passed. Three callers need
+    the rule and it is subtle enough that three copies would drift.
     """
-    for token in tokens:
-        if token.type not in (TokenType.STRING, TokenType.COMMENT):
-            continue
-        if token.start < caret < token.end or (caret == token.end and not token.terminated):
-            return True
-    return False
+    return token.start < caret < token.end or (caret == token.end and not token.terminated)
+
+
+def in_literal(tokens: Sequence[Token], caret: int) -> bool:
+    """Whether the caret sits inside a string literal or a comment."""
+    return any(token.type in (TokenType.STRING, TokenType.COMMENT) and _inside(token, caret) for token in tokens)
+
+
+def in_placeholder(tokens: Sequence[Token], caret: int) -> bool:
+    """
+    Whether the caret is inside a bound parameter.
+
+    Nothing can be suggested there. The engine does not know what the caller
+    will bind, and the name is the author's to invent — offering a column called
+    `user_settings` for `:us` writes SQL that runs and answers a different
+    question.
+
+    Which carets count is the lexer's decision, carried on `terminated` per
+    spelling: `?` admits nothing more, so `= ?<caret>` is past it, while a name
+    could always take another character, so `= :us<caret>` is still in it.
+    """
+    return any(token.type is TokenType.PARAM and _inside(token, caret) for token in tokens)
 
 
 def string_under(tokens: Sequence[Token], caret: int) -> Token | None:
@@ -100,9 +117,7 @@ def string_under(tokens: Sequence[Token], caret: int) -> Token | None:
     a comment is a position with none.
     """
     for token in tokens:
-        if token.type is not TokenType.STRING:
-            continue
-        if token.start < caret < token.end or (caret == token.end and not token.terminated):
+        if token.type is TokenType.STRING and _inside(token, caret):
             return token
     return None
 
@@ -189,7 +204,9 @@ def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool
     if index < 0:
         return False
     token = tokens[index]
-    if token.type in (TokenType.NUMBER, TokenType.STRING):
+    # A parameter is a value, whatever it will be bound to. Without this
+    # `WHERE id = ? ` looked like an open operand and offered a second column.
+    if token.type in (TokenType.NUMBER, TokenType.STRING, TokenType.PARAM):
         return True
     if token.type is TokenType.PUNCT:
         return token.text == ')'
@@ -344,6 +361,76 @@ def _star_is_an_item(tokens: Sequence[Token], index: int, dialect: Dialect) -> b
     if token.type is TokenType.IDENT:
         return not token.quoted and token.value.upper() in dialect.keywords
     return False
+
+
+def star_at(tokens: Sequence[Token], caret: int, dialect: Dialect) -> int | None:
+    """
+    Index of a select-list `*` the caret sits on, or None.
+
+    Three conditions. The caret is at the star's end — a star is one character,
+    so that is the only caret that can be said to be *on* it, and `SELECT * `
+    with a space is the position that wants FROM. The star is an item rather
+    than multiplication, which `_star_is_an_item` already decides. And it is not
+    inside a call: `count(*)` passes that test because a `(` precedes it, and
+    expanding there would write `count(id, name, email)`.
+
+    Not conditioned on the clause being SELECT. `RETURNING *` is the same
+    construct with the same answer, and a rule naming SELECT would have to be
+    extended for it and for every projection clause a dialect adds later.
+    """
+    for index, token in enumerate(tokens):
+        if token.type is not TokenType.OPERATOR or token.text != '*' or caret != token.end:
+            continue
+        if not _star_is_an_item(tokens, index, dialect):
+            return None
+        return None if _enclosing_call(tokens, index) is not None else index
+    return None
+
+
+def _star_qualifier(tokens: Sequence[Token], index: int) -> int | None:
+    """Index of the identifier qualifying the star at `index`, as in `u.*`, or None."""
+    dot = _skip_back(tokens, index - 1)
+    if dot < 0 or tokens[dot].type is not TokenType.PUNCT or tokens[dot].text != '.':
+        return None
+    name = _skip_back(tokens, dot - 1)
+    return name if name >= 0 and tokens[name].type is TokenType.IDENT else None
+
+
+def star_span(tokens: Sequence[Token], index: int) -> tuple[int, int]:
+    """
+    What accepting an expansion replaces: the star, and any qualifier on it.
+
+    `u.*` goes whole. Each expanded column carries its own `u.`, so leaving the
+    written qualifier in place would emit the first column bare and the rest
+    qualified.
+    """
+    qualifier = _star_qualifier(tokens, index)
+    start = tokens[qualifier].start if qualifier is not None else tokens[index].start
+    return start, tokens[index].end
+
+
+def star_qualifier(tokens: Sequence[Token], index: int) -> str | None:
+    """The label written left of the star's dot, as in `u.*`, or None for a bare star."""
+    found = _star_qualifier(tokens, index)
+    return tokens[found].value if found is not None else None
+
+
+def star_relations(tokens: Sequence[Token], index: int, scope: Scope | None) -> tuple[Relation, ...]:
+    """
+    The relations the star at `index` stands for.
+
+    A qualified star names the one relation answering to the label left of its
+    dot, looked up through the whole scope chain because a correlated subquery
+    may reach outward. A bare star names every relation of its own query level
+    and no more, which is why this reads `relations` rather than `visible()`.
+    """
+    if scope is None:
+        return ()
+    qualifier = _star_qualifier(tokens, index)
+    if qualifier is None:
+        return scope.relations
+    label = tokens[qualifier].value
+    return tuple(relation for relation in scope.visible() if relation.label == label)
 
 
 def after_as(tokens: Sequence[Token], caret: int) -> bool:

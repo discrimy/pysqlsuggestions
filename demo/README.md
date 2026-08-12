@@ -25,6 +25,9 @@ normally invisible middle of a completion engine visible while you type.
 | `SELECT name, count(*) AS runs FROM reports_report GROUP BY name ORDER BY ` | `runs` and the ordinals `1`, `2` — no catalog can supply either |
 | `SELECT * FROM reports_database ` | `rd`, `r`, `rep` — generated aliases |
 | `SELECT * FROM t WHERE name = 'ab` | Nothing, because the caret is inside a string |
+| `SELECT *` then click *directly* on the star of `SELECT * FROM reports_report r` | The whole column list, as one accept. One space further along is still the position that wants `FROM` |
+| The same with `r JOIN reports_database d ON r.database_id = d.id` | Every column qualified, because both relations have `id` — and `d."user"` quoted, because `user` is reserved |
+| `SELECT * FROM reports_report r WHERE r.id = :re` | Nothing. Inside a bound parameter the engine has no answer, and it used to offer columns starting `re` |
 | `SELECT * FROM postgresql.public.reports_report p JOIN clickhouse.analytics.report_executions c ON c.` | A join whose two relations live in different databases |
 
 The right-hand panel is the `Request` — clause, prefix, qualifier, kinds, and the

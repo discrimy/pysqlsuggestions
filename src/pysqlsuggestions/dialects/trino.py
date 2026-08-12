@@ -6,7 +6,7 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Query, Syntax
+from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
 from pysqlsuggestions.types import Column, Function, Kind, Table
 
 # system.jdbc exposes metadata as ordinary queryable tables, so catalog and schema
@@ -93,6 +93,8 @@ TRINO = replace(
         unquoted_case='lower',
         dollar_quoting=False,
         cast_operator='::',
+        # Trino's own prepared-statement marker, and there is no `?` operator to lose.
+        placeholders=(Placeholder(opens='?', body='none'),),
     ),
     namespace=Namespace(levels=('catalog', 'schema', 'table')),
     clauses=ANSI.clauses.extend(

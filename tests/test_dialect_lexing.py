@@ -88,3 +88,41 @@ def test_non_ascii_names_are_quoted_where_the_backend_demands_it(dialect: Dialec
 def test_a_dollar_in_a_name_follows_the_same_rule(dialect: Dialect, expected: str) -> None:
     """Postgres allows `$` after the first character; Trino does not allow it at all."""
     assert quote_if_needed('a$b', dialect) == expected
+
+
+@pytest.mark.parametrize('dialect', ALL, ids=lambda d: d.name)
+def test_every_dialect_spells_a_bound_parameter(dialect: Dialect) -> None:
+    """A dialect with none offers column names inside `:param`, which is an active wrong answer."""
+    assert dialect.syntax.placeholders
+
+
+def test_postgres_reads_both_its_own_spelling_and_the_tooling_one() -> None:
+    """`$1` is what the server takes; `:name` is what every tool over it writes."""
+    assert significant('WHERE id = $1', POSTGRES)[-1] == (TokenType.PARAM, '$1')
+    assert significant('WHERE id = :user_id', POSTGRES)[-1] == (TokenType.PARAM, ':user_id')
+
+
+def test_postgres_keeps_the_jsonb_existence_operator() -> None:
+    """`?` is a real Postgres predicate, which is why the dialect does not claim it."""
+    assert (TokenType.PARAM, '?') not in significant("WHERE data ? 'key'", POSTGRES)
+
+
+def test_trino_takes_the_question_mark() -> None:
+    """Trino's prepared statements use it and Trino has no `?` operator to lose."""
+    assert significant('WHERE id = ?', TRINO)[-1] == (TokenType.PARAM, '?')
+
+
+def test_clickhouse_takes_its_braced_form() -> None:
+    """ClickHouse spells a parameter `{name:Type}`, brace to brace."""
+    assert significant('WHERE id = {id:UInt64}', CLICKHOUSE)[-1] == (TokenType.PARAM, '{id:UInt64}')
+
+
+def test_the_cast_operator_survives_the_named_spelling() -> None:
+    """`::` needs no special case: `:` is not an identifier start, so `a::int` is a cast."""
+    assert significant('SELECT a::int', POSTGRES)[2] == (TokenType.OPERATOR, '::')
+
+
+def test_dollar_quoting_survives_the_numbered_spelling() -> None:
+    """A dollar quote fails the digits body at its second character, so it still lexes as a string."""
+    assert significant('$$SELECT 1$$', POSTGRES) == [(TokenType.STRING, '$$SELECT 1$$')]
+    assert significant('$tag$body$tag$', POSTGRES) == [(TokenType.STRING, '$tag$body$tag$')]
