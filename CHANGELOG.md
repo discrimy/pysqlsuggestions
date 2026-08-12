@@ -6,6 +6,35 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### `WITH` answers where it never did
+
+`WITH a AS (⌶` offers the statements a CTE body may contain — `SELECT`,
+`VALUES`, a nested `WITH`, and on Postgres the data-modifying forms, all
+verified against the server. `WITH a AS (…) ⌶` offers the statement the CTE
+feeds. `WITH a ⌶` offers `AS`, and `WITH rec⌶` offers `RECURSIVE`.
+
+Every one of those positions answered nothing before: the clause declared no
+`suggests`, no `followed_by`, and nothing declared it `follows`, so its
+continuations were empty and each caret fell through.
+
+`WITH ⌶` and `WITH a AS (…), ⌶` still answer nothing, which is right — a CTE
+name is the author's to invent.
+
+`Clause` gains `opens_a_group`, the words that may begin a clause's
+parenthesised body. A dialect needs it to describe a CTE: what belongs inside
+the group and what belongs after it are different lists, and a nested `WITH` is
+the case that proves it. A clause that declares it also has a mandatory alias
+word — `AS` is what introduces the group — so nothing else is offered until it
+is written.
+
+ClickHouse keeps the conservative body list, because it refuses a data-modifying
+CTE outright.
+
+`WITH a AS (…) VALUES (1)` plans and is still not offered: `VALUES` declares
+itself part of `INSERT INTO`, and the statement form at that caret is `WITH`, so
+the clause model filters it out. Reaching it would mean widening `INSERT INTO`'s
+model for a caret almost nobody types.
+
 ### A slow database no longer freezes the editor
 
 The language server ran its completion handler on the event loop, so a slow
