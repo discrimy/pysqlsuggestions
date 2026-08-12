@@ -13,6 +13,7 @@ dialect the library serves may therefore be unserved here — ClickHouse is — 
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from importlib import import_module
@@ -109,10 +110,24 @@ def open_catalog(profile: Profile, connect: Connect | None = None) -> DbapiCatal
     _, paramstyle = DRIVERS[profile.dialect]
     opener = connect or _connect
     held: list[Any] = []
+    guard = threading.Lock()
 
     def open_cursor() -> Cursor:
-        if not held:
-            held.append(opener(profile))
+        """
+        A cursor on the one connection, opening it on first use.
+
+        Locked because the check and the connect are two steps: two callers
+        arriving together would both find `held` empty, and the second
+        connection would never be reachable again — nor closed.
+
+        The lock covers the connect, not the cursor: DB-API `threadsafety=2`,
+        which all three bundled drivers report, means a connection may be
+        shared between threads while a cursor may not, and every caller here
+        gets its own.
+        """
+        with guard:
+            if not held:
+                held.append(opener(profile))
         cursor: Cursor = held[0].cursor()
         return cursor
 
