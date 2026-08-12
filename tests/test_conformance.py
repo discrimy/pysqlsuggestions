@@ -267,3 +267,22 @@ def test_the_ambiguity_case_is_not_one_a_dialect_can_break() -> None:
     """
     for dialect in SHIPPED:
         assert not DialectConformance.check(dialect), dialect.name
+
+
+def test_the_corpus_asks_a_dialect_what_its_groups_begin_with() -> None:
+    """
+    A clause declaring `opens_a_group` and never answering inside one is silent
+    rather than wrong, which is the kind of mistake `structure` cannot see and
+    only a behavioural case can.
+    """
+    for dialect in SHIPPED:
+        assert [case for case in DialectConformance.cases(dialect) if 'group' in case.name]
+
+
+def test_a_dialect_declaring_no_group_words_gets_no_case() -> None:
+    """
+    The corpus asks a dialect only what it claims to do — the bargain
+    `parameter()` makes for `?` and `relation_search` makes for Trino.
+    """
+    bare = replace(ANSI, clauses=ClauseModel(clauses=(Clause(name='SELECT', suggests=(Kind.COLUMN,)),)))
+    assert not [case for case in DialectConformance.cases(bare) if 'group' in case.name]

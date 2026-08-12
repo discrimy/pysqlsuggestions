@@ -200,6 +200,16 @@ class Clause:
     its own separator and so may follow a relation, which is why this is a
     property of the clause and not of relation clauses in general.
     """
+    opens_a_group: tuple[str, ...] = ()
+    """
+    Words that may begin this clause's parenthesised group.
+
+    `WITH a AS (<caret>` is inside the clause and is not the clause's own
+    position: what belongs there is a whole statement, and what belongs after
+    the group is a different list — a nested `WITH` is legal in a CTE body and
+    not after one. `followed_by` cannot serve both without offering `AS` inside
+    the body and the body's words after a written name.
+    """
     aliases_with: str = ''
     """
     The word that gives this clause's relation an alias, where it takes one.
@@ -458,7 +468,7 @@ class Dialect:
         spoken = {
             word.upper()
             for clause in self.clauses.clauses
-            for phrase in (clause.name, *clause.followed_by, *clause.after_operand)
+            for phrase in (clause.name, *clause.followed_by, *clause.after_operand, *clause.opens_a_group)
             for word in phrase.split()
         }
         spoken |= {word.upper() for phrase in self.statement_start for word in phrase.split()}

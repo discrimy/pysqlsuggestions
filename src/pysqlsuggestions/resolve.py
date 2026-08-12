@@ -587,6 +587,12 @@ def _unspent_alias(words: tuple[str, ...], clause: Clause, request: Request) -> 
         # `*` stands in the item like a name and takes no alias: `SELECT * AS x`
         # and `SELECT t.* AS x` are both syntax errors.
         spent = word in request.item_words or '*' in request.item_words
+    if not spent and clause.opens_a_group:
+        # The alias word introduces a group, so for this clause it is not
+        # optional: nothing may follow the item until it is written.
+        # `WITH recent SELECT` is a statement the server refuses, and the
+        # acceptance sweep is what found it.
+        return (word,)
     return tuple(other for other in words if other != word) if spent else words
 
 

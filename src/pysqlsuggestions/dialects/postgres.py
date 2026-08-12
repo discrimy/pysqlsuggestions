@@ -346,6 +346,18 @@ POSTGRES = replace(
             suggests=(Kind.SEQUENCE, Kind.SCHEMA),
             followed_by=('RENAME TO', 'OWNED BY'),
         ),
+        # Data-modifying CTEs, which are Postgres's own: all three forms plan
+        # inside a body and after the list, and ClickHouse refuses the first
+        # with a syntax error. `extend` replaces a clause of the same name
+        # rather than merging into it, so ANSI's declarations are restated.
+        Clause(
+            name='WITH',
+            suggests=(),
+            opens_a_group=('SELECT', 'VALUES', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM'),
+            followed_by=('AS', 'SELECT', 'INSERT INTO', 'UPDATE', 'DELETE FROM'),
+            aliases_with='AS',
+            before_the_item=('RECURSIVE',),
+        ),
     ),
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,

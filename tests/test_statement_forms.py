@@ -188,13 +188,12 @@ def test_a_parenthesised_position_is_not_reached_by_the_rule() -> None:
     worse regression than the bug being fixed.
 
     `SELECT * FROM (` opens a derived table and offers relations. `WITH a AS (`
-    opens a CTE body and offers nothing, which it also did before this change:
-    the `WITH` clause declares no `suggests` and nothing declares it `follows`,
-    so the position has never had an answer. A separate gap, named here so the
-    next reader does not mistake it for this one.
+    opens a CTE body and offers the statements a body may contain. Both are
+    parenthesised positions with a governing clause, which is the point here:
+    neither is reached by the refusal.
     """
     assert offered('SELECT * FROM (') == ['users', 'orders', 'public']
-    assert offered('WITH a AS (') == []
+    assert 'SELECT' in offered('WITH a AS (')
     assert clause_at_end('WITH a AS (') == 'WITH'
 
 
