@@ -265,4 +265,16 @@ CASES: tuple[GoldenRequest, ...] = (
         clause='EXPLAIN',
         note='a wrapper: what it takes is a statement, so the statement starts belong here',
     ),
+    GoldenRequest(
+        sql='CALL ⌶',
+        kinds=('procedure', 'schema'),
+        clause='CALL',
+        note='a statement that invokes rather than evaluates',
+    ),
+    GoldenRequest(
+        sql="SELECT nextval('⌶",
+        kinds=('sequence',),
+        clause='SELECT',
+        note='a name inside a literal, because the server reads that literal as a regclass',
+    ),
 )

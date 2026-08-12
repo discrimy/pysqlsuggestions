@@ -53,14 +53,15 @@ CORPUS = (
     'SELECT a.id FROM billing.invoices AS a WHERE a.amount > 0',
 )
 
-UNJUDGEABLE = frozenset({Kind.FUNCTION, Kind.SNIPPET})
+UNJUDGEABLE = frozenset({Kind.FUNCTION, Kind.SNIPPET, Kind.PROCEDURE})
 """
 Kinds whose insertion is deliberately unfinished.
 
-A function arrives as `count()` with the caret between the parentheses, and a
-template as a shape with blanks in it. Both are illegal SQL on purpose, and
-Postgres reports them the same way it reports a genuinely misplaced token — so
-this harness cannot judge them and says so rather than guessing.
+A function arrives as `count()` with the caret between the parentheses, a
+procedure as `proc()` the same way, and a template as a shape with blanks in it.
+All are illegal SQL on purpose, and Postgres reports them the same way it
+reports a genuinely misplaced token — so this harness cannot judge them and says
+so rather than guessing.
 """
 
 KNOWN: frozenset[str] = frozenset()
@@ -104,9 +105,18 @@ def misplaced(connection: Any, sql: str) -> str:
     Postgres's complaint if `sql` has a token that cannot be there, else ''.
 
     Only queries can be checked this way. The parse happens by prefixing
-    `EXPLAIN`, and `EXPLAIN DROP TABLE t` is itself a syntax error — as is
-    `EXPLAIN EXPLAIN SELECT 1`. So `CORPUS` holds DML and nothing else, and the
-    DDL statement forms are covered by `tests/test_statement_forms.py` instead.
+    `EXPLAIN`, and `EXPLAIN DROP TABLE t` is itself a syntax error — as are
+    `EXPLAIN CALL p()` and `EXPLAIN EXPLAIN SELECT 1`. So `CORPUS` holds DML and
+    nothing else, and the other statement forms are covered by
+    `tests/test_statement_forms.py`, `tests/test_procedures.py` and
+    `tests/test_sequences.py` instead.
+
+    A caret inside a string literal is out of reach for a second reason:
+    `carets()` stops at each end of each space and at the end of the statement,
+    and a literal has neither. An entry for `nextval('…')` would be swept at
+    three positions, none of them the one under test, and would pass while
+    proving nothing — which is why the sequence-literal case is a direct test in
+    `test_backends.py` instead.
 
     The alternative would be executing DDL and rolling the savepoint back, which
     would cost this connection its one useful property: it parses, and never
