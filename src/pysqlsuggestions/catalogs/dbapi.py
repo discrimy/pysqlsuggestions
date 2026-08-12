@@ -145,6 +145,19 @@ class DbapiCatalog:
         rows = self._rows(self._dialect.catalog_queries.column_search, prefix)
         return [row for row in rows if isinstance(row, Column)][:limit]
 
+    def search_relations(self, prefix: str, limit: int) -> Sequence[Table]:
+        """
+        Relations matching `prefix` anywhere in the name, closest first, in any namespace.
+
+        Empty for an empty prefix, and empty when the dialect ships no query —
+        which is how Trino declines the capability without any code here knowing
+        that is what it is doing.
+        """
+        if not prefix:
+            return []
+        rows = self._rows(self._dialect.catalog_queries.relation_search, prefix)
+        return [row for row in rows if isinstance(row, Table)][:limit]
+
     def foreign_keys(self, schema: str | None = None) -> Sequence[ForeignKey]:
         """Declared relationships, when the dialect ships the query. Empty when it does not."""
         rows = self._rows(self._dialect.catalog_queries.foreign_keys, schema or '')

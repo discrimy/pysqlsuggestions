@@ -160,6 +160,29 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
+    # No `pg_table_is_visible` here: reaching past the search path is the whole
+    # point. The system-schema exclusion stays, because `pg_%` is not what
+    # anybody means by `FROM ord`. ORDER BY before LIMIT is the port's contract
+    # — the truncation happens before ranking sees the rows.
+    relation_search=Query(
+        sql="""
+            SELECT n.nspname, c.relname, c.relkind, c.reltuples
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
+              AND position(lower($1) in lower(c.relname)) > 0
+            ORDER BY position(lower($1) in lower(c.relname)), length(c.relname), n.nspname, c.relname
+            LIMIT 200
+        """,
+        row=lambda row: Table(
+            schema=str(row[0]),
+            name=str(row[1]),
+            kind=_RELKIND.get(str(row[2]), 'table'),
+            # -1 is "never analysed", which is not the same as empty.
+            rows=int(row[3]) if row[3] is not None and float(row[3]) >= 0 else None,
+        ),
+    ),
     foreign_keys=Query(
         sql="""
             SELECT n.nspname,

@@ -89,3 +89,17 @@ def test_the_foreign_key_row_mapper_builds_an_edge() -> None:
         ref_table='auth_user',
         ref_columns=('id',),
     )
+
+
+def test_only_the_affordable_backends_search_relations() -> None:
+    """
+    Trino declines on a measurement, not a principle.
+
+    One `information_schema` query per catalog costs ~179ms against the docker
+    fixture, and a real answer needs one per catalog. Postgres is 0.4-2.3ms and
+    ClickHouse 1.8-4.2ms over the same data.
+    """
+    assert POSTGRES.catalog_queries.relation_search is not None
+    assert CLICKHOUSE.catalog_queries.relation_search is not None
+    assert TRINO.catalog_queries.relation_search is None
+    assert ANSI.catalog_queries.relation_search is None
