@@ -138,6 +138,22 @@ def statement_at(tokens: Sequence[Token], caret: int) -> tuple[int, int]:
     return lo, len(tokens)
 
 
+def statement_has_begun(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> bool:
+    """
+    Whether a completed token precedes the caret in this statement.
+
+    The empty-editor answer — the words a statement may begin with — is right
+    only where a statement has not begun. After `DROP TABLE ` it proposed
+    `SELECT`, and accepting that wrote `DROP TABLE SELECT`: a wrong answer where
+    the engine simply did not recognise the form.
+
+    Completed is the load-bearing word. `SELEC<caret>` has a token before the
+    caret, but the caret is inside it — the word is still being typed, and the
+    position is still the one that offers `SELECT`.
+    """
+    return any(token.type not in _SKIP and token.end < caret for token in tokens[lo:hi])
+
+
 def qualifier_and_prefix(
     tokens: Sequence[Token],
     caret: int,

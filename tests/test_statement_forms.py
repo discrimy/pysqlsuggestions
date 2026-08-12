@@ -132,3 +132,65 @@ def test_a_ddl_statement_is_not_offered_query_clauses() -> None:
     found = offered('DROP TABLE users ')
     assert 'GROUP BY' not in found
     assert 'ORDER BY' not in found
+
+
+def test_an_unmodelled_form_offers_nothing() -> None:
+    """
+    A form the engine does not know is a position it has nothing true to say
+    about. It used to say `SELECT`.
+    """
+    assert offered('GRANT ') == []
+    assert offered('VACUUM ') == []
+    assert offered('CALL ') == []
+    assert offered('CREATE TABLE t (id ') == []
+
+
+def test_an_empty_editor_still_offers_the_statement_starts() -> None:
+    """The empty-editor answer is right exactly where a statement has not begun."""
+    assert 'SELECT' in offered('')
+    assert 'SELECT' in offered('   ')
+
+
+def test_a_half_typed_statement_keyword_still_completes() -> None:
+    """
+    `SELEC` has a token before the caret and is still the statement-start
+    position: the caret is *inside* that token, so the word is still being
+    typed. This is the whole reason the rule says `completed`.
+    """
+    assert 'SELECT' in offered('SELEC')
+
+
+def test_the_position_after_a_semicolon_is_a_fresh_statement() -> None:
+    """A statement that ended does not make the next one already begun."""
+    assert 'SELECT' in offered('SELECT id FROM users; ')
+    assert 'SELECT' in offered('SELECT id FROM users; SEL')
+
+
+def test_a_comment_does_not_begin_a_statement() -> None:
+    """Nor does whitespace. Neither is a token anything can be written after."""
+    assert 'SELECT' in offered('-- a note\n')
+    assert 'SELECT' in offered('/* a note */ ')
+
+
+def test_a_parenthesised_position_is_not_reached_by_the_rule() -> None:
+    """
+    A group has a governing clause, so `clause is None` is false and the refusal
+    never fires — worth pinning, because silencing one of these would be a far
+    worse regression than the bug being fixed.
+
+    `SELECT * FROM (` opens a derived table and offers relations. `WITH a AS (`
+    opens a CTE body and offers nothing, which it also did before this change:
+    the `WITH` clause declares no `suggests` and nothing declares it `follows`,
+    so the position has never had an answer. A separate gap, named here so the
+    next reader does not mistake it for this one.
+    """
+    assert offered('SELECT * FROM (') == ['users', 'orders', 'public']
+    assert offered('WITH a AS (') == []
+    assert clause_at_end('WITH a AS (') == 'WITH'
+
+
+def test_the_modelled_forms_survive_the_refusal() -> None:
+    """Both work only because they were modelled first; this is what says so."""
+    assert 'SELECT' in offered('EXPLAIN ')
+    assert 'users' in offered('DROP TABLE ')
+    assert offered('DROP ') == ['TABLE']
