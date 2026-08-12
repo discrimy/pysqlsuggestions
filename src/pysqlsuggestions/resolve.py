@@ -25,6 +25,7 @@ from pysqlsuggestions.ports import (
     SupportsColumnValues,
     SupportsForeignKeys,
     SupportsKeywords,
+    SupportsRelationSearch,
 )
 from pysqlsuggestions.types import (
     Candidate,
@@ -181,6 +182,18 @@ class _Reader:
             return everything
         return self._catalog.search_columns(prefix, limit)
 
+    def search_relations(self, prefix: str, limit: int) -> Sequence[Table]:
+        """
+        Relations matching `prefix` in any namespace.
+
+        Degrades to nothing when the catalog cannot answer, which is the
+        documented behaviour when SupportsRelationSearch is absent. Not cached:
+        the result depends on the prefix, which changes on every keystroke.
+        """
+        if not prefix or not isinstance(self._catalog, SupportsRelationSearch):
+            return ()
+        return self._catalog.search_relations(prefix, limit)
+
     def common_values(self, schema: str | None, table: str, column: str) -> Sequence[ColumnValue]:
         """
         Frequent values of one column, from the backend's planner statistics.
@@ -294,7 +307,17 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             ]
 
     if Kind.TABLE in request.kinds:
-        candidates += [_table_candidate(table) for table in reader.tables(None)]
+        listed = reader.tables(None)
+        candidates += [_table_candidate(table) for table in listed]
+        # A relation in the default namespace comes back from both calls, and
+        # the two render differently — `invoices` and `public.invoices` — so
+        # rank's dedupe, which keys on the rendered text, cannot collapse them.
+        here = {(table.schema, table.name) for table in listed}
+        candidates += [
+            _table_candidate(table, qualify=table.schema)
+            for table in reader.search_relations(request.prefix, limit)
+            if (table.schema, table.name) not in here
+        ]
         candidates += [
             Candidate(text=name, kind=Kind.CTE, detail='cte', origin='local') for name in (scope.ctes if scope else {})
         ]
@@ -717,9 +740,24 @@ def _column_candidate(
     )
 
 
-def _table_candidate(table: Table) -> Candidate:
+def _table_candidate(table: Table, qualify: str | None = None) -> Candidate:
+    """
+    One relation, qualified when a bare reference would not reach it.
+
+    `position` is the in-path preference and nothing subtler: rank charges 0.1
+    per step, which settles a tie between two equally good matches and is far
+    too small to outrank a better one. A relation you can write bare is worth
+    one step over one that costs a schema prefix — no more than that, or a
+    perfect match in another schema would lose to a poor match in this one.
+    """
     size = f' ~{_as_count(table.rows)} rows' if table.rows is not None else ''
-    return Candidate(text=table.name, kind=Kind.TABLE, detail=f'{table.schema}.{table.name} ({table.kind}){size}')
+    return Candidate(
+        text=table.name,
+        kind=Kind.TABLE,
+        detail=f'{table.schema}.{table.name} ({table.kind}){size}',
+        qualifier=qualify,
+        position=1 if qualify else 0,
+    )
 
 
 def _as_count(rows: int) -> str:
