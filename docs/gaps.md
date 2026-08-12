@@ -12,27 +12,7 @@ Ordered by value per unit of work, not by size.
 
 ---
 
-## 1. Relations outside the default namespace
-
-`FROM ord⌶` finds nothing when `orders` lives in a schema outside the search
-path. `resolve._unqualified` calls `reader.tables(None)`, which is the default
-namespace and only that, so an unqualified prefix can only ever reach what the
-search path already covers.
-
-Columns do not have this problem: `SupportsColumnSearch` exists precisely
-because `SELECT ema⌶` has no relation to look inside, and it returns the
-relation alongside the column so the FROM can be written. The same shape applied
-to relations — a prefix-scoped, server-bounded search across every visible
-schema — would answer this, and it would come back with the schema, so the
-insertion can qualify.
-
-Two hazards, both already understood elsewhere in this codebase. The result is
-prefix-dependent and so does not cache, which is why `SupportsColumnSearch` is a
-capability rather than a `Catalog` method. And a truncation happens before
-ranking sees the rows, so the adapter has to order by match quality, not storage
-order — `ports.py` carries that argument in full.
-
-## 2. Procedures and sequences
+## 1. Procedures and sequences
 
 `CALL ⌶` and `nextval('⌶')` are ordinary SQL and answer with nothing. The
 catalog knows functions and not much else: `Catalog.functions` is one method and
@@ -42,13 +22,13 @@ package.
 A sequence is the cheaper half — it is a name in a namespace, so it is a `Table`
 with a different `kind` in everything but spelling, and `pg_class` already
 reports it. A procedure needs a `Kind` and a position: `CALL` is a statement
-form this engine does not have, which makes it a dependency of gap 3 rather than
+form this engine does not have, which makes it a dependency of gap 2 rather than
 independent of it.
 
 Trino has neither, ClickHouse has no sequences, so this is largely a Postgres
 feature and should be built as one.
 
-## 3. Statement forms beyond DML
+## 2. Statement forms beyond DML
 
 `statement_start` is `SELECT`, `WITH`, `INSERT INTO`, `UPDATE`, `DELETE FROM`
 (`dialects/ansi.py:195`). Everything else — `CREATE`, `ALTER`, `DROP`, `GRANT`,
@@ -67,7 +47,7 @@ authoring, and a completion engine that knows `ALTER TABLE … ADD CONSTRAINT`
 well enough to be useful is a different size of thing than one that knows
 `SELECT`.
 
-## 4. History ranking
+## 3. History ranking
 
 Named in the v0.1 design as out of scope and still the honest answer to the
 problem `engine/joins.py` refuses to solve by inference. A join mined from
@@ -90,6 +70,16 @@ first in its key, and for the same reason.
 
 Kept rather than deleted, because a list whose entries only ever disappear tells
 a later reader nothing about what was decided.
+
+- **Relations outside the default namespace.** `FROM ord⌶` reaches a relation in
+  any visible schema and writes it qualified. Postgres and ClickHouse ship the
+  query; Trino does not, at 179ms per catalog.
+
+  This entry claimed columns did not have the problem. They did: `column_search`
+  filtered `pg_table_is_visible`, so `SELECT ema⌶` was as blind as `FROM ord⌶`,
+  and the FROM clause a searched column wrote dropped its schema. Both are fixed
+  here, and they had to be fixed together — lifting the filter alone would have
+  turned a missing answer into `FROM invoices`, which the server refuses.
 
 - **Star expansion.** `SELECT *⌶` offers the column list the star stands for, as
   one accept. A bare star expands qualified once more than one relation is in
@@ -138,7 +128,7 @@ not mistake them for oversights:
   and Combined next to Semantic because it could not retire the first. That is
   a migration artefact, not a feature.
 - **Join conditions inferred from column names.** Argued at length in
-  `engine/joins.py` and `ports.py`; the answer is gap 4, not a heuristic.
+  `engine/joins.py` and `ports.py`; the answer is gap 3, not a heuristic.
 - **AI anything.** Query execution, formatting, linting and full validation
   remain non-goals, and generating SQL from prose is further outside them than
   any of those.
