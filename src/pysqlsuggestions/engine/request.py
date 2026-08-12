@@ -326,7 +326,7 @@ def _kinds_for(
     """What the caret position admits, narrowed by any qualifier."""
     if not qualifier or expecting == 'type':
         return _clause_kinds(clause, scope, dialect, expecting, inside_a_group)
-    return _qualified_kinds(qualifier, scope, dialect)
+    return _qualified_kinds(qualifier, scope, dialect, clause)
 
 
 def _clause_kinds(
@@ -398,6 +398,7 @@ def _qualified_kinds(
     qualifier: tuple[str, ...],
     scope: Scope | None,
     dialect: Dialect,
+    clause: str | None = None,
 ) -> tuple[Kind, ...]:
     """
     Resolution order is alias first, then namespace.
@@ -411,9 +412,20 @@ def _qualified_kinds(
     The ambiguous Postgres `schema.table.column` case needs both readings, but
     that is a resolution concern rather than a kind one: each yields COLUMN, and
     which relation to fetch is resolve's problem.
+
+    A clause that names something other than a relation overrides the namespace
+    reading entirely, because that reading describes what a schema usually holds
+    and this clause is asking for something else in it.
     """
     if scope is not None and _names_a_relation(qualifier[0], scope):
         return (Kind.COLUMN,)
+
+    found = dialect.clauses.get(clause) if clause else None
+    named = tuple(kind for kind in (found.suggests if found else ()) if kind in _NOT_A_RELATION)
+    if named and len(qualifier) < len(dialect.namespace.levels):
+        # A clause naming something other than a relation keeps naming it past a
+        # dot. `CALL billing.` is a procedure in `billing`, never a column of it.
+        return named
 
     level = dialect.namespace.level_of(len(qualifier) + 1)
     if level is None:

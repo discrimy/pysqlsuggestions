@@ -151,3 +151,15 @@ def test_clickhouse_does_not_offer_a_statement_it_cannot_parse() -> None:
     assert CLICKHOUSE.clauses.get('CALL') is None
     assert 'CALL' in POSTGRES.statement_start
     assert 'CALL' in TRINO.statement_start
+
+
+def test_a_schema_qualifier_after_call_still_means_procedures() -> None:
+    """
+    `billing.` normally reads as a schema, whose usual contents are relations —
+    so the namespace rule answers with tables and columns. Neither can be
+    called, which makes it a wrong answer rather than a thin one.
+    """
+    found = offered('CALL public.')
+    assert 'archive_old_reports' in found
+    assert 'auth_user' not in found
+    assert 'id' not in found

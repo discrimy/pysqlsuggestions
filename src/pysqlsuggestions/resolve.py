@@ -248,6 +248,15 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
             names = {candidate.text for candidate in lifted}
             return lifted + [candidate for candidate in columns if candidate.text not in names]
 
+    if Kind.PROCEDURE in request.kinds:
+        # One namespace level up from a procedure is a schema, and that is the
+        # only reading — a procedure is not a member of a relation.
+        return [
+            _function_candidate(f, Kind.PROCEDURE)
+            for f in reader.functions(request.qualifier[-1])
+            if f.kind == 'procedure'
+        ]
+
     if Kind.COLUMN in request.kinds and len(request.qualifier) >= len(dialect.namespace.levels):
         # schema.table.<caret> — the deepest reading is a column of that relation.
         schema, table = request.qualifier[-2], request.qualifier[-1]
