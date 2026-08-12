@@ -344,10 +344,15 @@ carried — then render:
 
 One `Candidate`, with `literal=True` so `_render` inserts it verbatim (§1,
 rejected approaches) and `span=request.star`. Its `text` is the joined list;
-`label` is `expand *` or `expand u.*`, spelled from what the author actually
-wrote, because a list a hundred characters wide is not a thing to show in a
-completion popup; `detail` is `3 columns of users`, or `7 columns of users,
-orders` when the star stands for more than one relation.
+`label` is `expand *`, because a list a hundred characters wide is not a thing
+to show in a completion popup; `detail` is `3 columns of users`, or `7 columns
+of users, orders` when the star stands for more than one relation.
+
+The label does not distinguish `*` from `u.*`. It could only do so by carrying
+the star's spelling down as a third field, and `star_of` cannot stand in for it:
+a qualified star and a bare star over a single-relation FROM both name exactly
+one relation. The detail names that relation, which is the part a reader of the
+list cannot already see.
 
 A relation the catalog cannot answer for contributes nothing. If that empties
 the whole list, no candidate is emitted — an expansion to zero columns is worse
