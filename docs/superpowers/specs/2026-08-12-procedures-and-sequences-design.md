@@ -391,10 +391,37 @@ ships with this library, which is disqualifying.
 
 ### Golden corpus
 
-`CALL ⌶` and `SELECT nextval('⌶` join `tests/corpus/cases.py`. Both are
-`EXPLAIN`-able, unlike the DDL that could not go into the acceptance sweep last
-slice — so `DROP SEQUENCE ⌶` stays out of it for the reason already recorded in
-`misplaced()`'s docstring.
+`CALL ⌶` and `SELECT nextval('⌶` join `tests/corpus/cases.py`, which asserts
+requests and never touches a server.
+
+**Corrected twice during planning**, and neither correction is a detail.
+
+First: this section claimed both were fit for the acceptance sweep. `CALL` is
+not — `EXPLAIN CALL probe_proc()` is `syntax error at or near "CALL"`, exactly
+as `EXPLAIN DROP TABLE t` was last slice.
+
+Second, and the one that actually decides this: **the acceptance sweep cannot
+reach a caret inside a literal at all.** Its `carets()` generator stops at each
+end of each space and at the end of the statement, and a string literal has
+neither. `SELECT nextval('auth_user_id_seq')` would be swept at offsets 6, 7 and
+the end — none of them the position under test. The entry would pass while
+proving nothing, which is worse than no entry.
+
+So **nothing joins the acceptance `CORPUS`.** The literal position gets a direct
+integration test instead, of the shape
+`test_postgres_reaches_a_relation_off_the_search_path` already uses: complete,
+apply, then have the server plan the result. That is the only thing that can
+prove `nextval('billing."MonthlyTotals_id_seq"')` runs where the unquoted
+spelling does not — which is the fact this whole half of the design rests on.
+
+`misplaced()`'s docstring is still extended to name `CALL` beside the DDL, so
+the next person to reach for the sweep meets the rule rather than rediscovering
+it.
+
+`Kind.PROCEDURE` joins `UNJUDGEABLE` in the same file, for the identical reason
+`Kind.FUNCTION` is there: a procedure arrives as `proc()` with the caret between
+the parentheses, which is illegal SQL on purpose and which the harness would
+otherwise report as a misplaced token.
 
 ### Integration
 
