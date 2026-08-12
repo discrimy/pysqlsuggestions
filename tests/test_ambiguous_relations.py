@@ -91,3 +91,23 @@ def test_aliases_are_not_a_collision() -> None:
 def test_one_relation_is_untouched() -> None:
     """The constraint the whole design is shaped around: no collision, no change."""
     assert offered('SELECT amou FROM billing.invoices', caret=11) == ['invoices.amount']
+
+
+def test_a_star_over_two_same_named_relations_names_both() -> None:
+    """
+    Today this expands to `invoices.amount, invoices.id, invoices.amount,
+    invoices.period` — every reference ambiguous, and `amount` written twice
+    because the two relations render identically.
+    """
+    sql = f'SELECT * {BOTH}'
+    [found] = [s for s in complete(sql, 8, POSTGRES, catalog()) if s.kind is Kind.EXPANSION]
+    assert found.text == (
+        'public.invoices.amount, public.invoices.id, billing.invoices.amount, billing.invoices.period'
+    )
+
+
+def test_a_star_over_one_relation_is_untouched() -> None:
+    """No collision, no change — a one-relation star still expands bare."""
+    sql = 'SELECT * FROM billing.invoices'
+    [found] = [s for s in complete(sql, 8, POSTGRES, catalog()) if s.kind is Kind.EXPANSION]
+    assert found.text == 'amount, period'

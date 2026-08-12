@@ -585,6 +585,11 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     column needs its own — so expanding bare there would not simplify the
     reference, it would delete it.
 
+    Two relations sharing a label are named in full, for the reason an ordinary
+    reference is — and it fixes a second fault here. Rendering both as
+    `invoices` made a star over them emit `invoices.amount` twice, so the list
+    was not merely ambiguous but wrong about how many columns it had.
+
     Rendered here rather than in `rank` because the result is not an identifier.
     `literal` carries it through untouched, which makes quoting each name this
     function's job for the same reason it is `joins.py`'s — and `snippet` would
@@ -593,13 +598,15 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     """
     relations = request.star_of
     qualify = request.star_qualifier is not None or len(relations) > 1
+    ambiguous = _ambiguous_labels(relations)
     seen: set[tuple[str, ...]] = set()
     names: list[str] = []
     for relation in relations:
-        label = relation.label if qualify else ''
+        path = _qualifier_for(relation, ambiguous) if qualify else ()
+        prefix = '.'.join(quote_if_needed(part, dialect) for part in path)
         for column in _columns_of(relation, reader, seen):
             rendered = quote_if_needed(column.text, dialect)
-            names.append(f'{quote_if_needed(label, dialect)}.{rendered}' if label else rendered)
+            names.append(f'{prefix}.{rendered}' if prefix else rendered)
     if not names:
         # An expansion to nothing would delete the star and leave `SELECT  FROM t`.
         return []
