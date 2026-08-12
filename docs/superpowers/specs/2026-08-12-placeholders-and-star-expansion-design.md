@@ -298,6 +298,9 @@ The relations that star stands for. Empty when it stands for none.
 """
 ```
 
+A third field, `star_qualifier: str | None`, records the label written left of
+the dot. See §4.5 for why it cannot be inferred from `star_of`.
+
 `star_of` is computed the way `_output_of` already computes `Projection.stars`:
 filter the scope's relations by label when the star is qualified, take them all
 when it is not. `Projection.stars` cannot be reused directly — it holds every
@@ -338,21 +341,30 @@ carried — then render:
 
 - Each name through `quote_if_needed`, as `joins.py` does.
 - Qualified with the relation's `label` when `len(star_of) > 1`, bare when it is
-  one, per §1 decision 3. A qualified star is one relation by construction, so
-  `u.*` expands to `u.id, u.name, u.email` through the same rule.
+  one, per §1 decision 3 — **or** when the author qualified the star themselves.
+
+  That second clause was missing from the first draft of this section, which
+  claimed `u.*` qualified "through the same rule". It does not: a qualified star
+  covers exactly one relation, so the more-than-one test never fires. And
+  because the span covers the `u.` as well as the star, expanding bare there did
+  not simplify the reference — it deleted it, turning `SELECT u.*` into
+  `SELECT id, name, email`. Implementation caught it; the tests are
+  `test_a_qualified_star_expands_its_own_relation_qualified` and
+  `test_accepting_a_qualified_star_replaces_the_qualifier_too`.
 - Joined with `', '`.
 
 One `Candidate`, with `literal=True` so `_render` inserts it verbatim (§1,
 rejected approaches) and `span=request.star`. Its `text` is the joined list;
-`label` is `expand *`, because a list a hundred characters wide is not a thing
-to show in a completion popup; `detail` is `3 columns of users`, or `7 columns
-of users, orders` when the star stands for more than one relation.
+`label` is `expand *` or `expand u.*` — the star as the author wrote it, because
+a list a hundred characters wide is not a thing to show in a completion popup;
+`detail` is `3 columns of users`, or `7 columns of users, orders` when the star
+stands for more than one relation.
 
-The label does not distinguish `*` from `u.*`. It could only do so by carrying
-the star's spelling down as a third field, and `star_of` cannot stand in for it:
-a qualified star and a bare star over a single-relation FROM both name exactly
-one relation. The detail names that relation, which is the part a reader of the
-list cannot already see.
+Distinguishing the two spellings needs a third `Request` field, `star_qualifier`,
+because `star_of` cannot stand in: a qualified star and a bare star over a
+single-relation FROM both name exactly one relation. That field is carried for
+the correctness reason above rather than for the label; the label is what it
+also buys.
 
 A relation the catalog cannot answer for contributes nothing. If that empties
 the whole list, no candidate is emitted — an expansion to zero columns is worse
