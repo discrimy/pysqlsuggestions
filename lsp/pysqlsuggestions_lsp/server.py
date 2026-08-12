@@ -22,6 +22,7 @@ not be tested without standing up a client handshake for every case.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -41,6 +42,7 @@ from pysqlsuggestions import complete
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.registry import named
+from pysqlsuggestions.types import Suggestion
 from pysqlsuggestions_lsp import __version__
 from pysqlsuggestions_lsp.connections import Connect, Profile, open_catalog
 from pysqlsuggestions_lsp.convert import to_item
@@ -85,6 +87,20 @@ class Session:
     _catalog: Any = None
     _tried: bool = False
     _announced: bool = False
+    _lock: threading.RLock = field(default_factory=threading.RLock)
+    """
+    Serialises everything that touches the catalog or the state around it.
+
+    Reentrant because `catalog()` and `degrade()` are public and are also
+    reached from inside the locked region — a plain lock would deadlock the
+    first time a read failed.
+
+    Wider than correctness strictly needs: the read itself is serialised too.
+    All three bundled drivers report DB-API `threadsafety=2`, so concurrent
+    reads on one connection are permitted — but they buy almost nothing here,
+    since completions are latest-wins and the cache makes the second read
+    instant, and not depending on three third-party contracts is worth the line.
+    """
 
     @property
     def dialect(self) -> Dialect:
@@ -105,16 +121,21 @@ class Session:
 
         Building it opens nothing — `open_catalog` defers the connection to the
         first read — so this is cheap and stays out of `initialize`.
+
+        Locked because it is public and reads `_tried` before writing it: two
+        callers arriving together would both build one, and the loser's
+        connection would be dropped without being closed.
         """
-        if self._tried or self.profile is None:
+        with self._lock:
+            if self._tried or self.profile is None:
+                return self._catalog
+            self._tried = True
+            try:
+                self._catalog = open_catalog(self.profile, connect=self.connect)
+            except Exception as error:  # noqa: BLE001
+                log.exception('could not build a catalog; completing from the statement alone')
+                self.degrade(str(error) or error.__class__.__name__)
             return self._catalog
-        self._tried = True
-        try:
-            self._catalog = open_catalog(self.profile, connect=self.connect)
-        except Exception as error:  # noqa: BLE001
-            log.exception('could not build a catalog; completing from the statement alone')
-            self.degrade(str(error) or error.__class__.__name__)
-        return self._catalog
 
     def degrade(self, why: str) -> None:
         """
@@ -127,11 +148,12 @@ class Session:
         Announced once for the same reason — this is a state change, not a
         running commentary on every keystroke that follows it.
         """
-        self._catalog = None
-        self._tried = True
-        if self.on_degrade is not None and not self._announced:
-            self._announced = True
-            self.on_degrade(why)
+        with self._lock:
+            self._catalog = None
+            self._tried = True
+            if self.on_degrade is not None and not self._announced:
+                self._announced = True
+                self.on_degrade(why)
 
     def suggest(self, text: str, offset: int) -> list[CompletionItem]:
         """
@@ -144,20 +166,39 @@ class Session:
         statement, base = statement_at(text, caret, dialect.syntax)
         starts = line_starts(text)
         within = caret - base
-        try:
-            suggestions = complete(
-                statement,
-                within,
-                dialect,
-                self.catalog(),
-                cache=self.cache,
-                identity=self.profile.user if self.profile else None,
-            )
-        except Exception as error:  # noqa: BLE001
-            log.exception('the catalog failed; completing from the statement alone')
-            self.degrade(str(error) or error.__class__.__name__)
+        suggestions = self._from_catalog(statement, within, dialect)
+        if suggestions is None:
+            # Outside the lock, deliberately: a read that failed must not hold
+            # it while answering without one.
             suggestions = complete(statement, within, dialect)
         return [to_item(statement, base, starts, s, index, dialect) for index, s in enumerate(suggestions)]
+
+    def _from_catalog(self, statement: str, within: int, dialect: Dialect) -> list[Suggestion] | None:
+        """
+        Suggestions read through the catalog, or None to complete without one.
+
+        None covers all three ways there is nothing to read through: no profile,
+        a dialect with no bundled driver, and a read that just failed. The
+        caller answers from the statement alone in each case, which is the
+        library's documented degradation and a useful answer.
+        """
+        with self._lock:
+            catalog = self.catalog()
+            if catalog is None:
+                return None
+            try:
+                return complete(
+                    statement,
+                    within,
+                    dialect,
+                    catalog,
+                    cache=self.cache,
+                    identity=self.profile.user if self.profile else None,
+                )
+            except Exception as error:  # noqa: BLE001
+                log.exception('the catalog failed; completing from the statement alone')
+                self.degrade(str(error) or error.__class__.__name__)
+                return None
 
 
 class SqlServer(LanguageServer):

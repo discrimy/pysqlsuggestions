@@ -12,6 +12,9 @@ handshake — `server.workspace` does not exist until a client has initialized.
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
 from lsprotocol.types import INITIALIZE, TEXT_DOCUMENT_COMPLETION
@@ -173,3 +176,93 @@ def test_degrading_is_announced_once_not_per_keystroke() -> None:
     session.suggest(WITH_CTE, len(WITH_CTE))
     session.suggest(WITH_CTE, len(WITH_CTE))
     assert len(told) == 1
+
+
+def slow_refusal(attempts: list[Profile]) -> Callable[[Profile], Any]:
+    """
+    A database that takes its time and then refuses, recording each attempt.
+
+    The delay is what makes the race reachable: without it the threads arrive
+    one after another and the check-then-set windows never overlap.
+    """
+
+    def connect(profile: Profile) -> Any:
+        attempts.append(profile)
+        time.sleep(0.05)
+        message = 'connection refused'
+        raise OSError(message)
+
+    return connect
+
+
+def concurrently(session: Session, workers: int = 8) -> list[list[str]]:
+    """
+    Drive `workers` completions through one session, released together.
+
+    A barrier rather than staggered starts: the point is that they overlap, and
+    a test that only sometimes overlaps only sometimes tests anything.
+    """
+    ready = threading.Barrier(workers)
+    guard = threading.Lock()
+    found: list[list[str]] = []
+
+    def run() -> None:
+        ready.wait()
+        answer = labels(session, WITH_CTE)
+        with guard:
+            found.append(answer)
+
+    threads = [threading.Thread(target=run) for _ in range(workers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return found
+
+
+def refusing_session(attempts: list[Profile], told: list[str]) -> Session:
+    """A session pointed at a database that will refuse, with both counters wired."""
+    return Session(
+        profile=Profile(dialect='postgres', host='nowhere'),
+        connect=slow_refusal(attempts),
+        on_degrade=told.append,
+    )
+
+
+def test_one_connection_is_opened_however_many_carets_arrive_at_once() -> None:
+    """
+    Two threads both finding the connection unopened both open one, and only
+    one is kept — the other is leaked, still holding a session on the server.
+    """
+    attempts: list[Profile] = []
+    concurrently(refusing_session(attempts, []))
+    assert len(attempts) == 1
+
+
+def test_degrading_is_announced_once_however_many_carets_arrive_at_once() -> None:
+    """
+    The notification is a state change, not a running commentary.
+
+    A regression guard rather than a demonstration, and honestly labelled as
+    one: this passes without the lock too. `_announced` is read and written by
+    two adjacent operations with no I/O between them, and CPython switches
+    threads every 5ms by default, so losing that race takes a preemption in a
+    window microseconds wide. Measured at eight concurrent carets it never
+    happened, where the connection race lost every single time.
+
+    Kept because the invariant is worth pinning: whatever the lock does, this
+    must stay at one.
+    """
+    told: list[str] = []
+    concurrently(refusing_session([], told))
+    assert len(told) == 1
+
+
+def test_every_concurrent_caret_still_gets_an_answer() -> None:
+    """
+    The guard on serialising: waiting for the lock must not turn a slow answer
+    into no answer. Every one of them still finds the CTE the statement names.
+    """
+    found = concurrently(refusing_session([], []))
+    assert len(found) == 8  # noqa: PLR2004
+    assert all('recent' in answer for answer in found)
