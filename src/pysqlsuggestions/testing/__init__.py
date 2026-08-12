@@ -122,8 +122,9 @@ class DialectConformance:
             (OTHER, 'archived_orders'): list(ORDERS),
             (OTHER, 'users'): list(USERS),
             (SCHEMA, SEQUENCE): [('last_value', 'bigint')],
+            (SCHEMA, 'users_active'): list(USERS),
         }
-        kinds = {(SCHEMA, SEQUENCE): 'sequence'}
+        kinds = {(SCHEMA, SEQUENCE): 'sequence', (SCHEMA, 'users_active'): 'view'}
         # `order_count` rather than `total`: the fixture already has a column
         # called `total`, and a forbid clause that could be satisfied by the
         # wrong thing proves nothing.
@@ -259,6 +260,24 @@ class DialectConformance:
                     sql=f"SELECT {declared.function}('orders",
                     expect=(SEQUENCE,),
                     forbid=('orders',),
+                ),
+            )
+        # Found by what the clause declares rather than by the name `DROP VIEW`,
+        # and asserting the fixture relation of that kind — so the case tests
+        # the dialect's own claim against the catalog it will really read.
+        narrowed = next((c for c in dialect.clauses.clauses if c.relation_kinds == ('view',)), None)
+        if narrowed is not None:
+            cases.append(
+                Case(
+                    # A prefix, and one both the table and the view match. A
+                    # three-level fixture has no default namespace — `tables(None)`
+                    # is empty there, as against a real Trino — so an empty prefix
+                    # would answer with catalogs. `users` also keeps the forbid
+                    # live: the table is what this clause must not offer.
+                    name='a clause narrowed to view kinds offers only those',
+                    sql=f'{narrowed.name} users',
+                    expect=('users_active',),
+                    forbid=('users',),
                 ),
             )
         # Found by what the clause declares rather than by the name `WITH`, so a
