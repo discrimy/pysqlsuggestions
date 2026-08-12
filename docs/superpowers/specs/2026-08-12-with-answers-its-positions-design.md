@@ -173,9 +173,24 @@ whole answer" case is already served. No change to `_keywords` or
 
 | | body (`opens_a_group`) | after the list (`followed_by`) |
 |---|---|---|
-| ANSI | `SELECT`, `VALUES`, `WITH` | `AS`, `SELECT`, `VALUES` |
+| ANSI | `SELECT`, `VALUES`, `WITH` | `AS`, `SELECT` |
 | Postgres | + `INSERT INTO`, `UPDATE`, `DELETE FROM` | + `INSERT INTO`, `UPDATE`, `DELETE FROM` |
 | ClickHouse, Trino | inherited | inherited |
+
+**`VALUES` is in the body list and not the follows list**, and that asymmetry is
+not a judgement — it is what the clause model does. `VALUES` declares
+`statements={'INSERT INTO'}`, and at `WITH a AS (…) ⌶` the statement form is
+reported as `WITH`, so `ClauseModel.continuations` filters it out. Both facts
+verified rather than reasoned about.
+
+`WITH a AS (…) VALUES (1)` does plan, so this is a missing answer. Making it
+appear would mean widening `VALUES.statements` to include `WITH` — a change to
+`INSERT INTO`'s model to reach a caret almost nobody types. Left alone, and
+recorded here so the next reader does not think it was overlooked.
+
+The body list does not go through that filter: the rule in §4 returns
+`opens_a_group` directly, which is why `VALUES` survives there — and it matters
+there, since a `VALUES` body is the ordinary way to write a literal table.
 
 ClickHouse inherits the conservative list because it refuses `INSERT` in a body,
 and that refusal is the reason the extension lives in Postgres rather than in
