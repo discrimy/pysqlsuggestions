@@ -450,11 +450,16 @@ def test_bare_select_uses_column_search_when_supported() -> None:
     With the capability, columns are offered before any FROM clause exists —
     named by the relation they would need, because choosing one is choosing
     that relation too.
+
+    Schema included. This asserted `('auth_user',)` until the column search was
+    allowed past the search path, at which point a bare relation name was no
+    longer enough to reach what had been found: `FROM invoices` is a clause
+    Postgres refuses with `relation "invoices" does not exist`.
     """
     assert 'auth_user.username' in texts('SELECT userna⌶')
     sql, caret = split_caret('SELECT userna⌶')
     found = next(s for s in complete(sql, caret, POSTGRES, catalog()) if s.kind is Kind.COLUMN)
-    assert found.relation == ('auth_user',), 'and it says which, so insertion can write the FROM'
+    assert found.relation == ('public', 'auth_user'), 'and it says which, so insertion can write the FROM'
 
 
 @pytest.mark.parametrize(

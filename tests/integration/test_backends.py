@@ -110,6 +110,55 @@ def test_postgres_functions(postgres_catalog: DbapiCatalog) -> None:
     assert 'now' in names
 
 
+def test_postgres_reaches_a_relation_off_the_search_path(postgres_catalog: DbapiCatalog) -> None:
+    """
+    `billing` is not on the fixture's search path, so `FROM invo` used to find nothing.
+
+    The written statement is planned by the server, because a qualified
+    reference that does not resolve is the failure this exists to prevent.
+    """
+    psycopg2 = pytest.importorskip('psycopg2')
+    sql = 'SELECT * FROM invo'
+    [found] = [s for s in complete(sql, len(sql), POSTGRES, postgres_catalog) if s.text == 'billing.invoices']
+    written = apply_suggestion(sql, found, dialect=POSTGRES)[0]
+    assert written == 'SELECT * FROM billing.invoices'
+
+    connection = psycopg2.connect(POSTGRES_DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(f'EXPLAIN {written}')
+    finally:
+        connection.close()
+
+
+def test_postgres_reaches_a_column_off_the_search_path(postgres_catalog: DbapiCatalog) -> None:
+    """The column half of the same gap, and the FROM clause it writes for itself."""
+    psycopg2 = pytest.importorskip('psycopg2')
+    sql = 'SELECT amou'
+    found = [s for s in complete(sql, len(sql), POSTGRES, postgres_catalog) if s.relation == ('billing', 'invoices')]
+    assert found, 'no column from billing.invoices was offered'
+    written = apply_suggestion(sql, found[0], dialect=POSTGRES)[0]
+
+    connection = psycopg2.connect(POSTGRES_DSN)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(f'EXPLAIN {written}')
+    finally:
+        connection.close()
+
+
+def test_trino_is_unchanged(trino_catalog: DbapiCatalog) -> None:
+    """
+    Trino ships no relation-search query — 179ms per catalog is not a keystroke.
+
+    Asserted rather than assumed, because "we chose not to" and "we broke it"
+    look identical from the outside.
+    """
+    assert TRINO.catalog_queries.relation_search is None
+    found = suggest('SELECT * FROM postgresql.public.reports_repo⌶', TRINO, trino_catalog)
+    assert 'reports_report' in found
+
+
 def test_postgres_accepts_an_expanded_star(postgres_catalog: DbapiCatalog) -> None:
     """
     The one thing only a server can settle: that the list we write is a query it runs.
@@ -183,6 +232,14 @@ def test_clickhouse_functions_are_introspected(clickhouse_catalog: DbapiCatalog)
     names = {f.name for f in clickhouse_catalog.functions()}
     assert 'toYYYYMM' in names
     assert len(names) > 100
+
+
+def test_clickhouse_reaches_a_relation_in_another_database(clickhouse_catalog: DbapiCatalog) -> None:
+    """The connection is opened on `analytics`; `staging` is a database it does not default to."""
+    sql = 'SELECT * FROM report_exec'
+    found = [s.text for s in complete(sql, len(sql), CLICKHOUSE, clickhouse_catalog)]
+    assert 'report_executions' in found, 'the default database must still answer bare'
+    assert 'staging.report_executions' in found, 'the other database must be reachable qualified'
 
 
 # --------------------------------------------------------------------------- #

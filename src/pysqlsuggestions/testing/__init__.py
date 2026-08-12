@@ -35,6 +35,13 @@ USERS = (('id', 'integer'), ('email', 'varchar'), ('is_staff', 'boolean'))
 ORDERS = (('id', 'integer'), ('user_id', 'integer'), ('total', 'numeric'))
 
 SCHEMA = 'shop'
+OTHER = 'vault'
+"""
+A second namespace, deliberately off the search path.
+
+Without a relation the bare position cannot see, no case can tell a dialect
+that searches from one that only lists.
+"""
 CATALOG = 'main'
 
 
@@ -71,11 +78,21 @@ class DialectConformance:
 
     @staticmethod
     def catalog(dialect: Dialect) -> MemoryCatalog:
-        """A fixture shaped to this dialect's namespace depth."""
-        snapshot = {(SCHEMA, 'users'): list(USERS), (SCHEMA, 'orders'): list(ORDERS)}
+        """
+        A fixture shaped to this dialect's namespace depth.
+
+        `OTHER` sits outside the search path on purpose: a relation the bare
+        position cannot see is the only way a case can tell a dialect that
+        searches from one that merely lists.
+        """
+        snapshot = {
+            (SCHEMA, 'users'): list(USERS),
+            (SCHEMA, 'orders'): list(ORDERS),
+            (OTHER, 'archived_orders'): list(ORDERS),
+        }
         if len(dialect.namespace.levels) >= 3:  # noqa: PLR2004
-            return MemoryCatalog(snapshot, catalogs={CATALOG: [SCHEMA]})
-        return MemoryCatalog(snapshot)
+            return MemoryCatalog(snapshot, catalogs={CATALOG: [SCHEMA, OTHER]})
+        return MemoryCatalog(snapshot, search_path=(SCHEMA,))
 
     @staticmethod
     def reference(dialect: Dialect, table: str) -> str:
@@ -162,6 +179,14 @@ class DialectConformance:
                     name='a caret inside a bound parameter offers no columns',
                     sql=f'SELECT * FROM {users} AS u WHERE u.is_staff = {spelled}',
                     forbid=('is_staff',),
+                ),
+            )
+        if dialect.catalog_queries.relation_search is not None:
+            cases.append(
+                Case(
+                    name='a prefix reaches a relation outside the search path',
+                    sql='SELECT * FROM archiv',
+                    expect=('archived_orders',),
                 ),
             )
         # A dotted path narrows one level per segment, however many there are.

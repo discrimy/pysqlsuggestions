@@ -42,6 +42,7 @@ class MemoryCatalog:
         table_kinds: Mapping[tuple[str, str], str] | None = None,
         table_rows: Mapping[tuple[str, str], int] | None = None,
         catalogs: Mapping[str, Sequence[str]] | None = None,
+        search_path: Sequence[str] | None = None,
         foreign_keys: Iterable[ForeignKey] = (),
         oversized: bool = False,
     ) -> None:
@@ -71,6 +72,15 @@ class MemoryCatalog:
         self._functions = tuple(functions)
         self._keywords = tuple(keywords)
         self._catalogs = {name: tuple(schemas) for name, schemas in (catalogs or {}).items()}
+        self._search_path = tuple(search_path) if search_path is not None else None
+        """
+        Schemas a bare relation reference reaches, or None for all of them.
+
+        None keeps the fixture's original behaviour — every schema visible —
+        because that is what every existing test assumes. Given a value, this
+        models the one thing a snapshot otherwise cannot: a relation that exists
+        and that `FROM <caret>` does not offer.
+        """
         self._values = {
             key: tuple(v if isinstance(v, ColumnValue) else ColumnValue(text=v) for v in found)
             for key, found in (values or {}).items()
@@ -101,15 +111,20 @@ class MemoryCatalog:
         """
         Relations in `schema`.
 
-        With None and two levels, every relation in the snapshot. With three
-        there is no useful default: a bare position wants catalogs, and
-        enumerating every relation of every catalog is what the live Trino
-        adapter declines to do for the same reason.
+        With None and two levels, whatever `search_path` covers — every relation
+        in the snapshot when there is none. With three levels there is no useful
+        default: a bare position wants catalogs, and enumerating every relation
+        of every catalog is what the live Trino adapter declines to do for the
+        same reason.
         """
         self.calls.append(('tables', schema or ''))
-        if schema is None:
-            return [] if self._catalogs else list(self._tables)
-        return [t for t in self._tables if t.schema == schema]
+        if schema is not None:
+            return [t for t in self._tables if t.schema == schema]
+        if self._catalogs:
+            return []
+        if self._search_path is None:
+            return list(self._tables)
+        return [t for t in self._tables if t.schema in self._search_path]
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """
@@ -155,6 +170,22 @@ class MemoryCatalog:
             column for columns in self._columns.values() for column in columns if rank.matches(column.name, folded)
         ]
         found.sort(key=lambda column: (not column.name.lower().startswith(folded), len(column.name), column.name))
+        return found[:limit]
+
+    def search_relations(self, prefix: str, limit: int) -> Sequence[Table]:
+        """
+        The `limit` relations matching `prefix` most closely, in any schema.
+
+        Ordered before truncating, which is the port's contract: `limit` rows in
+        storage order can leave `orders` behind twenty `orders_variant_NNN`, and
+        nothing downstream can recover a row that was never fetched.
+        """
+        self.calls.append(('search_relations', prefix))
+        if not prefix:
+            return []
+        folded = prefix.lower()
+        found = [table for table in self._tables if rank.matches(table.name, folded)]
+        found.sort(key=lambda table: (not table.name.lower().startswith(folded), len(table.name), table.name))
         return found[:limit]
 
     def common_values(self, schema: str | None, table: str, column: str, limit: int) -> Sequence[ColumnValue]:

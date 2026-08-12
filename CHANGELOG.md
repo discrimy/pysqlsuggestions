@@ -6,6 +6,39 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A name is found wherever it lives, not only where the search path looks
+
+`FROM invo⌶` found nothing when `invoices` lived in a schema the connection does
+not default to. It now finds it and writes `billing.invoices`. Matching still
+runs against the bare name, so typing `invo` — or `voic` — reaches it; the schema
+is about what gets inserted, not what you have to type.
+
+A relation you can write bare ranks above one that needs a schema prefix, by a
+margin small enough that a better name match still wins.
+
+The same gap had a second half nobody had noticed. `SELECT amou⌶` was equally
+blind, because the column-search query filtered on visibility too — and the
+`FROM` clause a searched column wrote dropped its schema, so lifting that filter
+alone would have produced `FROM invoices`, which the server refuses. Both are
+fixed: `SELECT amou⌶` now writes `SELECT invoices.amount FROM billing.invoices`.
+
+Optional, and per backend, because the cost is what decides it:
+
+| backend | ships it | measured against the docker fixture |
+| --- | --- | --- |
+| PostgreSQL | yes | 0.4–2.3 ms over 228 relations |
+| ClickHouse | yes | 1.8–4.2 ms, and it reaches another database |
+| Trino | no | 179 ms for *one* catalog's `information_schema` |
+
+An empty prefix searches nothing: `FROM ⌶` is not a request for every relation
+in the database.
+
+**One known limitation.** Two columns with the same name, in same-named tables,
+in different schemas still collapse to a single suggestion — ranking dedupes on
+the text to be inserted, and both render `invoices.amount`. Telling them apart
+needs a qualifier that can hold a path rather than a name, which is not in this
+change.
+
 ### `SELECT *` expands to the columns it stands for
 
 Put the caret directly on a star and the top suggestion is the column list,

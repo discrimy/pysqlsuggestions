@@ -85,6 +85,36 @@ class SupportsColumnSearch(Protocol):
 
 
 @runtime_checkable
+class SupportsRelationSearch(Protocol):
+    """
+    Relations by name across every visible namespace — `FROM ord<caret>` where
+    `orders` lives outside the search path.
+
+    Absent: that position offers the default namespace and nothing else, which
+    is what it offered before this existed.
+    """
+
+    def search_relations(self, prefix: str, limit: int) -> Sequence[Table]:
+        """
+        The `limit` relations matching `prefix` most closely, in any namespace.
+
+        Empty for an empty prefix. `FROM <caret>` is not a request for every
+        relation in the database, and answering it as one is the query a
+        completion engine must not make.
+
+        Prefix-dependent, so unlike `Catalog.tables` it does not cache — which
+        is why this is a capability and not a fifth `Catalog` method.
+
+        Most closely, not merely the first found: the truncation happens before
+        ranking sees the rows, so an adapter returning storage order can hide an
+        exact match behind two hundred near-misses. `Table.schema` travels with
+        each row, because a relation the search path does not cover has to be
+        written qualified.
+        """
+        ...
+
+
+@runtime_checkable
 class SupportsColumnValues(Protocol):
     """
     The values a column frequently holds, for the right side of a comparison.

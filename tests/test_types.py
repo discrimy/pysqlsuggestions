@@ -6,6 +6,8 @@ import dataclasses
 
 import pytest
 
+from pysqlsuggestions.dialects.base import CatalogQueries
+from pysqlsuggestions.ports import SupportsRelationSearch
 from pysqlsuggestions.types import Kind, Projection, Relation, Request, Scope
 
 
@@ -63,3 +65,21 @@ def test_scope_nests() -> None:
     outer = Scope(relations=(Relation(alias='o', path=('orders',), source='table'),))
     inner = Scope(relations=(), parent=outer)
     assert inner.parent is outer
+
+
+def test_relation_search_is_detected_structurally() -> None:
+    """A capability is recognised by shape, so an adapter need not import the protocol."""
+
+    class Answers:
+        def search_relations(self, prefix: str, limit: int) -> list[object]:
+            """Enough of the shape to be recognised."""
+            del prefix, limit
+            return []
+
+    assert isinstance(Answers(), SupportsRelationSearch)
+    assert not isinstance(object(), SupportsRelationSearch)
+
+
+def test_a_dialect_may_ship_no_relation_search() -> None:
+    """The slot is optional, which is how Trino and ANSI decline it."""
+    assert CatalogQueries().relation_search is None

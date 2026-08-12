@@ -6,6 +6,7 @@ import pytest
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog, render
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.dialects.trino import TRINO
 
 SQL = 'SELECT a FROM t WHERE s = $1 AND n = $2'
 
@@ -129,3 +130,27 @@ def test_catalog_defers_connecting_until_a_query_runs() -> None:
 
     DbapiCatalog(open_cursor, POSTGRES, paramstyle='format')
     assert opened == []
+
+
+def test_search_relations_issues_no_query_without_a_prefix() -> None:
+    """`FROM <caret>` must not enumerate the database, so nothing is asked at all."""
+    cursor = FakeCursor([])
+    catalog = DbapiCatalog(lambda: cursor, POSTGRES, paramstyle='format')
+    assert catalog.search_relations('', 10) == []
+    assert cursor.executed == []
+
+
+def test_search_relations_is_inert_when_the_dialect_ships_no_query() -> None:
+    """Trino's slot is None, and the capability goes quiet rather than failing."""
+    cursor = FakeCursor([])
+    catalog = DbapiCatalog(lambda: cursor, TRINO, paramstyle='qmark')
+    assert catalog.search_relations('ord', 10) == []
+    assert cursor.executed == []
+
+
+def test_search_relations_maps_rows_through_the_dialect() -> None:
+    """The schema travels with the row, because that is what makes the insertion qualifiable."""
+    cursor = FakeCursor([('billing', 'invoices', 'r', 42)])
+    catalog = DbapiCatalog(lambda: cursor, POSTGRES, paramstyle='format')
+    [found] = catalog.search_relations('invo', 10)
+    assert (found.schema, found.name, found.kind) == ('billing', 'invoices', 'table')

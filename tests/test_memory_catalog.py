@@ -113,3 +113,46 @@ def test_foreign_keys_default_to_none_declared() -> None:
     """The overwhelming majority of fixtures declare none, and must behave exactly as before."""
     catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint')]})
     assert list(catalog.foreign_keys(None)) == []
+
+
+SPLIT = {
+    ('public', 'reports'): [('id', 'bigint')],
+    ('billing', 'invoices'): [('id', 'bigint'), ('amount', 'numeric')],
+}
+
+
+def test_no_search_path_means_everything_is_visible() -> None:
+    """The default must not move: every existing fixture relies on it."""
+    catalog = MemoryCatalog(SPLIT)
+    assert {t.name for t in catalog.tables(None)} == {'reports', 'invoices'}
+
+
+def test_a_search_path_hides_what_it_does_not_cover() -> None:
+    """This is the whole gap, expressed in a fixture."""
+    catalog = MemoryCatalog(SPLIT, search_path=('public',))
+    assert {t.name for t in catalog.tables(None)} == {'reports'}
+
+
+def test_naming_a_schema_still_reaches_it() -> None:
+    """A search path hides a relation from the bare position, not from the database."""
+    catalog = MemoryCatalog(SPLIT, search_path=('public',))
+    assert {t.name for t in catalog.tables('billing')} == {'invoices'}
+
+
+def test_search_relations_reaches_past_the_search_path() -> None:
+    """The capability's entire purpose."""
+    catalog = MemoryCatalog(SPLIT, search_path=('public',))
+    found = catalog.search_relations('invo', 10)
+    assert [(t.schema, t.name) for t in found] == [('billing', 'invoices')]
+
+
+def test_search_relations_answers_nothing_for_an_empty_prefix() -> None:
+    """`FROM <caret>` is not a request for every relation in the database."""
+    assert MemoryCatalog(SPLIT).search_relations('', 10) == []
+
+
+def test_search_relations_orders_before_truncating() -> None:
+    """`limit` rows in storage order can leave the exact match behind the near-misses."""
+    snapshot = {('s', f'orders_variant_{n}'): [('id', 'bigint')] for n in range(20)}
+    snapshot[('s', 'orders')] = [('id', 'bigint')]
+    assert MemoryCatalog(snapshot).search_relations('orders', 1)[0].name == 'orders'

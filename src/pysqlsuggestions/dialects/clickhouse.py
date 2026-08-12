@@ -67,6 +67,23 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
+    # `position` here takes (haystack, needle), the opposite of Postgres's
+    # `position(needle in haystack)`. Same shape of query, mirrored arguments.
+    relation_search=Query(
+        sql=f"""
+            SELECT database, name, engine, total_rows FROM system.tables
+            WHERE database NOT IN {_INTERNAL}
+              AND position(lower(name), lower($1)) > 0
+            ORDER BY position(lower(name), lower($1)), length(name), database, name
+            LIMIT 200
+        """,
+        row=lambda row: Table(
+            schema=str(row[0]),
+            name=str(row[1]),
+            kind=str(row[2]).lower(),
+            rows=int(row[3]) if row[3] is not None else None,
+        ),
+    ),
     functions=Query(
         sql="""
             SELECT name, is_aggregate FROM system.functions

@@ -10,9 +10,9 @@ fallback so an unknown backend degrades instead of failing.
 ## Status
 
 The whole pipeline works end to end against real servers: lex, analyse, request,
-resolve, rank. Value hints, FK-derived joins, star expansion and bound
-parameters landed since; still to come are physical layout ranking and history
-ranking, plus per-role availability and the syntax extensions.
+resolve, rank. Value hints, FK-derived joins, star expansion, bound parameters
+and cross-schema search landed since; still to come are physical layout ranking
+and history ranking, plus per-role availability and the syntax extensions.
 
 ## Usage
 
