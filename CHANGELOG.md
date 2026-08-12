@@ -6,6 +6,31 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Statements that are not queries
+
+`DROP TABLE ⌶` used to offer `SELECT`, `WITH` and `INSERT INTO` — the words a
+statement may *begin* with, inside a statement that had already begun. Accepting
+one wrote `DROP TABLE SELECT`.
+
+`DROP TABLE`, `TRUNCATE` and `ALTER TABLE` now offer relations, and are offered
+themselves where a statement may begin. `DROP ⌶` offers `TABLE`. `EXPLAIN` takes
+the statements a planner accepts — not `DROP`, which is a syntax error.
+
+**Every other unrecognised form now answers with nothing.** `GRANT`, `CALL`,
+`VACUUM`, `COMMENT`, `SET`, `BEGIN` and anything a third-party dialect has not
+modelled are silent where they used to propose `SELECT`. A half-typed keyword is
+not an unrecognised form: `SELEC⌶` still completes to `SELECT`, and so do an
+empty editor, the position after a `;`, and the position after a comment.
+
+`DROP VIEW` and `DROP INDEX` are among the silent ones. Offering them relations
+would mean offering tables for `DROP VIEW`, which the server refuses, and
+filtering by relation kind needs a set of kinds per clause — `DROP TABLE` must
+accept partitioned and foreign tables too. That waits for a change that wants it.
+
+`ALTER TABLE` offers `ADD COLUMN` and `RENAME TO` and stops there. A bare `DROP`
+among its continuations would make `DROP ⌶` stop answering `TABLE`, for the same
+reason `ON ⌶` does not answer `CONFLICT` alone.
+
 ### A name is found wherever it lives, not only where the search path looks
 
 `FROM invo⌶` found nothing when `invoices` lived in a schema the connection does

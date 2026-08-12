@@ -19,33 +19,38 @@ catalog knows functions and not much else: `Catalog.functions` is one method and
 `Function` has no notion of a procedure that returns nothing, a sequence, or a
 package.
 
+`CALL ⌶` now answers with nothing deliberately rather than by omission — it is
+an unrecognised statement form, and those are silent. That removes the wrong
+answer and leaves the missing one.
+
 A sequence is the cheaper half — it is a name in a namespace, so it is a `Table`
 with a different `kind` in everything but spelling, and `pg_class` already
-reports it. A procedure needs a `Kind` and a position: `CALL` is a statement
-form this engine does not have, which makes it a dependency of gap 2 rather than
-independent of it.
+reports it. A procedure needs two things this engine still lacks: a `Kind` of
+its own, and a `CALL` clause to put it in. The clause is cheap now that the
+statement-form machinery exists — `DROP TABLE` is the same shape — so this is no
+longer blocked on anything but the catalog work.
 
 Trino has neither, ClickHouse has no sequences, so this is largely a Postgres
 feature and should be built as one.
 
-## 2. Statement forms beyond DML
+## 2. CREATE TABLE
 
-`statement_start` is `SELECT`, `WITH`, `INSERT INTO`, `UPDATE`, `DELETE FROM`
-(`dialects/ansi.py:195`). Everything else — `CREATE`, `ALTER`, `DROP`, `GRANT`,
-`EXPLAIN`, `CALL` — is unrecognised, and an unrecognised first word means no
-clause, which means the whole statement completes as if it were an expression.
+`CREATE TABLE t (id ⌶` has nothing to say. `DROP TABLE`, `TRUNCATE`,
+`ALTER TABLE` and `EXPLAIN` are modelled now, and every other unrecognised form
+answers with nothing rather than with the words a statement may begin with.
 DBeaver added semantic analysis for `CREATE`, `ALTER` and `DROP` in 24.2.
 
-`DROP` and `EXPLAIN` are nearly free: `DROP TABLE ⌶` wants relations, which is
-the `FROM` position under a different name, and `EXPLAIN ⌶` wants a statement,
-which is the empty-editor position. `CREATE TABLE` is the real work, and it
-wants type names — `dialect.types` already ships them for cast positions, so the
-candidates exist and only the clause model is missing.
+What is missing is a clause model for a parenthesised definition list: where a
+type belongs rather than a name, and the words that may follow one. The
+candidates already exist — `dialect.types` ships them for cast positions — so
+this is the clause model and nothing else.
 
 Worth being deliberate about how far this goes. DDL completion shades into DDL
 authoring, and a completion engine that knows `ALTER TABLE … ADD CONSTRAINT`
 well enough to be useful is a different size of thing than one that knows
-`SELECT`.
+`SELECT`. `ALTER TABLE` stops at `ADD COLUMN` and `RENAME TO` here for exactly
+that reason — and because a bare `DROP` among its continuations would make
+`DROP ⌶` stop answering `TABLE`, the way `ON ⌶` does not answer `CONFLICT`.
 
 ## 3. History ranking
 
@@ -70,6 +75,16 @@ first in its key, and for the same reason.
 
 Kept rather than deleted, because a list whose entries only ever disappear tells
 a later reader nothing about what was decided.
+
+- **DROP, TRUNCATE, ALTER TABLE and EXPLAIN.** They name a relation, or a
+  statement, and now offer one. Every form still unmodelled — `GRANT`, `CALL`,
+  `VACUUM`, `COMMENT` — answers with nothing.
+
+  This entry said an unrecognised statement "completes as if it were an
+  expression". It was worse than that: the position offered the words a
+  statement may *begin* with, so `DROP TABLE ⌶` proposed `SELECT` and accepting
+  wrote `DROP TABLE SELECT`. `EXPLAIN` was the opposite case — already correct,
+  and only because nothing recognised it, which is why it is a clause now.
 
 - **Relations outside the default namespace.** `FROM ord⌶` reaches a relation in
   any visible schema and writes it qualified. Postgres and ClickHouse ship the

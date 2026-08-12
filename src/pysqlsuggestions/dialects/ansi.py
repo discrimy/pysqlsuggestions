@@ -53,6 +53,19 @@ not HAVING, LIMIT or OFFSET: every one of them was a separate chance to forget.
 _JOINS = ('JOIN', 'LEFT JOIN', 'INNER JOIN', 'CROSS JOIN')
 """A join may follow another join's ON, so these are added back where the order alone would not."""
 
+EXPLAINABLE = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
+"""
+The statement forms a query planner will accept.
+
+Named separately from `STATEMENT_START` because `EXPLAIN` takes these and not
+the DDL forms — `EXPLAIN DROP TABLE users` is a syntax error. Written this way
+round, adding a statement form later cannot silently start offering it after
+`EXPLAIN`.
+
+Declared above the clause model rather than beside `STATEMENT_START`, because
+`EXPLAIN` names it and a clause cannot reference what is defined below it.
+"""
+
 
 def _onwards(name: str) -> tuple[str, ...]:
     """Every clause that may follow, in canonical order, starting at `name`."""
@@ -189,10 +202,33 @@ CLAUSES = ClauseModel(
         Clause(name='UNION', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='INTERSECT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='EXCEPT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
+        # A wrapper rather than a statement: it takes one and reports on it.
+        # Deliberately absent from `statement_start` — `statement_form` returns
+        # the first start that is not WITH, so an EXPLAIN'd query would report
+        # its form as EXPLAIN and lose every clause declaring
+        # `statements={'SELECT'}`: GROUP BY, ORDER BY, LIMIT.
+        Clause(name='EXPLAIN', suggests=(Kind.SNIPPET, Kind.KEYWORD), followed_by=EXPLAINABLE),
+        # DDL that names one relation. Each `followed_by` is load-bearing rather
+        # than decorative: `_clause_kinds` answers a written relation with
+        # keywords only when the clause has continuations, so an empty list
+        # leaves `DROP TABLE users ` offering a second relation, which cannot
+        # follow without a comma.
+        Clause(name='DROP TABLE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
+        Clause(name='TRUNCATE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
+        # Two words each, and neither head is a phrase of its own. A bare `DROP`
+        # here would make `('DROP',)` a phrase, and `_half_written_clauses`
+        # skips a head that is already a phrase — so `DROP ` would stop
+        # answering `TABLE`, for the same reason `ON ` does not answer
+        # `CONFLICT` alone. `ALTER` would collide with `ALTER TABLE` the same
+        # way.
+        #
+        # `DROP COLUMN` and `ALTER COLUMN` are the casualties, and they are the
+        # DDL-authoring territory this dialect deliberately stops short of.
+        Clause(name='ALTER TABLE', suggests=RELATION_REFERENCE, followed_by=('ADD COLUMN', 'RENAME TO')),
     ),
 )
 
-STATEMENT_START = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
+STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'TRUNCATE', 'ALTER TABLE')
 
 TYPES = (
     'varchar',

@@ -35,6 +35,7 @@ from pysqlsuggestions.engine.analyse import (
     star_span,
     statement_at,
     statement_form,
+    statement_has_begun,
     string_under,
     words_in_item,
 )
@@ -86,14 +87,24 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         # kind out of the list rather than leaving resolve to answer nothing.
         star = None
 
+    kinds = _continued_kinds(
+        continues,
+        only,
+        _expansion_first(star)
+        + _values_first(comparand, expecting, qualifier)
+        + _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
+    )
+    if clause is None and not continues and statement_has_begun(tokens, lo, hi, caret):
+        # No clause matched and yet the statement has begun: this is a form the
+        # engine does not model, and the empty-editor answer would propose the
+        # words a statement *starts* with in the middle of one. `not continues`
+        # is what keeps `DROP ` answering `TABLE` — a half-written clause names
+        # its own continuations, and those are the answer whatever the clause
+        # model says about the statement.
+        kinds = ()
+
     return Request(
-        kinds=_continued_kinds(
-            continues,
-            only,
-            _expansion_first(star)
-            + _values_first(comparand, expecting, qualifier)
-            + _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
-        ),
+        kinds=kinds,
         prefix=prefix,
         replace_span=span,
         qualifier=qualifier,

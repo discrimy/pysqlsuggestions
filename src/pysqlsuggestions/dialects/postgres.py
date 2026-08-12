@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION
+from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
@@ -291,6 +291,18 @@ POSTGRES = replace(
             follows=frozenset({'DELETE FROM', 'SET', 'WHERE', 'VALUES', 'ON CONFLICT'}),
             statements=frozenset({'DELETE FROM', 'INSERT INTO', 'UPDATE'}),
             suggests=COLUMN_EXPRESSION,
+        ),
+        # ANALYZE and VERBOSE stand between EXPLAIN and its statement, which is
+        # what `before_the_item` means. `followed_by` would offer them after the
+        # statement, where they cannot go.
+        #
+        # `extend` replaces a clause of the same name rather than merging into
+        # it, so ANSI's `followed_by` has to be restated here.
+        Clause(
+            name='EXPLAIN',
+            suggests=(Kind.SNIPPET, Kind.KEYWORD),
+            followed_by=EXPLAINABLE,
+            before_the_item=('ANALYZE', 'VERBOSE'),
         ),
     ),
     keywords=frozenset(word.upper() for word in RESERVED),

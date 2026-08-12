@@ -248,4 +248,21 @@ CASES: tuple[GoldenRequest, ...] = (
         relations=('u:users',),
         note='one space past the star is the position that wants FROM',
     ),
+    GoldenRequest(
+        sql='DROP TABLE ⌶',
+        kinds=('table', 'schema'),
+        clause='DROP TABLE',
+        note='a statement form that names a relation, which it now knows it does',
+    ),
+    GoldenRequest(
+        sql='GRANT ⌶',
+        kinds=(),
+        note='a form the engine does not model: nothing, where it used to offer SELECT',
+    ),
+    GoldenRequest(
+        sql='EXPLAIN ⌶',
+        kinds=('snippet', 'keyword'),
+        clause='EXPLAIN',
+        note='a wrapper: what it takes is a statement, so the statement starts belong here',
+    ),
 )
