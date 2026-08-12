@@ -358,7 +358,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         ]
 
     if Kind.SEQUENCE in request.kinds:
-        candidates += _sequences(request, reader, limit)
+        candidates += _sequences(request, reader, dialect, limit)
 
     if Kind.SCHEMA in request.kinds:
         candidates += [_schema_candidate(name) for name in reader.schemas()]
@@ -589,13 +589,20 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     ]
 
 
-def _sequences(request: Request, reader: _Reader, limit: int) -> list[Candidate]:
+def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
     """
     Sequences by name, from the default namespace and from a prefix search.
 
     The same two sources a relation comes from, and for the same reason: a
     sequence outside the search path has to be written qualified, and slice 2
     already built the half that finds one.
+
+    Written bare or into a string literal, because the two positions that want a
+    sequence spell it differently. `DROP SEQUENCE <caret>` takes an identifier.
+    `nextval('<caret>` takes a string the server parses as a `regclass`, which
+    means the identifier keeps its own quotes inside it —
+    `nextval('billing."MonthlyTotals_id_seq"')` runs where the unquoted spelling
+    is refused. The kind cannot tell the two apart; only the request can.
     """
     listed = [table for table in reader.tables(None) if table.kind == _SEQUENCE]
     here = {(table.schema, table.name) for table in listed}
@@ -605,7 +612,35 @@ def _sequences(request: Request, reader: _Reader, limit: int) -> list[Candidate]
         for table in reader.search_relations(request.prefix, limit)
         if table.kind == _SEQUENCE and (table.schema, table.name) not in here
     ]
-    return [_table_candidate(table, qualify=qualify, kind=Kind.SEQUENCE) for table, qualify in found]
+    if not request.writes_a_literal:
+        return [_table_candidate(table, qualify=qualify, kind=Kind.SEQUENCE) for table, qualify in found]
+    return [_sequence_literal(table, qualify, dialect) for table, qualify in found]
+
+
+def _sequence_literal(table: Table, qualify: str | None, dialect: Dialect) -> Candidate:
+    """
+    One sequence, spelled as the string literal that names it.
+
+    `literal=True` carries the text through insertion untouched, which makes the
+    quoting this function's job — both kinds of it. The identifier is quoted by
+    the dialect's rules because the server reads the string as a `regclass`, and
+    then the whole thing is quoted as a string, doubling any interior quote.
+
+    `label` and `match_text` carry the bare name: typing `mon` should find it by
+    the word-prefix tier rather than the substring one, and a popup should show a
+    name rather than a quoted string.
+    """
+    parts = (qualify, table.name) if qualify else (table.name,)
+    written = '.'.join(quote_if_needed(part, dialect) for part in parts)
+    return Candidate(
+        text="'" + written.replace("'", "''") + "'",
+        kind=Kind.SEQUENCE,
+        detail=f'{table.schema}.{table.name} (sequence)',
+        label=table.name,
+        match_text=table.name,
+        literal=True,
+        position=1 if qualify else 0,
+    )
 
 
 def _values(request: Request, reader: _Reader) -> list[Candidate]:

@@ -162,3 +162,30 @@ def test_a_comparison_literal_still_offers_values() -> None:
     """The older reading of a caret inside a literal is untouched by the new one."""
     found = derive_request("SELECT * FROM auth_user WHERE email = 'a", 40, POSTGRES)
     assert found.kinds == (Kind.VALUE,)
+
+
+def test_a_sequence_inside_a_literal_is_quoted_into_one() -> None:
+    """The whole literal is replaced, so the answer supplies its own quotes."""
+    assert "'auth_user_id_seq'" in offered("SELECT nextval('")
+
+
+def test_a_name_needing_identifier_quotes_keeps_them_inside_the_string() -> None:
+    """
+    Server-verified: `nextval('billing."MonthlyTotals_id_seq"')` runs, and the
+    unquoted spelling is refused with `relation … does not exist`. The string is
+    parsed as a regclass, not as text, so the quoting rules are the identifier's.
+    """
+    assert '\'billing."MonthlyTotals_id_seq"\'' in offered("SELECT nextval('Month")
+
+
+def test_the_bare_name_is_what_matching_and_the_list_show() -> None:
+    """Typing `aut` must find it, and a popup should show a name rather than a quoted string."""
+    [found] = [s for s in complete("SELECT nextval('aut", 19, POSTGRES, catalog()) if s.kind is Kind.SEQUENCE]
+    assert found.label == 'auth_user_id_seq'
+    assert found.text == "'auth_user_id_seq'"
+
+
+def test_the_same_kind_is_written_bare_where_the_position_is_bare() -> None:
+    """One kind, two renderings. `DROP SEQUENCE` takes an identifier, not a string."""
+    assert 'auth_user_id_seq' in offered('DROP SEQUENCE ')
+    assert "'auth_user_id_seq'" not in offered('DROP SEQUENCE ')
