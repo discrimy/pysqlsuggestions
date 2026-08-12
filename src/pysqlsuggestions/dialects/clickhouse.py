@@ -6,7 +6,7 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Query, Syntax
+from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
 from pysqlsuggestions.types import Column, Function, Kind, Table
 
 _INTERNAL = "('system', 'INFORMATION_SCHEMA', 'information_schema')"
@@ -103,6 +103,9 @@ CLICKHOUSE = replace(
         unquoted_case='preserve',
         dollar_quoting=False,
         cast_operator='::',
+        # ClickHouse spells a parameter `{name:Type}`. The interior is `any`
+        # rather than a name because the type is part of the token.
+        placeholders=(Placeholder(opens='{', body='any', closes='}'),),
     ),
     namespace=Namespace(levels=('database', 'table')),
     clauses=ANSI.clauses.extend(

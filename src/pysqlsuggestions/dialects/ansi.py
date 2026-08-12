@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace, Syntax, Template
+from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace, Placeholder, Syntax, Template
 from pysqlsuggestions.types import Kind
 
 RESERVED = frozenset(
@@ -235,9 +235,17 @@ TEMPLATES = (
     ),
 )
 
+PLACEHOLDERS = (Placeholder(opens='?', body='none'), Placeholder(opens=':'))
+"""
+The standard's dynamic parameter marker, plus the embedded-SQL host variable.
+
+Both are safe at the baseline: strict ANSI has no cast operator and no `?`
+operator, so neither spelling collides with anything this dialect can lex.
+"""
+
 ANSI = Dialect(
     name='ansi',
-    syntax=Syntax(),
+    syntax=Syntax(placeholders=PLACEHOLDERS),
     namespace=Namespace(levels=('schema', 'table')),
     clauses=CLAUSES,
     keywords=frozenset(word.upper() for word in RESERVED),

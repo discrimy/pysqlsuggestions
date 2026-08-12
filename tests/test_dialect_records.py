@@ -51,11 +51,20 @@ def test_replace_composes_a_variant() -> None:
 
 
 def test_ansi_defaults() -> None:
-    """The fallback dialect must be conservative: no dollar quoting, no :: cast."""
+    """
+    The fallback dialect must be conservative: no dollar quoting, no :: cast.
+
+    Conservative means every extension left off, not every field left at its
+    default — the parameter spellings are declared here because a dialect
+    without them offers column names inside `:param`, which is worse than
+    offering nothing. Asserted field by field rather than against a bare
+    `Syntax()`, so a real divergence is named instead of appearing as a diff.
+    """
     assert ANSI.name == 'ansi'
-    assert ANSI.syntax == Syntax()
+    assert ANSI.syntax == replace(Syntax(), placeholders=ANSI.syntax.placeholders)
     assert ANSI.syntax.dollar_quoting is False
     assert ANSI.syntax.cast_operator is None
+    assert ANSI.syntax.placeholders
     assert 'select' in ANSI.reserved
 
 
