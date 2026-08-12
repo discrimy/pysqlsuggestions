@@ -17,6 +17,7 @@ _RELKIND = {
     'v': 'view',
     'm': 'materialized view',
     'f': 'foreign table',
+    'S': 'sequence',
 }
 
 # `$1 = '' AND visible OR nspname = $1` reads as `($1='' AND visible) OR (nspname=$1)`,
@@ -35,7 +36,10 @@ QUERIES = CatalogQueries(
             SELECT n.nspname, c.relname, c.relkind, c.reltuples
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            -- 'S' is a sequence. It is fetched here rather than by a query of
+            -- its own because it is a relation in every sense pg_class knows;
+            -- `resolve` is what keeps it out of a FROM list.
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
               AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
               -- pg_table_is_visible is true for pg_catalog, so an unqualified
               -- position would otherwise open with pg_aggregate. Naming a system
@@ -178,7 +182,7 @@ QUERIES = CatalogQueries(
             SELECT n.nspname, c.relname, c.relkind, c.reltuples
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
               AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
               AND position(lower($1) in lower(c.relname)) > 0
             ORDER BY position(lower($1) in lower(c.relname)), length(c.relname), n.nspname, c.relname

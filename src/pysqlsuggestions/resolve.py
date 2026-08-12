@@ -45,6 +45,17 @@ _DEFAULT_SEARCH_LIMIT = 200
 _MAX_VALUES = 30
 """How many frequent values are worth offering. `pg_stats` keeps up to a hundred."""
 
+_SEQUENCE = 'sequence'
+"""
+The one relation kind that is not a relation to query.
+
+Tested for negatively — "not a sequence" rather than "one of these kinds" —
+because `Table.kind` is the storage engine name on ClickHouse (`mergetree`,
+`log`) and the relation type on Postgres. No whitelist of ours could enumerate
+the engines a ClickHouse installation has, and one that tried would empty its
+FROM clause.
+"""
+
 _T = TypeVar('_T')
 
 
@@ -269,7 +280,9 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         # table. Nothing comes back when it is only a schema name.
         candidates += [_column_candidate(column) for column in reader.columns(None, request.qualifier[-1])]
     if Kind.TABLE in request.kinds:
-        candidates += [_table_candidate(table) for table in reader.tables(request.qualifier[-1])]
+        candidates += [
+            _table_candidate(table) for table in reader.tables(request.qualifier[-1]) if table.kind != _SEQUENCE
+        ]
     if Kind.SCHEMA in request.kinds:
         # The qualifier is the level above: `prod.<caret>` lists prod's schemas.
         candidates += [_schema_candidate(name) for name in reader.schemas(request.qualifier[-1])]
@@ -322,7 +335,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             ]
 
     if Kind.TABLE in request.kinds:
-        listed = reader.tables(None)
+        listed = [table for table in reader.tables(None) if table.kind != _SEQUENCE]
         candidates += [_table_candidate(table) for table in listed]
         # A relation in the default namespace comes back from both calls, and
         # the two render differently — `invoices` and `public.invoices` — so
@@ -331,7 +344,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         candidates += [
             _table_candidate(table, qualify=table.schema)
             for table in reader.search_relations(request.prefix, limit)
-            if (table.schema, table.name) not in here
+            if table.kind != _SEQUENCE and (table.schema, table.name) not in here
         ]
         candidates += [
             Candidate(text=name, kind=Kind.CTE, detail='cte', origin='local') for name in (scope.ctes if scope else {})

@@ -36,6 +36,7 @@ ITEM_KINDS: dict[Kind, CompletionItemKind] = {
     Kind.COLUMN: CompletionItemKind.Field,
     Kind.TABLE: CompletionItemKind.Class,
     Kind.CTE: CompletionItemKind.Class,
+    Kind.SEQUENCE: CompletionItemKind.Reference,
     Kind.SCHEMA: CompletionItemKind.Module,
     Kind.FUNCTION: CompletionItemKind.Function,
     Kind.PROCEDURE: CompletionItemKind.Method,

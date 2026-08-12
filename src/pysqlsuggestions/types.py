@@ -20,6 +20,14 @@ class Kind(Enum):
     TABLE = 'table'
     CTE = 'cte'
     """A relation the statement defined itself. Distinct from TABLE so a UI can say so."""
+    SEQUENCE = 'sequence'
+    """
+    A generator of numbers, which lives in the relation namespace and is not one.
+
+    Selectable — `SELECT * FROM a_seq` returns its state — and never what
+    anybody means by `FROM ⌶`, since a schema has one per serial column. Named
+    where it is wanted instead: `nextval('⌶`, `DROP SEQUENCE ⌶`.
+    """
     SCHEMA = 'schema'
     FUNCTION = 'function'
     PROCEDURE = 'procedure'

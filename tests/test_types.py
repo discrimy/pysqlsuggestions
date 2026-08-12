@@ -17,6 +17,7 @@ def test_kind_values_are_json_ready_strings() -> None:
         'column',
         'table',
         'cte',
+        'sequence',
         'schema',
         'function',
         'procedure',
