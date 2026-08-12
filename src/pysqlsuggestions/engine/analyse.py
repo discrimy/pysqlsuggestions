@@ -75,20 +75,37 @@ def depth_at(tokens: Sequence[Token], caret: int) -> int:
     return token.depth
 
 
-def in_literal(tokens: Sequence[Token], caret: int) -> bool:
+def _inside(token: Token, caret: int) -> bool:
     """
-    Whether the caret sits inside a string literal or a comment.
+    Whether `caret` is within `token` rather than past it.
 
-    A caret at the closing delimiter of a *terminated* literal is outside it —
-    `'ab'<caret>` is back in ordinary SQL. A caret at the end of an unterminated
-    one is inside, because there is no delimiter to have passed.
+    A caret at the closing delimiter of a *terminated* token is outside it —
+    `'ab'<caret>` is back in ordinary SQL. At the end of an unterminated one it
+    is inside, because there is no delimiter to have passed. Three callers need
+    the rule and it is subtle enough that three copies would drift.
     """
-    for token in tokens:
-        if token.type not in (TokenType.STRING, TokenType.COMMENT):
-            continue
-        if token.start < caret < token.end or (caret == token.end and not token.terminated):
-            return True
-    return False
+    return token.start < caret < token.end or (caret == token.end and not token.terminated)
+
+
+def in_literal(tokens: Sequence[Token], caret: int) -> bool:
+    """Whether the caret sits inside a string literal or a comment."""
+    return any(token.type in (TokenType.STRING, TokenType.COMMENT) and _inside(token, caret) for token in tokens)
+
+
+def in_placeholder(tokens: Sequence[Token], caret: int) -> bool:
+    """
+    Whether the caret is inside a bound parameter.
+
+    Nothing can be suggested there. The engine does not know what the caller
+    will bind, and the name is the author's to invent — offering a column called
+    `user_settings` for `:us` writes SQL that runs and answers a different
+    question.
+
+    Which carets count is the lexer's decision, carried on `terminated` per
+    spelling: `?` admits nothing more, so `= ?<caret>` is past it, while a name
+    could always take another character, so `= :us<caret>` is still in it.
+    """
+    return any(token.type is TokenType.PARAM and _inside(token, caret) for token in tokens)
 
 
 def string_under(tokens: Sequence[Token], caret: int) -> Token | None:
@@ -100,9 +117,7 @@ def string_under(tokens: Sequence[Token], caret: int) -> Token | None:
     a comment is a position with none.
     """
     for token in tokens:
-        if token.type is not TokenType.STRING:
-            continue
-        if token.start < caret < token.end or (caret == token.end and not token.terminated):
+        if token.type is TokenType.STRING and _inside(token, caret):
             return token
     return None
 
@@ -189,7 +204,9 @@ def after_operand(tokens: Sequence[Token], caret: int, dialect: Dialect) -> bool
     if index < 0:
         return False
     token = tokens[index]
-    if token.type in (TokenType.NUMBER, TokenType.STRING):
+    # A parameter is a value, whatever it will be bound to. Without this
+    # `WHERE id = ? ` looked like an open operand and offered a second column.
+    if token.type in (TokenType.NUMBER, TokenType.STRING, TokenType.PARAM):
         return True
     if token.type is TokenType.PUNCT:
         return token.text == ')'

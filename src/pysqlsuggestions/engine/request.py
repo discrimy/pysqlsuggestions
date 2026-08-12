@@ -24,6 +24,7 @@ from pysqlsuggestions.engine.analyse import (
     continues_a_keyword,
     depth_at,
     in_literal,
+    in_placeholder,
     inside_a_cast_awaiting_as,
     predicate_complete,
     qualifier_and_prefix,
@@ -60,6 +61,12 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     scope = scope_of(tokens, lo, hi, caret, dialect) if tokens else None
 
     comparand, comparand_type = comparand_at(tokens, caret, dialect)
+    if in_placeholder(tokens, caret):
+        # Above the literal check rather than folded into it: a half-written
+        # literal has an answer — the values that column holds — and a
+        # half-written parameter has none. Keeping them apart is what stops an
+        # edit to one silently changing the other.
+        return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
     if in_literal(tokens, caret):
         return _inside_a_literal(tokens, caret, clause, scope, comparand)
 
