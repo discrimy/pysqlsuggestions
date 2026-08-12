@@ -86,6 +86,46 @@ def test_lsp_version_matches_the_library() -> None:
     assert root.group(1) == server.group(1)
 
 
+def test_the_server_module_reports_the_version_it_ships_as() -> None:
+    """
+    `pysqlsuggestions_lsp.__version__` is what the server tells a client it is.
+
+    The same split the library has: `lsp/pyproject.toml` is what an install
+    records, `__version__` is what `initialize` reports and what a bug report
+    quotes. Nothing else compares them, so a release that bumps the manifest and
+    forgets the module produces a server that misdescribes itself to every
+    client it handshakes with — and the tests kept passing, because the one that
+    looked like it covered this reads the manifest on both sides.
+
+    Read from the file rather than imported, so this guard does not need pygls
+    installed to run.
+    """
+    manifest = re.search(r"^version = '([^']+)'", (ROOT / 'lsp' / 'pyproject.toml').read_text(), re.M)
+    module = re.search(
+        r"^__version__ = '([^']+)'", (ROOT / 'lsp' / 'pysqlsuggestions_lsp' / '__init__.py').read_text(), re.M
+    )
+    assert manifest is not None, 'lsp/pyproject.toml declares no version'
+    assert module is not None, 'pysqlsuggestions_lsp declares no __version__'
+    assert module.group(1) == manifest.group(1)
+
+
+def test_the_server_pins_the_library_release_it_belongs_to() -> None:
+    """
+    The `pysqlsuggestions==` pin is what a released server wheel carries.
+
+    A checkout resolves it through the workspace and never notices the number,
+    which is exactly why it goes stale: the pin is only read by someone
+    installing the server from PyPI, and by then the wrong one is published. A
+    server pinned to a library two releases back installs cleanly and offers the
+    behaviour of neither.
+    """
+    root = re.search(r"^version = '([^']+)'", (ROOT / 'pyproject.toml').read_text(), re.M)
+    pinned = re.search(r"'pysqlsuggestions==([^']+)'", (ROOT / 'lsp' / 'pyproject.toml').read_text())
+    assert root is not None, 'pyproject.toml declares no version'
+    assert pinned is not None, 'lsp/pyproject.toml pins no library version'
+    assert pinned.group(1) == root.group(1)
+
+
 def test_the_library_does_not_import_the_server() -> None:
     """
     The dependency runs one way: the server imports the library, never the reverse.
