@@ -6,6 +6,19 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+## 0.4.0
+
+Three carets that answered wrongly or not at all, and a server that stopped
+answering slowly.
+
+The language server ran its completion handler on the event loop, so a slow
+introspection query stopped it serving anything — including the client's own
+cancellation of the request that was stuck. `WITH` answered nothing at any of
+its five positions. And `DROP TABLE` offered views, which the server refuses.
+
+`Clause` gains `opens_a_group` and `relation_kinds`, both with defaults: a
+dialect declaring neither behaves exactly as it did.
+
 ### A clause says which relations it means
 
 `DROP TABLE ⌶` used to offer views. `DROP TABLE public.reports_active` is
