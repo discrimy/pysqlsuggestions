@@ -103,7 +103,7 @@ def test_drop_offers_the_words_that_finish_it() -> None:
     much the commoner intent, so this costs one keystroke there; giving
     continuations an order of their own would cost a field on every clause.
     """
-    assert offered('DROP ') == ['SEQUENCE', 'TABLE', 'VIEW']
+    assert offered('DROP ') == ['MATERIALIZED VIEW', 'SEQUENCE', 'TABLE', 'VIEW']
 
 
 def test_a_written_relation_is_not_followed_by_another() -> None:
@@ -201,4 +201,4 @@ def test_the_modelled_forms_survive_the_refusal() -> None:
     """Both work only because they were modelled first; this is what says so."""
     assert 'SELECT' in offered('EXPLAIN ')
     assert 'users' in offered('DROP TABLE ')
-    assert offered('DROP ') == ['SEQUENCE', 'TABLE', 'VIEW']
+    assert offered('DROP ') == ['MATERIALIZED VIEW', 'SEQUENCE', 'TABLE', 'VIEW']

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE
+from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE, RELATION_REFERENCE
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import (
     CatalogQueries,
@@ -291,7 +291,7 @@ POSTGRES = replace(
         placeholders=(Placeholder(opens='$', body='digits'), Placeholder(opens=':')),
     ),
     namespace=Namespace(levels=('schema', 'table')),
-    statement_start=(*ANSI.statement_start, 'DROP SEQUENCE', 'ALTER SEQUENCE'),
+    statement_start=(*ANSI.statement_start, 'DROP SEQUENCE', 'ALTER SEQUENCE', 'DROP MATERIALIZED VIEW'),
     clauses=ANSI.clauses.extend(
         Clause(
             name='LATERAL',
@@ -345,6 +345,23 @@ POSTGRES = replace(
             name='ALTER SEQUENCE',
             suggests=(Kind.SEQUENCE, Kind.SCHEMA),
             followed_by=('RENAME TO', 'OWNED BY'),
+        ),
+        # Postgres's own relkind vocabulary, so the narrowing is expressible
+        # here and not in ANSI — ClickHouse reports storage engines and a
+        # positive list naming `table` would empty the position there.
+        # `DROP TABLE` takes all three of these and refuses a view:
+        # `"reports_active" is not a table`.
+        Clause(
+            name='DROP TABLE',
+            suggests=RELATION_REFERENCE,
+            followed_by=('CASCADE', 'RESTRICT'),
+            relation_kinds=('table', 'partitioned table', 'foreign table'),
+        ),
+        Clause(
+            name='DROP MATERIALIZED VIEW',
+            suggests=RELATION_REFERENCE,
+            followed_by=('CASCADE', 'RESTRICT'),
+            relation_kinds=('materialized view',),
         ),
         # Data-modifying CTEs, which are Postgres's own: all three forms plan
         # inside a body and after the list, and ClickHouse refuses the first
