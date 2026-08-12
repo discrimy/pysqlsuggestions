@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pysqlsuggestions.dialects.base import Syntax
+from pysqlsuggestions.dialects.base import TEMPLATE_PLACEHOLDER, Placeholder, Syntax
 from pysqlsuggestions.engine.lex import Token, TokenType, lex
 
 
@@ -94,3 +94,60 @@ def test_unbalanced_close_paren_does_not_go_negative() -> None:
 def test_empty_source() -> None:
     """Lexing nothing yields nothing."""
     assert lex('', Syntax()) == ()
+
+
+NAMED = Syntax(placeholders=(Placeholder(opens=':'),))
+NUMBERED = Syntax(placeholders=(Placeholder(opens='$', body='digits'),))
+BARE = Syntax(placeholders=(Placeholder(opens='?', body='none'),))
+BRACED = Syntax(placeholders=(Placeholder(opens='${', body='any', closes='}'),))
+
+
+def test_a_named_parameter_is_one_token() -> None:
+    """`:user_id` is a parameter, not a colon followed by a column name."""
+    tokens = significant('WHERE id = :user_id', NAMED)
+    assert (tokens[-1].type, tokens[-1].text) == (TokenType.PARAM, ':user_id')
+
+
+def test_a_named_parameter_is_never_terminated() -> None:
+    """Another keystroke could always extend the name, so the caret at its end is inside it."""
+    assert significant(':us', NAMED)[0].terminated is False
+
+
+def test_a_numbered_parameter_takes_only_digits() -> None:
+    """`$1` is a parameter; `$x` is not, and falls through to whatever else the syntax says."""
+    assert significant('$1', NUMBERED)[0].type is TokenType.PARAM
+    assert significant('$x', NUMBERED)[0].type is not TokenType.PARAM
+
+
+def test_a_bare_parameter_terminates_itself() -> None:
+    """`?` admits nothing more, so a caret at its end is past it, not in it."""
+    token = significant('?', BARE)[0]
+    assert (token.type, token.terminated) == (TokenType.PARAM, True)
+
+
+def test_a_braced_parameter_runs_to_its_close() -> None:
+    """`${var}` is one token whose interior may hold anything."""
+    token = significant('${my var}', BRACED)[0]
+    assert (token.type, token.text, token.terminated) == (TokenType.PARAM, '${my var}', True)
+
+
+def test_an_unclosed_braced_parameter_runs_to_end_of_input() -> None:
+    """The lexer never raises; an unterminated token reaches the end with terminated false."""
+    token = significant('${re', BRACED)[0]
+    assert (token.type, token.text, token.terminated) == (TokenType.PARAM, '${re', False)
+
+
+def test_the_longest_opener_wins() -> None:
+    """`${` is tried before `$`, or the brace form would lex as a numbered one that failed."""
+    syntax = Syntax(placeholders=(Placeholder(opens='$', body='digits'), TEMPLATE_PLACEHOLDER))
+    assert significant('${region}', syntax)[0].text == '${region}'
+
+
+def test_a_placeholder_inside_a_literal_is_text() -> None:
+    """Delimiters are read first, so a colon inside a string stays inside it."""
+    assert [t.type for t in significant("':user_id'", NAMED)] == [TokenType.STRING]
+
+
+def test_a_dialect_declaring_none_lexes_as_it_always_did() -> None:
+    """The default is an empty tuple, and it must change nothing."""
+    assert [t.type for t in significant(':us')] == [TokenType.OPERATOR, TokenType.IDENT]

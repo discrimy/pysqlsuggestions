@@ -17,7 +17,7 @@ import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 
-from pysqlsuggestions.dialects.base import Syntax
+from pysqlsuggestions.dialects.base import Placeholder, Syntax
 
 _OPERATOR_CHARS = frozenset('+-*/%=<>|&^~!@#?:')
 _MULTI_CHAR_OPERATORS: tuple[str, ...] = ('<=', '>=', '<>', '!=', '||', '->>', '->', '#>>', '#>')
@@ -30,6 +30,8 @@ class TokenType(Enum):
     IDENT = 'ident'
     NUMBER = 'number'
     STRING = 'string'
+    PARAM = 'param'
+    """A bound parameter: `:name`, `$1`, `?`, `${var}`. Never an identifier, whatever it spells."""
     COMMENT = 'comment'
     OPERATOR = 'operator'
     PUNCT = 'punct'
@@ -184,6 +186,57 @@ def _opens_escape_string(src: str, pos: int, syntax: Syntax) -> bool:
     return bool(prefix) and src[pos].upper() == prefix and src.startswith("'", pos + 1)
 
 
+def _scan_body(src: str, pos: int, body: str) -> int:
+    """The end of a `name` or `digits` run starting at `pos`, or `pos` when there is none."""
+    i = pos
+    if body == 'digits':
+        while i < len(src) and src[i].isdigit():
+            i += 1
+        return i
+    if pos >= len(src) or not _is_ident_start(src[pos]):
+        return pos
+    i = pos + 1
+    while i < len(src) and _is_ident_char(src[i]):
+        i += 1
+    return i
+
+
+def _scan_placeholder(src: str, pos: int, syntax: Syntax) -> tuple[int, bool] | None:
+    """
+    Scan a bound parameter at `pos`. Returns (end, terminated), or None for no match.
+
+    Longest `opens` first, so `${` is tried before `$` and the brace form is not
+    read as a numbered one that failed.
+
+    `terminated` says whether anything more could extend this token, which is
+    what decides whether a caret at its end is inside it. `?` is finished as
+    written and `${var}` once its brace arrives; a name or a digit run never is,
+    because the next keystroke could always be another character of it. That is
+    the difference between `= ?<caret>`, which wants a connective, and
+    `= :us<caret>`, which wants nothing at all.
+    """
+    for placeholder in sorted(syntax.placeholders, key=_opener_length, reverse=True):
+        if not src.startswith(placeholder.opens, pos):
+            continue
+        start = pos + len(placeholder.opens)
+        if placeholder.closes:
+            end = src.find(placeholder.closes, start)
+            return (len(src), False) if end == -1 else (end + len(placeholder.closes), True)
+        if placeholder.body == 'none':
+            return start, True
+        if placeholder.body == 'any':
+            continue  # no end without `closes`; DialectConformance reports the declaration
+        end = _scan_body(src, start, placeholder.body)
+        if end > start:
+            return end, False
+    return None
+
+
+def _opener_length(placeholder: Placeholder) -> int:
+    """How long this spelling's opener is. Sort key, named so the sort reads as one."""
+    return len(placeholder.opens)
+
+
 def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
     """Tokenize `src`. Total, never raises, and preserves every offset."""
     tokens: list[Token] = []
@@ -225,6 +278,19 @@ def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
             end, terminated = _scan_string(src, start + (1 if escaped else 0), syntax, escapes=escaped)
             tokens.append(
                 Token(TokenType.STRING, start, end, src[start:end], src[start:end], terminated=terminated, depth=depth),
+            )
+            pos = end
+            continue
+
+        # Above dollar quoting so `$1` is reliable: `_scan_dollar_quote` reads
+        # `$1$2` as a tag it never finds again and swallows the rest of the
+        # statement. Costs dollar quoting nothing — `$$body$$` and `$tag$b$tag$`
+        # both fail the digits body at their second character.
+        scanned = _scan_placeholder(src, pos, syntax)
+        if scanned is not None:
+            end, terminated = scanned
+            tokens.append(
+                Token(TokenType.PARAM, pos, end, src[pos:end], src[pos:end], terminated=terminated, depth=depth),
             )
             pos = end
             continue

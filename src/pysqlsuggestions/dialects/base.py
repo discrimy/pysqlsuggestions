@@ -16,6 +16,44 @@ from pysqlsuggestions.types import Kind
 
 
 @dataclass(frozen=True, slots=True)
+class Placeholder:
+    """
+    One way a dialect spells a bound parameter.
+
+    The spellings in the wild differ structurally rather than in text, which is
+    why this is a record and not a string: `?` is complete on its own, `$1`
+    takes digits, `:name` takes an identifier, and `${var}` takes anything up to
+    a closing brace.
+    """
+
+    opens: str
+    """The literal text that begins one."""
+    body: Literal['name', 'digits', 'none', 'any'] = 'name'
+    """
+    What may follow `opens`.
+
+    'any' runs to `closes` and is meaningless without it — a placeholder
+    declaring one and not the other can never end, and `DialectConformance`
+    reports it rather than letting it silently never lex.
+    """
+    closes: str = ''
+    """The delimiter that ends it. Empty where the body ends itself."""
+
+
+TEMPLATE_PLACEHOLDER = Placeholder(opens='${', body='any', closes='}')
+"""
+The `${var}` of a templating layer — dbt, Metabase, Jinja over any backend.
+
+Shipped and wired into no dialect, because it is not a backend's syntax and
+putting it in `ANSI` would state something false about the standard. A caller
+whose SQL is templated composes it in, which is how a dialect is extended here:
+
+    syntax = replace(POSTGRES.syntax, placeholders=(*POSTGRES.syntax.placeholders, TEMPLATE_PLACEHOLDER))
+    DIALECT = replace(POSTGRES, syntax=syntax)
+"""
+
+
+@dataclass(frozen=True, slots=True)
 class Syntax:
     """Everything the lexer needs. No other stage reads this record."""
 
@@ -53,6 +91,15 @@ class Syntax:
     bare there produces a query that does not run — which a Russian-language
     schema discovers on its first column. Off by default: quoting a name that
     did not need it still runs.
+    """
+    placeholders: tuple[Placeholder, ...] = ()
+    """
+    How this dialect spells a bound parameter. Longest `opens` is tried first.
+
+    Without one, `:param` is punctuation followed by an identifier, and that
+    identifier is offered column names — the one active wrong answer this engine
+    gives, since accepting `user_settings` for `:us` writes valid SQL that runs a
+    different query.
     """
 
 
