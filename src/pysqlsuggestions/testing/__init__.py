@@ -261,6 +261,19 @@ class DialectConformance:
                     forbid=('orders',),
                 ),
             )
+        # Found by what the clause declares rather than by the name `WITH`, so a
+        # dialect spelling its CTE clause differently is still covered. `expect`
+        # names the first word the dialect itself lists, so the case asserts the
+        # dialect's own claim rather than one this corpus invented.
+        grouped = next((c for c in dialect.clauses.clauses if c.opens_a_group), None)
+        if grouped is not None:
+            cases.append(
+                Case(
+                    name='a clause that opens a group says what may begin one',
+                    sql=f'{grouped.name} a AS (',
+                    expect=(grouped.opens_a_group[0],),
+                ),
+            )
         # Found by what the clause suggests rather than by the name `CALL`, so a
         # dialect spelling its call statement differently is still covered.
         calls = next((c.name for c in dialect.clauses.clauses if Kind.PROCEDURE in c.suggests), None)

@@ -277,4 +277,10 @@ CASES: tuple[GoldenRequest, ...] = (
         clause='SELECT',
         note='a name inside a literal, because the server reads that literal as a regclass',
     ),
+    GoldenRequest(
+        sql='WITH a AS (⌶',
+        kinds=('keyword',),
+        clause='WITH',
+        note='a CTE body takes a whole statement, and only the words that start one',
+    ),
 )
