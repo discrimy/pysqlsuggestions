@@ -6,6 +6,23 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A slow database no longer freezes the editor
+
+The language server ran its completion handler on the event loop, so a slow
+introspection query — a database behind a VPN, a cold connection — stopped the
+server answering anything at all until it returned. Including the client's own
+cancellation of the request that was stuck.
+
+The handler now runs in pygls's thread pool. Nothing became asynchronous: the
+`Catalog` port is synchronous by design, and pre-fetching into a
+`MemoryCatalog` is still the bridge for callers who need otherwise.
+
+Concurrency that the server never had before is now possible, so the state
+behind it is locked: two carets arriving together used to be able to open two
+connections and leak one, and to announce a degraded catalog twice. One caret at
+a time reaches the database — which costs nothing, since completions are
+latest-wins and the cache makes the second read instant.
+
 ## 0.3.0
 
 Two new surfaces, and six changes to what the engine answers.

@@ -12,6 +12,14 @@ changing it restarts the server, which is cheap, discards a warm cache only on a
 deliberate and rare action, and removes every bug where a server holds state
 from a connection it no longer has.
 
+One caret at a time reaches the database. The completion handler runs in pygls's
+thread pool rather than on the event loop, so a slow query cannot stop the
+server answering; the session's lock is what makes that safe, and it covers the
+read as well as the state around it. Serialising costs nothing here — a
+completion whose answer arrives late is one the next keystroke has already
+replaced — and it means no third-party driver has to be right about sharing a
+connection between threads.
+
 The state and the decisions live on `Session`, which knows nothing about pygls.
 The handlers below are adapters: find the document, find the offset, ask the
 session. That split is not tidiness — `server.workspace` does not exist until a
