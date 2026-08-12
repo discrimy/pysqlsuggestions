@@ -169,3 +169,21 @@ def test_a_placeholder_that_can_never_end_fails_the_corpus_too() -> None:
     assert not DialectConformance.check(ANSI)
     failures = DialectConformance.check(broken)
     assert any('bound parameter' in failure for failure in failures)
+
+
+def test_a_dialect_that_cannot_search_relations_gets_no_case() -> None:
+    """
+    The corpus asks a dialect only what it claims to do.
+
+    Trino ships no relation-search query, so the proposition does not apply —
+    the same way it gets no foreign-key case. A corpus that failed it would be
+    asserting a capability nobody claimed.
+    """
+    assert not DialectConformance.check(TRINO)
+    assert not [case for case in DialectConformance.cases(TRINO) if 'search path' in case.name]
+
+
+def test_the_relation_search_case_exists_where_the_query_does() -> None:
+    """Postgres and ClickHouse claim it, so the corpus holds them to it."""
+    for dialect in (POSTGRES, CLICKHOUSE):
+        assert [case for case in DialectConformance.cases(dialect) if 'search path' in case.name]
