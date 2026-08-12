@@ -181,6 +181,43 @@ def test_postgres_plans_a_reference_to_one_of_two_same_named_relations(
             cursor.execute(f'EXPLAIN {apply_suggestion(sql, suggestion, dialect=POSTGRES)[0]}')
 
 
+def test_postgres_drop_table_offers_no_view(postgres_catalog: DbapiCatalog) -> None:
+    """
+    `DROP TABLE public.reports_active` is refused with `"reports_active" is not
+    a table`, and this position offered it. The vocabulary is the backend's, so
+    only a live catalog settles this.
+    """
+    found = suggest('DROP TABLE ⌶', POSTGRES, postgres_catalog)
+    assert 'reports_report' in found
+    assert 'reports_active' not in found
+
+
+def test_postgres_drop_view_offers_the_view(postgres_catalog: DbapiCatalog) -> None:
+    """The opposite narrowing, against the same catalog."""
+    found = suggest('DROP VIEW ⌶', POSTGRES, postgres_catalog)
+    assert 'reports_active' in found
+    assert 'reports_report' not in found
+
+
+def test_postgres_drop_index_reaches_a_real_index(postgres_catalog: DbapiCatalog) -> None:
+    """
+    Indexes are fetched now, and this is the only position that wants them. The
+    seed declares this one by name.
+    """
+    found = suggest('DROP INDEX ⌶', POSTGRES, postgres_catalog)
+    assert 'reports_report_database_id_idx' in found
+    assert 'reports_report' not in found
+
+
+def test_postgres_drop_materialized_view_offers_the_seeded_one(
+    postgres_catalog: DbapiCatalog,
+) -> None:
+    """Stock Postgres 16 ships none, so the seed is where this assertion comes from."""
+    found = suggest('DROP MATERIALIZED VIEW ⌶', POSTGRES, postgres_catalog)
+    assert 'reports_monthly' in found
+    assert 'reports_active' not in found
+
+
 def test_postgres_reaches_a_relation_off_the_search_path(postgres_catalog: DbapiCatalog) -> None:
     """
     `billing` is not on the fixture's search path, so `FROM invo` used to find nothing.

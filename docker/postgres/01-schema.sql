@@ -219,6 +219,14 @@ SELECT r.id, r.name, r.database_id, r.executions
 FROM reports_report r
 WHERE NOT r.is_archived AND NOT r.broken;
 
+-- Stock PostgreSQL ships no materialized view, so `DROP MATERIALIZED VIEW `
+-- would be asserted against an empty list and would pass however broken the
+-- narrowing was.
+CREATE MATERIALIZED VIEW public.reports_monthly AS
+SELECT r.database_id, count(*) AS runs
+FROM reports_report r
+GROUP BY r.database_id;
+
 CREATE INDEX reports_report_database_id_idx ON reports_report (database_id);
 CREATE INDEX reports_report_group_id_idx ON reports_report (group_id);
 CREATE INDEX reports_report_dt_created_idx ON reports_report (dt_created DESC);
