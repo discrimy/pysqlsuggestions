@@ -2,7 +2,7 @@
   "name": "pysqlsuggestions",
   "displayName": "pysqlsuggestions",
   "description": "Schema-aware SQL completion: joins from foreign keys, values from statistics",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "pysqlsuggestions",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },

@@ -6,6 +6,22 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+## 0.4.1
+
+A packaging fix. Nothing about what the engine offers at a caret changed.
+
+`pysqlsuggestions-lsp` 0.4.0 declared `pysqlsuggestions==0.2.1`, so installing
+the server from PyPI pulled a library two releases behind the one it was built
+against. It also reported `0.2.1` as its own version over LSP, which is the
+number a bug report quotes.
+
+Both now have tests holding them to the library's, beside the three version
+guards that were already there. Neither had one, for the same reason in two
+shapes: a number whose only reader is remote is a number nothing local notices
+going wrong. The pin is read by pip and never by a checkout, which resolves the
+library through the uv workspace; `__version__` is read by a client over the
+wire, and the guard that looked like it covered it compares two manifests.
+
 ## 0.4.0
 
 Three carets that answered wrongly or not at all, and a server that stopped
