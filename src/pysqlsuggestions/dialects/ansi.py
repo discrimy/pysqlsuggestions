@@ -85,7 +85,11 @@ offered after a finished one wrote SQL the server refuses.
 
 CLAUSES = ClauseModel(
     clauses=(
-        Clause(name='WITH', suggests=()),
+        # A CTE body takes a whole statement. `VALUES` is here and deliberately
+        # not in `followed_by`: a VALUES body is the ordinary way to write a
+        # literal table, and after the list the clause model filters it out
+        # anyway, since VALUES declares itself part of INSERT INTO.
+        Clause(name='WITH', suggests=(), opens_a_group=('SELECT', 'VALUES', 'WITH')),
         # No KEYWORD here: a select list wants columns and functions, and burying
         # them under reserved words is the failure mode this engine exists to avoid.
         # AS/FROM/DISTINCT arrive through `followed_by`, once an item is written.

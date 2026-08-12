@@ -315,6 +315,13 @@ def _continues(
     if prefix and opening is not None and opening.before_the_item and at_the_clause_start(tokens, caret, opening.name):
         return opening.before_the_item, False
 
+    # The words a clause's parenthesised group may begin with — a CTE body.
+    # No guard against the group already having content is needed: once a word
+    # is typed there the governing clause is that statement's, so this cannot
+    # fire twice.
+    if opening is not None and opening.opens_a_group and depth_at(tokens, caret) > 0:
+        return opening.opens_a_group, True
+
     where = case_position(tokens, caret)
     if where is None:
         return (), False
