@@ -12,24 +12,7 @@ Ordered by value per unit of work, not by size.
 
 ---
 
-## 1. Star expansion
-
-`SELECT *⌶` should offer the column list the star stands for, as one accept.
-DBeaver binds this to Ctrl+Space on the star and it is the completion trick its
-users reach for most.
-
-Everything needed is already here. `Projection.stars` records the relations a
-bare `*` or `t.*` referred to, and `resolve._from_projection` already expands
-them against the catalog when a derived table's outputs are asked for. What is
-missing is the position: analyse has to notice a caret *on* a star rather than
-after an identifier, and rank has to emit one candidate whose text is the whole
-comma-separated list.
-
-The cost is a `Kind` — an expansion is not a `COLUMN`, and a front end colouring
-by kind should not pretend it is — plus the ordinary questions about qualifying:
-`u.*` expands qualified, a lone relation expands bare.
-
-## 2. Relations outside the default namespace
+## 1. Relations outside the default namespace
 
 `FROM ord⌶` finds nothing when `orders` lives in a schema outside the search
 path. `resolve._unqualified` calls `reader.tables(None)`, which is the default
@@ -49,7 +32,7 @@ capability rather than a `Catalog` method. And a truncation happens before
 ranking sees the rows, so the adapter has to order by match quality, not storage
 order — `ports.py` carries that argument in full.
 
-## 3. Procedures and sequences
+## 2. Procedures and sequences
 
 `CALL ⌶` and `nextval('⌶')` are ordinary SQL and answer with nothing. The
 catalog knows functions and not much else: `Catalog.functions` is one method and
@@ -59,13 +42,13 @@ package.
 A sequence is the cheaper half — it is a name in a namespace, so it is a `Table`
 with a different `kind` in everything but spelling, and `pg_class` already
 reports it. A procedure needs a `Kind` and a position: `CALL` is a statement
-form this engine does not have, which makes it a dependency of gap 4 rather than
+form this engine does not have, which makes it a dependency of gap 3 rather than
 independent of it.
 
 Trino has neither, ClickHouse has no sequences, so this is largely a Postgres
 feature and should be built as one.
 
-## 4. Statement forms beyond DML
+## 3. Statement forms beyond DML
 
 `statement_start` is `SELECT`, `WITH`, `INSERT INTO`, `UPDATE`, `DELETE FROM`
 (`dialects/ansi.py:195`). Everything else — `CREATE`, `ALTER`, `DROP`, `GRANT`,
@@ -84,21 +67,7 @@ authoring, and a completion engine that knows `ALTER TABLE … ADD CONSTRAINT`
 well enough to be useful is a different size of thing than one that knows
 `SELECT`.
 
-## 5. Parameters and placeholders
-
-The lexer has no token for one. `:param`, `?`, `$1` and `${var}` all fall out as
-punctuation followed by an identifier, and that identifier then gets offered
-column suggestions — an active wrong answer rather than a missing one, since
-`WHERE id = :us⌶` proposes `users` and accepting it writes something that is not
-the parameter the author meant.
-
-Any caller embedding this in a reporting tool meets it immediately, which
-includes the `report_service` migration the design doc still lists as pending.
-The fix is small and belongs in the lexer: one token kind, spelled per dialect
-in `Syntax`, and a rule in analyse that a caret inside one suggests nothing —
-or, where the caller supplies bound parameter names, suggests those.
-
-## 6. History ranking
+## 4. History ranking
 
 Named in the v0.1 design as out of scope and still the honest answer to the
 problem `engine/joins.py` refuses to solve by inference. A join mined from
@@ -116,6 +85,24 @@ That last question is the same one `Cache` already answers by putting `role`
 first in its key, and for the same reason.
 
 ---
+
+## Closed since this list was written
+
+Kept rather than deleted, because a list whose entries only ever disappear tells
+a later reader nothing about what was decided.
+
+- **Star expansion.** `SELECT *⌶` offers the column list the star stands for, as
+  one accept. A bare star expands qualified once more than one relation is in
+  scope — `users` and `orders` both have `id`, and the unqualified list is a
+  statement the server refuses. Cost one `Kind`, and one span per candidate:
+  the same caret offers `FROM`, which inserts beside the star where the
+  expansion replaces it.
+- **Parameters and placeholders.** A caret inside `:name`, `$1`, `?` or a
+  braced form suggests nothing, and one past a parameter reads it as a finished
+  operand. Spelled per dialect in `Syntax`; Postgres deliberately excludes `?`,
+  which is its JSONB existence operator. Bound parameter *names* are still not
+  offered — that needs an argument on both entry points and is a feature of its
+  own.
 
 ## Already named elsewhere
 
@@ -151,7 +138,7 @@ not mistake them for oversights:
   and Combined next to Semantic because it could not retire the first. That is
   a migration artefact, not a feature.
 - **Join conditions inferred from column names.** Argued at length in
-  `engine/joins.py` and `ports.py`; the answer is gap 6, not a heuristic.
+  `engine/joins.py` and `ports.py`; the answer is gap 4, not a heuristic.
 - **AI anything.** Query execution, formatting, linting and full validation
   remain non-goals, and generating SQL from prose is further outside them than
   any of those.

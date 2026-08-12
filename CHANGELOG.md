@@ -6,6 +6,61 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### `SELECT *` expands to the columns it stands for
+
+Put the caret directly on a star and the top suggestion is the column list,
+accepted in one go. One space further along is still the position that wants
+`FROM`, and it still answers with `FROM`.
+
+A bare star expands **qualified** as soon as more than one relation is in scope.
+Two relations in a join very often share `id`, and the unqualified list is a
+statement Postgres refuses with `column reference "id" is ambiguous`. One
+relation expands bare. A star the author qualified — `u.*` — stays qualified
+however few relations it covers, because the edit replaces the `u.` too.
+
+Nothing is capped. A forty-column relation expands to forty columns, which is
+what somebody who asked to expand a star asked for.
+
+`Kind.EXPANSION` is new, so a front end colouring by kind should give it a
+colour; `lsp/` reports it as a snippet. Reserved and mixed-case names are quoted
+inside the list, so a column called `user` arrives as `d."user"`.
+
+### Bound parameters are no longer read as column names
+
+`WHERE id = :us⌶` used to propose `users` — or any column starting `us` — and
+accepting one wrote valid SQL that ran a different query. The lexer now has a
+token for a parameter. A caret inside one suggests nothing, and a caret past one
+reads it as a finished operand, so `WHERE id = ? ⌶` offers `AND` rather than a
+second column.
+
+Spelled per dialect on `Syntax.placeholders`:
+
+| dialect | spellings |
+| --- | --- |
+| ANSI | `?`, `:name` |
+| PostgreSQL | `$1`, `:name` |
+| Trino | `?` |
+| ClickHouse | `{name:Type}` |
+
+**PostgreSQL deliberately does not treat `?` as a parameter.** It is the JSONB
+existence operator, and `data ? 'key'` is a predicate people write.
+
+`${var}` is a templating convention rather than any backend's syntax, so it
+ships as `TEMPLATE_PLACEHOLDER` wired into no dialect. A caller whose SQL is
+templated composes it in:
+
+```python
+from dataclasses import replace
+from pysqlsuggestions.dialects.base import TEMPLATE_PLACEHOLDER
+from pysqlsuggestions.dialects.postgres import POSTGRES
+
+syntax = replace(POSTGRES.syntax, placeholders=(*POSTGRES.syntax.placeholders, TEMPLATE_PLACEHOLDER))
+DIALECT = replace(POSTGRES, syntax=syntax)
+```
+
+Bound parameter *names* are still not offered inside a placeholder. That needs
+the caller to supply the binding, and it is a feature of its own.
+
 ### A VS Code extension
 
 `editors/vscode/` drives the language server from an editor. It builds its own
