@@ -27,7 +27,7 @@ from pysqlsuggestions.types import (
     Table,
 )
 
-__version__ = '0.2.1'
+__version__ = '0.3.0'
 
 __all__ = [
     'Cache',

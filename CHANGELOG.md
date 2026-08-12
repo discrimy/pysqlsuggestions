@@ -6,6 +6,25 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+## 0.3.0
+
+Two new surfaces, and six changes to what the engine answers.
+
+The surfaces are a language server and a VS Code extension, so the library is
+usable now without writing an editor integration first.
+
+The rest is one theme seen from six positions: a caret that used to answer with
+something plausible and wrong now answers correctly, or not at all. A caret
+inside `:name` no longer offers column names. A statement form the engine does
+not model no longer proposes `SELECT`. A procedure is not offered where the
+server refuses one, a sequence is not offered a `FROM` list, and a column
+reference is no longer written in a form the server calls ambiguous.
+
+**Breaking, for callers constructing these types by hand.**
+`Candidate.qualifier` is `tuple[str, ...]` rather than `str | None`;
+`Function.result` may be `None`; `Function` carries a `kind`. `Suggestion`, the
+`Catalog` protocol and every capability protocol are unchanged.
+
 ### A column reference that resolves
 
 Two relations with the same name in different schemas can both be in scope —
