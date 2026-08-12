@@ -268,7 +268,15 @@ prevent. Trino is asserted to offer what it offers today.
 2. **Schema preference from history.** "In-path first" is a crude stand-in for
    "the schemas this person actually uses". That is gap 4's signal, and this
    slice deliberately does not invent a weaker version of it.
-3. **`all_relations`.** `SupportsColumnSearch` has an `all_columns` companion
+3. **Same name, same table name, different schemas.** `rank` dedupes on the
+   text to be inserted, and a column in `a.orders` and one in `b.orders` both
+   render `orders.id`, so one is dropped. The two differ only in the `FROM`
+   clause they would write, which nothing in the list shows. Telling them apart
+   needs a `Candidate.qualifier` that can hold a path rather than a name — the
+   field is quoted as a single identifier today, so `a.orders` would insert as
+   `"a.orders"`. Left out deliberately: it is a type change rippling through
+   join proposals and column candidates, for an edge narrower than this slice.
+4. **`all_relations`.** `SupportsColumnSearch` has an `all_columns` companion
    for snapshots small enough to hand over whole. No caller needs the relation
    equivalent yet, and `Catalog.tables` already enumerates when a schema is
    named, so it is not added on speculation.
