@@ -225,10 +225,14 @@ CLAUSES = ClauseModel(
         # `DROP COLUMN` and `ALTER COLUMN` are the casualties, and they are the
         # DDL-authoring territory this dialect deliberately stops short of.
         Clause(name='ALTER TABLE', suggests=RELATION_REFERENCE, followed_by=('ADD COLUMN', 'RENAME TO')),
+        # No `followed_by`: a call ends the statement, and an empty continuation
+        # list is how a clause says so — the same rule that stops RETURNING and
+        # FETCH proposing a successor.
+        Clause(name='CALL', suggests=(Kind.PROCEDURE, Kind.SCHEMA)),
     ),
 )
 
-STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'TRUNCATE', 'ALTER TABLE')
+STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'TRUNCATE', 'ALTER TABLE', 'CALL')
 
 TYPES = (
     'varchar',

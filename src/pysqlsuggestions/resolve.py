@@ -45,6 +45,17 @@ _DEFAULT_SEARCH_LIMIT = 200
 _MAX_VALUES = 30
 """How many frequent values are worth offering. `pg_stats` keeps up to a hundred."""
 
+_SEQUENCE = 'sequence'
+"""
+The one relation kind that is not a relation to query.
+
+Tested for negatively — "not a sequence" rather than "one of these kinds" —
+because `Table.kind` is the storage engine name on ClickHouse (`mergetree`,
+`log`) and the relation type on Postgres. No whitelist of ours could enumerate
+the engines a ClickHouse installation has, and one that tried would empty its
+FROM clause.
+"""
+
 _T = TypeVar('_T')
 
 
@@ -248,6 +259,22 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
             names = {candidate.text for candidate in lifted}
             return lifted + [candidate for candidate in columns if candidate.text not in names]
 
+    if Kind.PROCEDURE in request.kinds:
+        # One namespace level up from a procedure is a schema, and that is the
+        # only reading — a procedure is not a member of a relation.
+        return [
+            _function_candidate(f, Kind.PROCEDURE)
+            for f in reader.functions(request.qualifier[-1])
+            if f.kind == 'procedure'
+        ]
+
+    if Kind.SEQUENCE in request.kinds:
+        return [
+            _table_candidate(table, kind=Kind.SEQUENCE)
+            for table in reader.tables(request.qualifier[-1])
+            if table.kind == _SEQUENCE
+        ]
+
     if Kind.COLUMN in request.kinds and len(request.qualifier) >= len(dialect.namespace.levels):
         # schema.table.<caret> — the deepest reading is a column of that relation.
         schema, table = request.qualifier[-2], request.qualifier[-1]
@@ -260,7 +287,9 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         # table. Nothing comes back when it is only a schema name.
         candidates += [_column_candidate(column) for column in reader.columns(None, request.qualifier[-1])]
     if Kind.TABLE in request.kinds:
-        candidates += [_table_candidate(table) for table in reader.tables(request.qualifier[-1])]
+        candidates += [
+            _table_candidate(table) for table in reader.tables(request.qualifier[-1]) if table.kind != _SEQUENCE
+        ]
     if Kind.SCHEMA in request.kinds:
         # The qualifier is the level above: `prod.<caret>` lists prod's schemas.
         candidates += [_schema_candidate(name) for name in reader.schemas(request.qualifier[-1])]
@@ -313,7 +342,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             ]
 
     if Kind.TABLE in request.kinds:
-        listed = reader.tables(None)
+        listed = [table for table in reader.tables(None) if table.kind != _SEQUENCE]
         candidates += [_table_candidate(table) for table in listed]
         # A relation in the default namespace comes back from both calls, and
         # the two render differently — `invoices` and `public.invoices` — so
@@ -322,17 +351,26 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         candidates += [
             _table_candidate(table, qualify=table.schema)
             for table in reader.search_relations(request.prefix, limit)
-            if (table.schema, table.name) not in here
+            if table.kind != _SEQUENCE and (table.schema, table.name) not in here
         ]
         candidates += [
             Candidate(text=name, kind=Kind.CTE, detail='cte', origin='local') for name in (scope.ctes if scope else {})
         ]
 
+    if Kind.SEQUENCE in request.kinds:
+        candidates += _sequences(request, reader, dialect, limit)
+
     if Kind.SCHEMA in request.kinds:
         candidates += [_schema_candidate(name) for name in reader.schemas()]
 
     if Kind.FUNCTION in request.kinds:
-        candidates += [_function_candidate(function) for function in reader.functions()]
+        # Procedures are excluded rather than merely unranked. A procedure in an
+        # expression is not a poor suggestion, it is one the server refuses:
+        # `SELECT archive_old_reports(…)` answers `… is a procedure`.
+        candidates += [_function_candidate(f) for f in reader.functions() if f.kind != 'procedure']
+
+    if Kind.PROCEDURE in request.kinds:
+        candidates += [_function_candidate(f, Kind.PROCEDURE) for f in reader.functions() if f.kind == 'procedure']
 
     if Kind.SNIPPET in request.kinds:
         candidates += [
@@ -551,6 +589,60 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     ]
 
 
+def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
+    """
+    Sequences by name, from the default namespace and from a prefix search.
+
+    The same two sources a relation comes from, and for the same reason: a
+    sequence outside the search path has to be written qualified, and slice 2
+    already built the half that finds one.
+
+    Written bare or into a string literal, because the two positions that want a
+    sequence spell it differently. `DROP SEQUENCE <caret>` takes an identifier.
+    `nextval('<caret>` takes a string the server parses as a `regclass`, which
+    means the identifier keeps its own quotes inside it —
+    `nextval('billing."MonthlyTotals_id_seq"')` runs where the unquoted spelling
+    is refused. The kind cannot tell the two apart; only the request can.
+    """
+    listed = [table for table in reader.tables(None) if table.kind == _SEQUENCE]
+    here = {(table.schema, table.name) for table in listed}
+    found: list[tuple[Table, str | None]] = [(table, None) for table in listed]
+    found += [
+        (table, table.schema)
+        for table in reader.search_relations(request.prefix, limit)
+        if table.kind == _SEQUENCE and (table.schema, table.name) not in here
+    ]
+    if not request.writes_a_literal:
+        return [_table_candidate(table, qualify=qualify, kind=Kind.SEQUENCE) for table, qualify in found]
+    return [_sequence_literal(table, qualify, dialect) for table, qualify in found]
+
+
+def _sequence_literal(table: Table, qualify: str | None, dialect: Dialect) -> Candidate:
+    """
+    One sequence, spelled as the string literal that names it.
+
+    `literal=True` carries the text through insertion untouched, which makes the
+    quoting this function's job — both kinds of it. The identifier is quoted by
+    the dialect's rules because the server reads the string as a `regclass`, and
+    then the whole thing is quoted as a string, doubling any interior quote.
+
+    `label` and `match_text` carry the bare name: typing `mon` should find it by
+    the word-prefix tier rather than the substring one, and a popup should show a
+    name rather than a quoted string.
+    """
+    parts = (qualify, table.name) if qualify else (table.name,)
+    written = '.'.join(quote_if_needed(part, dialect) for part in parts)
+    return Candidate(
+        text="'" + written.replace("'", "''") + "'",
+        kind=Kind.SEQUENCE,
+        detail=f'{table.schema}.{table.name} (sequence)',
+        label=table.name,
+        match_text=table.name,
+        literal=True,
+        position=1 if qualify else 0,
+    )
+
+
 def _values(request: Request, reader: _Reader) -> list[Candidate]:
     """
     Literals the compared column actually holds.
@@ -746,7 +838,7 @@ def _column_candidate(
     )
 
 
-def _table_candidate(table: Table, qualify: str | None = None) -> Candidate:
+def _table_candidate(table: Table, qualify: str | None = None, kind: Kind = Kind.TABLE) -> Candidate:
     """
     One relation, qualified when a bare reference would not reach it.
 
@@ -759,7 +851,7 @@ def _table_candidate(table: Table, qualify: str | None = None) -> Candidate:
     size = f' ~{_as_count(table.rows)} rows' if table.rows is not None else ''
     return Candidate(
         text=table.name,
-        kind=Kind.TABLE,
+        kind=kind,
         detail=f'{table.schema}.{table.name} ({table.kind}){size}',
         qualifier=qualify,
         position=1 if qualify else 0,
@@ -796,11 +888,26 @@ def _schema_candidate(name: str) -> Candidate:
     return Candidate(text=name, kind=Kind.SCHEMA, detail='schema')
 
 
-def _function_candidate(function: Function) -> Candidate:
-    signature = f'{function.name}({function.args or ""}) -> {function.result}'
+def _function_candidate(function: Function, kind: Kind = Kind.FUNCTION) -> Candidate:
+    """
+    One callable, with as much of its signature as the backend reported.
+
+    The arrow is dropped rather than left dangling when there is no result to
+    put after it: `count() -> ` reads as a broken signature where `count()`
+    reads as an unknown one, and ClickHouse reports no signatures at all.
+
+    A kind other than `function` is named, because that is the part a reader
+    cannot infer from the name — `count` being an aggregate and `rank` a window
+    function is what decides whether either belongs where the caret is.
+    """
+    signature = f'{function.name}({function.args or ""})'
+    if function.result:
+        signature = f'{signature} -> {function.result}'
+    if function.kind != 'function':
+        signature = f'{signature}  {function.kind}'
     return Candidate(
         text=function.name,
-        kind=Kind.FUNCTION,
+        kind=kind,
         detail=signature,
         type=function.result,
         takes_arguments=function.takes_arguments,

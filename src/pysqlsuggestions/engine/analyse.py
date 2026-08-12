@@ -108,18 +108,24 @@ def in_placeholder(tokens: Sequence[Token], caret: int) -> bool:
     return any(token.type is TokenType.PARAM and _inside(token, caret) for token in tokens)
 
 
+def _string_index_under(tokens: Sequence[Token], caret: int) -> int:
+    """Index of the string literal the caret is inside, or -1."""
+    for index, token in enumerate(tokens):
+        if token.type is TokenType.STRING and _inside(token, caret):
+            return index
+    return -1
+
+
 def string_under(tokens: Sequence[Token], caret: int) -> Token | None:
     """
     The string literal the caret is inside, if it is inside one.
 
     Separate from `in_literal`, which also answers for comments: a half-typed
-    literal is a position with an answer — the values that column holds — where
-    a comment is a position with none.
+    literal is a position with an answer — the values that column holds, or the
+    sequence a `nextval` names — where a comment is a position with none.
     """
-    for token in tokens:
-        if token.type is TokenType.STRING and _inside(token, caret):
-            return token
-    return None
+    index = _string_index_under(tokens, caret)
+    return tokens[index] if index >= 0 else None
 
 
 def statement_at(tokens: Sequence[Token], caret: int) -> tuple[int, int]:
@@ -514,18 +520,56 @@ def inside_a_cast_awaiting_as(tokens: Sequence[Token], caret: int) -> bool:
     return not (tokens[index].type is TokenType.IDENT and tokens[index].value.upper() == 'AS')
 
 
-def _enclosing_call(tokens: Sequence[Token], index: int) -> str | None:
-    """The uppercased name of the function whose argument list encloses `index`, if any."""
+def _call_opening(tokens: Sequence[Token], index: int) -> int:
+    """
+    Index of the `(` whose argument list encloses `index`, or -1.
+
+    An opening paren carries the depth *outside* it, so the one being looked for
+    sits one level below the token it encloses.
+    """
     wanted = tokens[index].depth - 1
     for candidate in range(index - 1, -1, -1):
         token = tokens[candidate]
-        if token.type is not TokenType.PUNCT or token.text != '(' or token.depth != wanted:
-            continue
-        before = _skip_back(tokens, candidate - 1)
-        if before < 0 or tokens[before].type is not TokenType.IDENT:
-            return None
-        return tokens[before].value.upper()
-    return None
+        if token.type is TokenType.PUNCT and token.text == '(' and token.depth == wanted:
+            return candidate
+    return -1
+
+
+def _enclosing_call(tokens: Sequence[Token], index: int) -> str | None:
+    """The uppercased name of the function whose argument list encloses `index`, if any."""
+    opening = _call_opening(tokens, index)
+    if opening < 0:
+        return None
+    before = _skip_back(tokens, opening - 1)
+    if before < 0 or tokens[before].type is not TokenType.IDENT:
+        return None
+    return tokens[before].value.upper()
+
+
+def literal_argument_call(tokens: Sequence[Token], caret: int) -> str | None:
+    """
+    The uppercased name of the call whose *first* argument the caret's literal is.
+
+    None when the caret is not inside a string, when that string is not directly
+    inside an argument list, or when a comma at the same depth puts it past the
+    first argument. `nextval('<caret>` answers NEXTVAL; `setval('s', '<caret>`
+    answers nothing, because what a call's first argument names says nothing
+    about its later ones.
+    """
+    index = _string_index_under(tokens, caret)
+    if index < 0:
+        return None
+    name = _enclosing_call(tokens, index)
+    if name is None:
+        return None
+    opening = _call_opening(tokens, index)
+    depth = tokens[index].depth
+    if any(
+        token.type is TokenType.PUNCT and token.text == ',' and token.depth == depth
+        for token in tokens[opening + 1 : index]
+    ):
+        return None
+    return name
 
 
 def comparand_at(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple[tuple[str, ...], str | None]:

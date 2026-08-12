@@ -226,3 +226,19 @@ CREATE TABLE reports_runlog (
     environment varchar(32) NOT NULL,
     started_at  timestamptz NOT NULL DEFAULT now()
 );
+
+-- --------------------------------------------------------------------------- --
+-- procedures
+-- --------------------------------------------------------------------------- --
+--
+-- Stock PostgreSQL ships none: pg_proc holds 'f', 'a' and 'w' and no 'p' at
+-- all. Without these, the completion tests for `CALL ` would be asserting
+-- against an empty list and would pass however broken the feature was.
+--
+-- One per schema, so the schema-qualified position has something to find too.
+
+CREATE PROCEDURE recalculate_totals(since date DEFAULT NULL)
+LANGUAGE SQL AS $$ SELECT 1 $$;
+
+CREATE PROCEDURE billing.close_period(period_name varchar)
+LANGUAGE SQL AS $$ SELECT 1 $$;

@@ -93,12 +93,15 @@ QUERIES = CatalogQueries(
         """,
         # args is None, not '': system.functions carries no signatures, and an
         # empty string would claim these take no arguments, which would put the
-        # caret after `count()` instead of inside it.
+        # caret after `count()` instead of inside it. `result` is None for the
+        # same reason — there is no return type to report, and the word
+        # `aggregate` used to sit in that field for want of anywhere else.
         row=lambda row: Function(
             schema=None,
             name=str(row[0]),
             args=None,
-            result='aggregate' if row[1] else 'function',
+            result=None,
+            kind='aggregate' if row[1] else 'function',
         ),
     ),
 )
@@ -125,7 +128,13 @@ CLICKHOUSE = replace(
         placeholders=(Placeholder(opens='{', body='any', closes='}'),),
     ),
     namespace=Namespace(levels=('database', 'table')),
-    clauses=ANSI.clauses.extend(
+    # ClickHouse has no CALL. Its parser answers `CALL foo()` with a syntax
+    # error whose message lists every form it does accept, and none of them is
+    # this one. Both the clause and the statement start have to go: the
+    # conformance corpus reports a statement start whose clause is missing, so
+    # doing only one of the two fails the suite.
+    statement_start=tuple(phrase for phrase in ANSI.statement_start if phrase != 'CALL'),
+    clauses=ANSI.clauses.without('CALL').extend(
         Clause(
             name='PREWHERE',
             follows=frozenset({'FROM', 'SAMPLE', 'FINAL'}),

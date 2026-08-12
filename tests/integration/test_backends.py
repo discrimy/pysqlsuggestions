@@ -110,6 +110,57 @@ def test_postgres_functions(postgres_catalog: DbapiCatalog) -> None:
     assert 'now' in names
 
 
+def test_postgres_finds_the_seeded_procedure(postgres_catalog: DbapiCatalog) -> None:
+    """
+    Stock Postgres 16 ships no procedures at all — pg_proc holds only 'f', 'a'
+    and 'w' — so the seed is the only place this assertion can come from.
+    """
+    found = suggest('CALL ⌶', POSTGRES, postgres_catalog)
+    assert 'recalculate_totals' in found
+
+
+def test_postgres_keeps_the_procedure_out_of_an_expression(postgres_catalog: DbapiCatalog) -> None:
+    """
+    `SELECT recalculate_totals()` is refused by the server: `… is a procedure`.
+
+    Asserted behind a prefix that matches it, and against a catalog read that
+    proves the name is there to be found. Without both, an empty answer would
+    pass whether the filter worked or the catalog simply had nothing — and at
+    `SELECT ⌶` the ranked list is truncated long before three thousand
+    pg_catalog functions are exhausted, so absence there means nothing at all.
+    """
+    assert 'recalculate_totals' in {f.name for f in postgres_catalog.functions()}
+    assert 'recalculate_totals' not in suggest('SELECT recalc⌶', POSTGRES, postgres_catalog)
+
+
+def test_postgres_offers_no_sequence_where_a_relation_belongs(postgres_catalog: DbapiCatalog) -> None:
+    """The seed's bigserial columns create one sequence per table; none of them belongs here."""
+    found = suggest('SELECT * FROM ⌶', POSTGRES, postgres_catalog)
+    assert 'reports_report' in found
+    assert not [name for name in found if name.endswith('_id_seq')]
+
+
+def test_postgres_writes_a_sequence_literal_the_server_accepts(postgres_catalog: DbapiCatalog) -> None:
+    """
+    The fact the whole literal half rests on: the string is parsed as a
+    regclass, so a mixed-case name keeps its identifier quotes inside it.
+    `nextval('billing.MonthlyTotals_id_seq')` is refused with
+    `relation "billing.monthlytotals_id_seq" does not exist`.
+    """
+    psycopg2 = pytest.importorskip('psycopg2')
+    # A *terminated* literal in a *closed* call, because the applied statement
+    # has to be one the server can parse. `SELECT nextval('Month` would splice
+    # correctly and still be missing its closing paren, and EXPLAIN would fail
+    # for a reason that has nothing to do with the suggestion.
+    sql = "SELECT nextval('Month')"
+    caret = sql.index('Month') + len('Month')
+    [found] = [s for s in complete(sql, caret, POSTGRES, postgres_catalog) if 'MonthlyTotals' in s.text]
+    written = apply_suggestion(sql, found, dialect=POSTGRES)[0]
+    assert written == 'SELECT nextval(\'billing."MonthlyTotals_id_seq"\')'
+    with psycopg2.connect(POSTGRES_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(f'EXPLAIN {written}')
+
+
 def test_postgres_reaches_a_relation_off_the_search_path(postgres_catalog: DbapiCatalog) -> None:
     """
     `billing` is not on the fixture's search path, so `FROM invo` used to find nothing.

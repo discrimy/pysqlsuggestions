@@ -18,7 +18,15 @@ import pytest
 
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.dialects.ansi import ANSI
-from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect, Namespace, Placeholder, Syntax
+from pysqlsuggestions.dialects.base import (
+    Clause,
+    ClauseModel,
+    Dialect,
+    LiteralArgument,
+    Namespace,
+    Placeholder,
+    Syntax,
+)
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.registry import available, named
@@ -187,3 +195,50 @@ def test_the_relation_search_case_exists_where_the_query_does() -> None:
     """Postgres and ClickHouse claim it, so the corpus holds them to it."""
     for dialect in (POSTGRES, CLICKHOUSE):
         assert [case for case in DialectConformance.cases(dialect) if 'search path' in case.name]
+
+
+def test_the_corpus_asks_every_dialect_to_keep_sequences_out_of_a_relation_position() -> None:
+    """
+    The fixture always holds a sequence, so the proposition applies to a dialect
+    that has none — which is the point. A third-party dialect fetching relkind
+    'S' without filtering finds out here rather than from its users.
+    """
+    for dialect in SHIPPED:
+        assert [case for case in DialectConformance.cases(dialect) if 'sequence' in case.name]
+
+
+def test_a_dialect_that_offers_sequences_for_a_relation_fails_the_corpus() -> None:
+    """
+    Broken on purpose, like every case in the second half of this file. A clause
+    suggesting SEQUENCE where a relation belongs is the exact mistake the filter
+    prevents, and it is silent — the list is merely longer.
+    """
+    broken = replace(
+        POSTGRES,
+        clauses=POSTGRES.clauses.extend(Clause(name='FROM', follows=frozenset({'SELECT'}), suggests=(Kind.SEQUENCE,))),
+    )
+    assert DialectConformance.check(broken)
+
+
+def test_a_literal_argument_that_can_never_match_is_reported() -> None:
+    """
+    `_enclosing_call` returns a single uppercased word, so a name with a dot, a
+    space or parentheses in it can never equal one — and an empty `suggests` can
+    never produce a candidate. Both are silent, which is what `structure` is for.
+    """
+    dotted = replace(
+        ANSI,
+        literal_arguments=(LiteralArgument(function='pg_catalog.nextval', suggests=(Kind.SEQUENCE,)),),
+    )
+    assert any('single word' in problem for problem in DialectConformance.structure(dotted))
+    empty = replace(ANSI, literal_arguments=(LiteralArgument(function='nextval', suggests=()),))
+    assert any('suggests nothing' in problem for problem in DialectConformance.structure(empty))
+
+
+def test_a_dialect_declaring_no_literal_arguments_gets_no_case() -> None:
+    """
+    The corpus asks a dialect only what it claims to do — the same bargain
+    `parameter()` makes for `?` and `relation_search` makes for Trino.
+    """
+    assert not [case for case in DialectConformance.cases(TRINO) if 'literal' in case.name]
+    assert [case for case in DialectConformance.cases(POSTGRES) if 'literal' in case.name]

@@ -6,6 +6,34 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Procedures and sequences
+
+`CALL ⌶` offers procedures. `SELECT ⌶` does not — a procedure in an expression
+is refused by the server, so this is a wrong answer kept out rather than a
+missing one added. `CALL billing.⌶` still means a procedure, where the namespace
+rule would have answered with columns and tables.
+
+`nextval('⌶`, `currval('⌶` and `setval('⌶` offer sequences, written into the
+literal with their identifier quotes intact —
+`nextval('billing."MonthlyTotals_id_seq"')`, because the server parses that
+string as a `regclass` and refuses the bare spelling. Which functions name a
+sequence is dialect data, so a dialect can declare its own.
+
+`DROP SEQUENCE ⌶` and `ALTER SEQUENCE ⌶` offer sequences, and `DROP ⌶` now
+answers `TABLE` and `SEQUENCE`.
+
+**`SELECT ⌶` and `FROM ⌶` are unchanged**, which is the point of most of the
+work: sequences reach the catalog now, and a schema has one per serial column.
+
+`Function` carries a `kind` — function, aggregate, window or procedure — and a
+`result` that may be `None`. ClickHouse used to report `count() -> aggregate`,
+a kind in the return-type field for want of anywhere else; it now reports
+`count()  aggregate` and no return type, which is the truth about what
+`system.functions` knows. Postgres marks its aggregates and window functions
+for the first time.
+
+ClickHouse no longer offers `CALL`, which its parser rejects.
+
 ### Statements that are not queries
 
 `DROP TABLE ⌶` used to offer `SELECT`, `WITH` and `INSERT INTO` — the words a
@@ -16,16 +44,19 @@ one wrote `DROP TABLE SELECT`.
 themselves where a statement may begin. `DROP ⌶` offers `TABLE`. `EXPLAIN` takes
 the statements a planner accepts — not `DROP`, which is a syntax error.
 
-**Every other unrecognised form now answers with nothing.** `GRANT`, `CALL`,
-`VACUUM`, `COMMENT`, `SET`, `BEGIN` and anything a third-party dialect has not
-modelled are silent where they used to propose `SELECT`. A half-typed keyword is
+**Every other unrecognised form now answers with nothing.** `GRANT`, `VACUUM`,
+`COMMENT`, `SET`, `BEGIN` and anything a third-party dialect has not modelled
+are silent where they used to propose `SELECT`. (`CALL` was on this list and is
+modelled now — see *Procedures and sequences* above.) A half-typed keyword is
 not an unrecognised form: `SELEC⌶` still completes to `SELECT`, and so do an
 empty editor, the position after a `;`, and the position after a comment.
 
 `DROP VIEW` and `DROP INDEX` are among the silent ones. Offering them relations
-would mean offering tables for `DROP VIEW`, which the server refuses, and
-filtering by relation kind needs a set of kinds per clause — `DROP TABLE` must
-accept partitioned and foreign tables too. That waits for a change that wants it.
+would mean offering tables for `DROP VIEW`, which the server refuses. Filtering
+by relation kind exists now — it is what keeps sequences out of `FROM` — but
+only one notch coarse: `Kind.TABLE` means "not a sequence". Telling a view from
+a table needs either a kind per relation type or a list of kinds per clause, and
+that choice waits for a second consumer.
 
 `ALTER TABLE` offers `ADD COLUMN` and `RENAME TO` and stops there. A bare `DROP`
 among its continuations would make `DROP ⌶` stop answering `TABLE`, for the same

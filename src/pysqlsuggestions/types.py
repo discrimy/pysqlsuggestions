@@ -20,8 +20,24 @@ class Kind(Enum):
     TABLE = 'table'
     CTE = 'cte'
     """A relation the statement defined itself. Distinct from TABLE so a UI can say so."""
+    SEQUENCE = 'sequence'
+    """
+    A generator of numbers, which lives in the relation namespace and is not one.
+
+    Selectable — `SELECT * FROM a_seq` returns its state — and never what
+    anybody means by `FROM ⌶`, since a schema has one per serial column. Named
+    where it is wanted instead: `nextval('⌶`, `DROP SEQUENCE ⌶`.
+    """
     SCHEMA = 'schema'
     FUNCTION = 'function'
+    PROCEDURE = 'procedure'
+    """
+    A callable that a statement invokes rather than evaluates.
+
+    Distinct from FUNCTION because the two are not interchangeable in either
+    direction: `SELECT my_procedure()` is refused outright, and `CALL now()` is
+    too. A front end that colours by kind should say which one it found.
+    """
     ALIAS = 'alias'
     KEYWORD = 'keyword'
     OPERATOR = 'operator'
@@ -95,7 +111,26 @@ class Function:
     insertion, `count(` is not. ClickHouse's system.functions carries no
     signatures, so None there means unknown rather than empty.
     """
-    result: str
+    result: str | None
+    """
+    The type it returns, or None where there is nothing to report.
+
+    None means two different true things and neither is a lie: a backend that
+    keeps no signatures (ClickHouse), and a callable that returns nothing at all
+    (a procedure, where `pg_get_function_result` is NULL). Both render the same
+    way — without an arrow — because both mean "no return type to show".
+    """
+    kind: str = 'function'
+    """
+    Which sort of callable: function, aggregate, window, procedure.
+
+    Defaulted so that every existing construction keeps working and a backend
+    that cannot distinguish says the safe thing. `procedure` is the one value
+    that changes behaviour: a procedure cannot appear in an expression —
+    Postgres answers `… is a procedure. HINT: To call a procedure, use CALL.` —
+    so the expression positions filter it out and `CALL` filters everything
+    else out.
+    """
 
     @property
     def takes_arguments(self) -> bool:
@@ -312,6 +347,14 @@ class Request:
     exactly one relation, and so does a bare star over a one-relation FROM.
     Without it `u.*` expanded bare — and since the span covers the qualifier
     too, the `u.` the author wrote was deleted rather than repeated.
+    """
+    writes_a_literal: bool = False
+    """
+    Whether the span replaces a string literal, so an answer needs quoting into one.
+
+    `nextval('<caret>` and `DROP SEQUENCE <caret>` both want sequences and write
+    them differently — one inside quotes, one bare — and the kind cannot say
+    which, because it is the same kind. Only the position knows.
     """
 
 

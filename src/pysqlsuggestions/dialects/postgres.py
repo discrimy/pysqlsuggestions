@@ -6,8 +6,18 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
+from pysqlsuggestions.dialects.base import (
+    CatalogQueries,
+    Clause,
+    LiteralArgument,
+    Namespace,
+    Placeholder,
+    Query,
+    Syntax,
+)
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
+
+_PROKIND = {'f': 'function', 'a': 'aggregate', 'w': 'window', 'p': 'procedure'}
 
 _RELKIND = {
     'r': 'table',
@@ -15,6 +25,7 @@ _RELKIND = {
     'v': 'view',
     'm': 'materialized view',
     'f': 'foreign table',
+    'S': 'sequence',
 }
 
 # `$1 = '' AND visible OR nspname = $1` reads as `($1='' AND visible) OR (nspname=$1)`,
@@ -33,7 +44,10 @@ QUERIES = CatalogQueries(
             SELECT n.nspname, c.relname, c.relkind, c.reltuples
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            -- 'S' is a sequence. It is fetched here rather than by a query of
+            -- its own because it is a relation in every sense pg_class knows;
+            -- `resolve` is what keeps it out of a FROM list.
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
               AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
               -- pg_table_is_visible is true for pg_catalog, so an unqualified
               -- position would otherwise open with pg_aggregate. Naming a system
@@ -76,11 +90,11 @@ QUERIES = CatalogQueries(
     functions=Query(
         sql="""
             SELECT n.nspname, p.proname,
-                   pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)
+                   pg_get_function_arguments(p.oid), pg_get_function_result(p.oid), p.prokind
             FROM pg_proc p
             JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE ($1 = '' AND n.nspname IN ('pg_catalog', 'public') OR n.nspname = $1)
-              AND p.prokind IN ('f', 'a', 'w')
+              AND p.prokind IN ('f', 'a', 'w', 'p')
               AND p.prorettype NOT IN (
                   'internal'::regtype, 'cstring'::regtype, 'trigger'::regtype,
                   'language_handler'::regtype, 'fdw_handler'::regtype,
@@ -93,7 +107,15 @@ QUERIES = CatalogQueries(
             ORDER BY p.proname
             LIMIT 10000
         """,
-        row=lambda row: Function(schema=str(row[0]), name=str(row[1]), args=str(row[2]), result=str(row[3])),
+        row=lambda row: Function(
+            schema=str(row[0]),
+            name=str(row[1]),
+            args=str(row[2]),
+            # NULL for a procedure, which returns nothing. `str(None)` would put
+            # the word `None` in a detail column a user reads.
+            result=str(row[3]) if row[3] is not None else None,
+            kind=_PROKIND.get(str(row[4]), 'function'),
+        ),
     ),
     # Two sources, exhaustive first. An enum type lists every value it permits,
     # which no statistic can improve on; `format_type` reports only the type's
@@ -168,7 +190,7 @@ QUERIES = CatalogQueries(
             SELECT n.nspname, c.relname, c.relkind, c.reltuples
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
               AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
               AND position(lower($1) in lower(c.relname)) > 0
             ORDER BY position(lower($1) in lower(c.relname)), length(c.relname), n.nspname, c.relname
@@ -269,6 +291,7 @@ POSTGRES = replace(
         placeholders=(Placeholder(opens='$', body='digits'), Placeholder(opens=':')),
     ),
     namespace=Namespace(levels=('schema', 'table')),
+    statement_start=(*ANSI.statement_start, 'DROP SEQUENCE', 'ALTER SEQUENCE'),
     clauses=ANSI.clauses.extend(
         Clause(
             name='LATERAL',
@@ -304,9 +327,37 @@ POSTGRES = replace(
             followed_by=EXPLAINABLE,
             before_the_item=('ANALYZE', 'VERBOSE'),
         ),
+        # Postgres's alone. Trino's parser lists what DROP accepts — CATALOG,
+        # FUNCTION, MATERIALIZED, ROLE, SCHEMA, TABLE, VIEW — and SEQUENCE is
+        # not among them; ClickHouse has no sequences at all. A form only one
+        # shipped backend implements belongs to that one rather than to the
+        # baseline they share.
+        #
+        # Two-word continuations, for the reason ALTER TABLE's are: a bare
+        # `RENAME` would make ('RENAME',) a phrase in its own right, and
+        # `_half_written_clauses` skips a head that is already a phrase.
+        Clause(
+            name='DROP SEQUENCE',
+            suggests=(Kind.SEQUENCE, Kind.SCHEMA),
+            followed_by=('CASCADE', 'RESTRICT'),
+        ),
+        Clause(
+            name='ALTER SEQUENCE',
+            suggests=(Kind.SEQUENCE, Kind.SCHEMA),
+            followed_by=('RENAME TO', 'OWNED BY'),
+        ),
     ),
     keywords=frozenset(word.upper() for word in RESERVED),
     reserved=RESERVED,
     types=TYPES,
+    # The three calls that name a sequence in a string. Their argument is a
+    # `regclass`, which the server will accept for any relation — so the fact
+    # that only a sequence is *valid* here is knowledge about these functions
+    # rather than about their signature, which is why it is written down.
+    literal_arguments=(
+        LiteralArgument(function='nextval', suggests=(Kind.SEQUENCE,)),
+        LiteralArgument(function='currval', suggests=(Kind.SEQUENCE,)),
+        LiteralArgument(function='setval', suggests=(Kind.SEQUENCE,)),
+    ),
     catalog_queries=QUERIES,
 )

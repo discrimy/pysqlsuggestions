@@ -87,6 +87,10 @@ def test_extending_did_not_disturb_ansi() -> None:
         'DISTINCT ON',
         'ON CONFLICT',
         'RETURNING',
+        # Sequences are Postgres's alone here: Trino's parser lists what DROP
+        # accepts and SEQUENCE is not among it, and ClickHouse has none at all.
+        'DROP SEQUENCE',
+        'ALTER SEQUENCE',
     }
     assert {clause.name for clause in ANSI.clauses.clauses} == base
 

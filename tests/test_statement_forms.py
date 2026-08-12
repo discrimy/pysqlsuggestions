@@ -92,12 +92,18 @@ def test_alter_table_offers_relations() -> None:
     assert 'users' in offered('ALTER TABLE ')
 
 
-def test_drop_offers_the_word_that_finishes_it() -> None:
+def test_drop_offers_the_words_that_finish_it() -> None:
     """
-    Derived from the clause name by `_half_written_clauses`, the same way
+    Derived from the clause names by `_half_written_clauses`, the same way
     `GROUP ⌶` offers `BY`. No entry of its own.
+
+    Two of them since `DROP SEQUENCE` was modelled, and alphabetical rather than
+    ordered by how often each is wanted — the continuations of a shared head are
+    sorted, and no declaration carries a frequency for them. Dropping a table is
+    much the commoner intent, so this costs one keystroke there; giving
+    continuations an order of their own would cost a field on every clause.
     """
-    assert offered('DROP ') == ['TABLE']
+    assert offered('DROP ') == ['SEQUENCE', 'TABLE']
 
 
 def test_a_written_relation_is_not_followed_by_another() -> None:
@@ -138,10 +144,13 @@ def test_an_unmodelled_form_offers_nothing() -> None:
     """
     A form the engine does not know is a position it has nothing true to say
     about. It used to say `SELECT`.
+
+    `CALL` was on this list and has been modelled since; what it answers is
+    asserted in `tests/test_procedures.py`. The rule is unchanged — these are
+    the forms still unmodelled, and the list is expected to shrink.
     """
     assert offered('GRANT ') == []
     assert offered('VACUUM ') == []
-    assert offered('CALL ') == []
     assert offered('CREATE TABLE t (id ') == []
 
 
@@ -193,4 +202,4 @@ def test_the_modelled_forms_survive_the_refusal() -> None:
     """Both work only because they were modelled first; this is what says so."""
     assert 'SELECT' in offered('EXPLAIN ')
     assert 'users' in offered('DROP TABLE ')
-    assert offered('DROP ') == ['TABLE']
+    assert offered('DROP ') == ['SEQUENCE', 'TABLE']
