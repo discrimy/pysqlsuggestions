@@ -326,7 +326,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             # still finds `u.name`. The qualifier is about what gets inserted.
             seen: set[tuple[str, ...]] = set()
             for relation in relations:
-                candidates += _columns_of(relation, reader, seen, qualify=relation.label or None)
+                candidates += _columns_of(relation, reader, seen, qualify=(relation.label,) if relation.label else ())
         else:
             # Nothing is in the FROM yet, so each column carries the relation it
             # would need there. Choosing one is choosing its table as well — and
@@ -337,7 +337,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             # its relation name, so `SELECT invoices.amount FROM billing.invoices`
             # is what this writes and what Postgres plans.
             candidates += [
-                _column_candidate(c, qualify=c.table, relation=(c.schema, c.table))
+                _column_candidate(c, qualify=(c.table,), relation=(c.schema, c.table))
                 for c in reader.loose_columns(request.prefix, limit)
             ]
 
@@ -349,7 +349,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         # rank's dedupe, which keys on the rendered text, cannot collapse them.
         here = {(table.schema, table.name) for table in listed}
         candidates += [
-            _table_candidate(table, qualify=table.schema)
+            _table_candidate(table, qualify=(table.schema,))
             for table in reader.search_relations(request.prefix, limit)
             if table.kind != _SEQUENCE and (table.schema, table.name) not in here
         ]
@@ -613,7 +613,10 @@ def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         if table.kind == _SEQUENCE and (table.schema, table.name) not in here
     ]
     if not request.writes_a_literal:
-        return [_table_candidate(table, qualify=qualify, kind=Kind.SEQUENCE) for table, qualify in found]
+        return [
+            _table_candidate(table, qualify=(qualify,) if qualify else (), kind=Kind.SEQUENCE)
+            for table, qualify in found
+        ]
     return [_sequence_literal(table, qualify, dialect) for table, qualify in found]
 
 
@@ -750,7 +753,7 @@ def _columns_of(
     reader: _Reader,
     seen: set[tuple[str, ...]],
     label: str | None = None,
-    qualify: str | None = None,
+    qualify: tuple[str, ...] = (),
 ) -> list[Candidate]:
     """
     The columns a relation offers.
@@ -788,7 +791,7 @@ def _from_projection(
     label: str,
     reader: _Reader,
     seen: set[tuple[str, ...]],
-    qualify: str | None = None,
+    qualify: tuple[str, ...] = (),
 ) -> list[Candidate]:
     """Named outputs need no fetch; unresolved stars are expanded against their sources."""
     candidates = [
@@ -824,7 +827,7 @@ def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
 def _column_candidate(
     column: Column,
     label: str | None = None,
-    qualify: str | None = None,
+    qualify: tuple[str, ...] = (),
     relation: tuple[str, ...] = (),
 ) -> Candidate:
     return Candidate(
@@ -838,7 +841,7 @@ def _column_candidate(
     )
 
 
-def _table_candidate(table: Table, qualify: str | None = None, kind: Kind = Kind.TABLE) -> Candidate:
+def _table_candidate(table: Table, qualify: tuple[str, ...] = (), kind: Kind = Kind.TABLE) -> Candidate:
     """
     One relation, qualified when a bare reference would not reach it.
 

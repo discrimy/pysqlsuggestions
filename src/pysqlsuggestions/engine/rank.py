@@ -256,7 +256,8 @@ def _render(candidate: Candidate, request: Request, dialect: Dialect) -> tuple[s
         return (candidate.text.lower() if _typing_lowercase(request) else candidate.text.upper()), ()
     text = quote_if_needed(candidate.text, dialect)
     if candidate.qualifier:
-        return f'{quote_if_needed(candidate.qualifier, dialect)}.{text}', ()
+        prefix = '.'.join(quote_if_needed(part, dialect) for part in candidate.qualifier)
+        return f'{prefix}.{text}', ()
     return text, ()
 
 
