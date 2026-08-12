@@ -111,3 +111,25 @@ def test_a_star_over_one_relation_is_untouched() -> None:
     sql = 'SELECT * FROM billing.invoices'
     [found] = [s for s in complete(sql, 8, POSTGRES, catalog()) if s.kind is Kind.EXPANSION]
     assert found.text == 'amount, period'
+
+
+def test_the_offer_stage_reaches_every_schema() -> None:
+    """
+    Before this, one of these was silently dropped: both rendered
+    `invoices.amount`, and ranking dedupes on the text to be inserted. The
+    schema that lost was unreachable at this caret however much you typed.
+    """
+    found = offered('SELECT amou')
+    assert found == ['public.invoices.amount', 'billing.invoices.amount']
+
+
+def test_each_carries_the_relation_it_would_add_to_the_from() -> None:
+    """Choosing a column here is choosing its table, and the two differ by schema."""
+    got = {s.text: s.relation for s in complete('SELECT amou', 11, POSTGRES, catalog())}
+    assert got['public.invoices.amount'] == ('public', 'invoices')
+    assert got['billing.invoices.amount'] == ('billing', 'invoices')
+
+
+def test_a_column_unique_to_one_schema_stays_short() -> None:
+    """No collision, no change — `auth_user` exists once, so nothing is lengthened."""
+    assert offered('SELECT ema') == ['auth_user.email']

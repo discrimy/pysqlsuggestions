@@ -17,7 +17,7 @@ from typing import TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
-from pysqlsuggestions.engine.rank import quote_if_needed
+from pysqlsuggestions.engine.rank import MAX_POSITION_PENALTY, quote_if_needed
 from pysqlsuggestions.ports import (
     Cache,
     Catalog,
@@ -296,6 +296,49 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     return candidates
 
 
+_OFF_SEARCH_PATH = MAX_POSITION_PENALTY
+"""
+How far to demote a column whose schema is not in the default namespace.
+
+Equal to the largest penalty `position` can express, so every in-path column
+outranks every out-of-path one — and deliberately not larger, because the
+penalty saturates there and a bigger number would say something the scoring
+cannot hear. A table with more than fifty columns can tie, which is a fair
+price for not inventing a second ranking signal.
+"""
+
+
+def _loose_columns(request: Request, reader: _Reader, limit: int) -> list[Candidate]:
+    """
+    Columns with no relation in scope — `SELECT <caret>` before any FROM.
+
+    Each carries the relation it would need there, which insertion writes as a
+    FROM clause. Two relations of the same name in different schemas therefore
+    produce two entries, and they have to be told apart: rendering both as
+    `invoices.amount` is what made ranking drop one of them, silently and
+    whichever the user wanted.
+
+    Lengthened only where they would collide — the same `(table, column)` pair
+    under more than one schema. A shared table name is not enough:
+    `public.invoices.amount` and `billing.invoices.period` can never render
+    alike, so neither is touched.
+    """
+    columns = list(reader.loose_columns(request.prefix, limit))
+    schemas: dict[tuple[str, str], set[str]] = {}
+    for column in columns:
+        schemas.setdefault((column.table, column.name), set()).add(column.schema)
+    here = {(table.schema, table.name) for table in reader.tables(None)}
+    return [
+        _column_candidate(
+            column,
+            qualify=(column.schema, column.table) if len(schemas[column.table, column.name]) > 1 else (column.table,),
+            relation=(column.schema, column.table),
+            position=column.position + (0 if (column.schema, column.table) in here else _OFF_SEARCH_PATH),
+        )
+        for column in columns
+    ]
+
+
 def _ambiguous_labels(relations: Sequence[Relation]) -> frozenset[str]:
     """
     Labels naming more than one catalog relation here.
@@ -365,13 +408,11 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             # the schema with it, because a searched column may live outside the
             # default namespace and `FROM invoices` would not resolve.
             #
-            # The reference itself stays bare: a qualified FROM entry answers to
-            # its relation name, so `SELECT invoices.amount FROM billing.invoices`
-            # is what this writes and what Postgres plans.
-            candidates += [
-                _column_candidate(c, qualify=(c.table,), relation=(c.schema, c.table))
-                for c in reader.loose_columns(request.prefix, limit)
-            ]
+            # The reference stays bare where it can: a qualified FROM entry
+            # answers to its relation name, so `SELECT invoices.amount FROM
+            # billing.invoices` is what this writes and what Postgres plans. It
+            # lengthens only when two schemas would render the same reference.
+            candidates += _loose_columns(request, reader, limit)
 
     if Kind.TABLE in request.kinds:
         listed = [table for table in reader.tables(None) if table.kind != _SEQUENCE]
@@ -868,12 +909,13 @@ def _column_candidate(
     label: str | None = None,
     qualify: tuple[str, ...] = (),
     relation: tuple[str, ...] = (),
+    position: int | None = None,
 ) -> Candidate:
     return Candidate(
         text=column.name,
         kind=Kind.COLUMN,
         detail=f'{label or column.table}.{column.name} :: {column.type}',
-        position=column.position,
+        position=column.position if position is None else position,
         type=column.type,
         qualifier=qualify,
         relation=relation,
