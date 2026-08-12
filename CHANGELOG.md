@@ -6,6 +6,32 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A column reference that resolves
+
+Two relations with the same name in different schemas can both be in scope —
+`FROM public.invoices, billing.invoices` is legal, and Postgres aliases the
+second internally. Every column reference the engine wrote for them was
+`invoices.amount`, which the server refuses: `table reference "invoices" is
+ambiguous`. Each now carries its relation's whole path.
+
+`SELECT *` over the two used to expand to `invoices.amount, invoices.id,
+invoices.amount, invoices.period` — ambiguous, and naming `amount` twice.
+
+Before any `FROM` exists, a column that several schemas have is now offered once
+per schema instead of once in total. Previously the others were unreachable at
+that caret however much you typed, because ranking dedupes on the text to be
+inserted and all of them rendered alike. In a database with a schema per tenant
+this makes that list longer; the schema on the search path sorts first.
+
+**Nothing changes without a collision.** A single-schema database gets exactly
+what it got before, and that is asserted rather than assumed.
+
+`Candidate.qualifier` is now `tuple[str, ...]` rather than `str | None` — a path
+is not a name, and a dotted string in the old field would have been quoted as
+one name containing a dot. Only callers constructing a `Candidate` by hand are
+affected; `Suggestion` is unchanged, since the qualifier is already part of its
+`text`.
+
 ### Procedures and sequences
 
 `CALL ⌶` offers procedures. `SELECT ⌶` does not — a procedure in an expression
@@ -89,11 +115,16 @@ Optional, and per backend, because the cost is what decides it:
 An empty prefix searches nothing: `FROM ⌶` is not a request for every relation
 in the database.
 
-**One known limitation.** Two columns with the same name, in same-named tables,
-in different schemas still collapse to a single suggestion — ranking dedupes on
-the text to be inserted, and both render `invoices.amount`. Telling them apart
-needs a qualifier that can hold a path rather than a name, which is not in this
-change.
+**A limitation this entry recorded is now fixed.** It said two columns with the
+same name, in same-named tables, in different schemas "still collapse to a
+single suggestion", and that telling them apart "needs a qualifier that can hold
+a path rather than a name". That qualifier exists — see *A column reference that
+resolves* above.
+
+It also understated the fault. The collapse was the visible half; the invisible
+half was that the surviving suggestion is itself refused once both relations are
+in scope, so the position was writing SQL that does not run rather than merely
+offering one answer where two were due.
 
 ### `SELECT *` expands to the columns it stands for
 
