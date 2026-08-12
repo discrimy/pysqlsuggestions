@@ -10,7 +10,7 @@ RESERVED = frozenset(
     all and any array as asc between by case cast check column constraint create cross
     current_date current_time current_timestamp default desc distinct do else end except
     exists false for foreign from full grant group having in inner intersect into is join
-    left like limit natural not null offset on only or order outer primary references right
+    left like limit natural not null offset on only or order outer primary recursive references right
     select some table then to true union unique user using values when where window with
     """.split(),
 )
@@ -85,11 +85,22 @@ offered after a finished one wrote SQL the server refuses.
 
 CLAUSES = ClauseModel(
     clauses=(
-        # A CTE body takes a whole statement. `VALUES` is here and deliberately
-        # not in `followed_by`: a VALUES body is the ordinary way to write a
-        # literal table, and after the list the clause model filters it out
-        # anyway, since VALUES declares itself part of INSERT INTO.
-        Clause(name='WITH', suggests=(), opens_a_group=('SELECT', 'VALUES', 'WITH')),
+        # A CTE body takes a whole statement. `VALUES` is in `opens_a_group` and
+        # deliberately not in `followed_by`: a VALUES body is the ordinary way
+        # to write a literal table, and after the list the clause model filters
+        # it out anyway, since VALUES declares itself part of INSERT INTO.
+        #
+        # `aliases_with` is what separates `WITH a ` from `WITH a AS (…) `: the
+        # second has AS among its item words, so `_unspent_alias` drops it. The
+        # same machinery `FROM t AS x` already uses.
+        Clause(
+            name='WITH',
+            suggests=(),
+            opens_a_group=('SELECT', 'VALUES', 'WITH'),
+            followed_by=('AS', 'SELECT'),
+            aliases_with='AS',
+            before_the_item=('RECURSIVE',),
+        ),
         # No KEYWORD here: a select list wants columns and functions, and burying
         # them under reserved words is the failure mode this engine exists to avoid.
         # AS/FROM/DISTINCT arrive through `followed_by`, once an item is written.

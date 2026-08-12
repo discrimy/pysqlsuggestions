@@ -50,3 +50,55 @@ def test_a_typed_body_belongs_to_the_statement_in_it() -> None:
     needs no guard against being offered again.
     """
     assert 'auth_user' in offered('WITH a AS (SELECT * FROM ')
+
+
+def test_a_name_is_the_authors_to_invent() -> None:
+    """
+    Both positions where a CTE name goes answer nothing, and both did before
+    this change. An engine cannot guess a name, and offering keywords where one
+    belongs would be worse than silence.
+    """
+    assert offered('WITH ') == []
+    assert offered('WITH a AS (SELECT 1), ') == []
+
+
+def test_after_the_name_comes_as() -> None:
+    """
+    `AS` is the only word that can follow a CTE name, and it leads. It had no
+    answer at all before.
+
+    And it is the only word offered. `followed_by` is one list serving this
+    position and the one after the body, so the statement words rode along here
+    too until the acceptance sweep caught `WITH recent SELECT` — a statement the
+    server refuses. A clause that opens a group has a mandatory alias word, by
+    definition: that word is what introduces the group.
+    """
+    assert offered('WITH a ') == ['AS']
+
+
+def test_after_the_body_comes_the_statement_it_feeds() -> None:
+    """
+    `AS` is spent by now — it is in the item's words — so `_unspent_alias` drops
+    it, which is the whole of what separates this position from the one above.
+    """
+    found = offered('WITH a AS (SELECT 1) ')
+    assert 'SELECT' in found
+    assert 'AS' not in found
+
+
+def test_recursive_is_offered_behind_a_prefix() -> None:
+    """
+    Like `DISTINCT` after `SELECT`: it stands between the clause and its first
+    item, it is rare, and a CTE name is what usually follows `WITH` — so it
+    surfaces once something is typed rather than above every caret.
+    """
+    assert 'RECURSIVE' in offered('WITH rec')
+
+
+def test_recursive_is_not_read_as_a_cte_name() -> None:
+    """
+    Without the word reserved, the analyser reads it as a name already written
+    and offers `AS` — where another name belongs. All three shipped backends
+    accept `WITH RECURSIVE`, and only Trino reserved the word.
+    """
+    assert offered('WITH RECURSIVE ') == []
