@@ -12,6 +12,7 @@ from __future__ import annotations
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.dialects.trino import TRINO
 from pysqlsuggestions.types import Table
 
 SNAPSHOT = {
@@ -71,3 +72,44 @@ def test_the_postgres_queries_now_fetch_sequences() -> None:
     found = tables.row(('public', 'auth_user_id_seq', 'S', 1))
     assert isinstance(found, Table)
     assert found.kind == 'sequence'
+
+
+def test_dropping_a_sequence_offers_sequences_and_nothing_else() -> None:
+    """A relation would not parse there: `DROP SEQUENCE auth_user` is refused."""
+    found = offered('DROP SEQUENCE ')
+    assert 'auth_user_id_seq' in found
+    assert 'auth_user' not in found
+
+
+def test_altering_one_offers_the_same_names() -> None:
+    """Same position, same answer. The two clauses differ only in what may follow."""
+    assert 'auth_user_id_seq' in offered('ALTER SEQUENCE ')
+
+
+def test_a_shared_head_answers_with_both_of_its_phrases() -> None:
+    """
+    `DROP` begins two clause names now, and neither `DROP` nor `ALTER` is a
+    clause in its own right — so both continuations are offered. This is the
+    case that broke last slice, when a bare `DROP` among ALTER TABLE's
+    continuations made ('DROP',) a phrase and `DROP ⌶` stopped answering TABLE.
+    """
+    assert set(offered('DROP ')) >= {'TABLE', 'SEQUENCE'}
+    assert set(offered('ALTER ')) >= {'TABLE', 'SEQUENCE'}
+
+
+def test_a_schema_qualifier_names_a_sequence_in_it() -> None:
+    """`billing.` after this clause lists what the clause is for, not what a schema holds."""
+    found = offered('DROP SEQUENCE billing.')
+    assert [text for text in found if 'MonthlyTotals' in text]
+    assert 'auth_user' not in found
+
+
+def test_both_clauses_can_start_a_statement() -> None:
+    """
+    Not optional: the conformance corpus reports a statement start whose clause
+    is missing, and the converse — a clause never reachable — is what would make
+    these dead on arrival.
+    """
+    assert 'DROP SEQUENCE' in POSTGRES.statement_start
+    assert 'ALTER SEQUENCE' in POSTGRES.statement_start
+    assert 'DROP SEQUENCE' not in TRINO.statement_start

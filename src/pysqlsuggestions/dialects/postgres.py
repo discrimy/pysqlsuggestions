@@ -283,6 +283,7 @@ POSTGRES = replace(
         placeholders=(Placeholder(opens='$', body='digits'), Placeholder(opens=':')),
     ),
     namespace=Namespace(levels=('schema', 'table')),
+    statement_start=(*ANSI.statement_start, 'DROP SEQUENCE', 'ALTER SEQUENCE'),
     clauses=ANSI.clauses.extend(
         Clause(
             name='LATERAL',
@@ -317,6 +318,25 @@ POSTGRES = replace(
             suggests=(Kind.SNIPPET, Kind.KEYWORD),
             followed_by=EXPLAINABLE,
             before_the_item=('ANALYZE', 'VERBOSE'),
+        ),
+        # Postgres's alone. Trino's parser lists what DROP accepts — CATALOG,
+        # FUNCTION, MATERIALIZED, ROLE, SCHEMA, TABLE, VIEW — and SEQUENCE is
+        # not among them; ClickHouse has no sequences at all. A form only one
+        # shipped backend implements belongs to that one rather than to the
+        # baseline they share.
+        #
+        # Two-word continuations, for the reason ALTER TABLE's are: a bare
+        # `RENAME` would make ('RENAME',) a phrase in its own right, and
+        # `_half_written_clauses` skips a head that is already a phrase.
+        Clause(
+            name='DROP SEQUENCE',
+            suggests=(Kind.SEQUENCE, Kind.SCHEMA),
+            followed_by=('CASCADE', 'RESTRICT'),
+        ),
+        Clause(
+            name='ALTER SEQUENCE',
+            suggests=(Kind.SEQUENCE, Kind.SCHEMA),
+            followed_by=('RENAME TO', 'OWNED BY'),
         ),
     ),
     keywords=frozenset(word.upper() for word in RESERVED),

@@ -268,6 +268,13 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
             if f.kind == 'procedure'
         ]
 
+    if Kind.SEQUENCE in request.kinds:
+        return [
+            _table_candidate(table, kind=Kind.SEQUENCE)
+            for table in reader.tables(request.qualifier[-1])
+            if table.kind == _SEQUENCE
+        ]
+
     if Kind.COLUMN in request.kinds and len(request.qualifier) >= len(dialect.namespace.levels):
         # schema.table.<caret> — the deepest reading is a column of that relation.
         schema, table = request.qualifier[-2], request.qualifier[-1]
@@ -349,6 +356,9 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         candidates += [
             Candidate(text=name, kind=Kind.CTE, detail='cte', origin='local') for name in (scope.ctes if scope else {})
         ]
+
+    if Kind.SEQUENCE in request.kinds:
+        candidates += _sequences(request, reader, limit)
 
     if Kind.SCHEMA in request.kinds:
         candidates += [_schema_candidate(name) for name in reader.schemas()]
@@ -579,6 +589,25 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     ]
 
 
+def _sequences(request: Request, reader: _Reader, limit: int) -> list[Candidate]:
+    """
+    Sequences by name, from the default namespace and from a prefix search.
+
+    The same two sources a relation comes from, and for the same reason: a
+    sequence outside the search path has to be written qualified, and slice 2
+    already built the half that finds one.
+    """
+    listed = [table for table in reader.tables(None) if table.kind == _SEQUENCE]
+    here = {(table.schema, table.name) for table in listed}
+    found: list[tuple[Table, str | None]] = [(table, None) for table in listed]
+    found += [
+        (table, table.schema)
+        for table in reader.search_relations(request.prefix, limit)
+        if table.kind == _SEQUENCE and (table.schema, table.name) not in here
+    ]
+    return [_table_candidate(table, qualify=qualify, kind=Kind.SEQUENCE) for table, qualify in found]
+
+
 def _values(request: Request, reader: _Reader) -> list[Candidate]:
     """
     Literals the compared column actually holds.
@@ -774,7 +803,7 @@ def _column_candidate(
     )
 
 
-def _table_candidate(table: Table, qualify: str | None = None) -> Candidate:
+def _table_candidate(table: Table, qualify: str | None = None, kind: Kind = Kind.TABLE) -> Candidate:
     """
     One relation, qualified when a bare reference would not reach it.
 
@@ -787,7 +816,7 @@ def _table_candidate(table: Table, qualify: str | None = None) -> Candidate:
     size = f' ~{_as_count(table.rows)} rows' if table.rows is not None else ''
     return Candidate(
         text=table.name,
-        kind=Kind.TABLE,
+        kind=kind,
         detail=f'{table.schema}.{table.name} ({table.kind}){size}',
         qualifier=qualify,
         position=1 if qualify else 0,

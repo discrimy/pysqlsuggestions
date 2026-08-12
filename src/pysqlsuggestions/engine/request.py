@@ -49,7 +49,7 @@ _NAMESPACE_KINDS = {
     'table': Kind.TABLE,
 }
 
-_NOT_A_RELATION = frozenset({Kind.PROCEDURE})
+_NOT_A_RELATION = frozenset({Kind.PROCEDURE, Kind.SEQUENCE})
 """
 Kinds naming something the namespace rules do not describe.
 
