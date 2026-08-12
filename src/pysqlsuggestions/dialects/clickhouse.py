@@ -93,12 +93,15 @@ QUERIES = CatalogQueries(
         """,
         # args is None, not '': system.functions carries no signatures, and an
         # empty string would claim these take no arguments, which would put the
-        # caret after `count()` instead of inside it.
+        # caret after `count()` instead of inside it. `result` is None for the
+        # same reason — there is no return type to report, and the word
+        # `aggregate` used to sit in that field for want of anywhere else.
         row=lambda row: Function(
             schema=None,
             name=str(row[0]),
             args=None,
-            result='aggregate' if row[1] else 'function',
+            result=None,
+            kind='aggregate' if row[1] else 'function',
         ),
     ),
 )

@@ -796,11 +796,26 @@ def _schema_candidate(name: str) -> Candidate:
     return Candidate(text=name, kind=Kind.SCHEMA, detail='schema')
 
 
-def _function_candidate(function: Function) -> Candidate:
-    signature = f'{function.name}({function.args or ""}) -> {function.result}'
+def _function_candidate(function: Function, kind: Kind = Kind.FUNCTION) -> Candidate:
+    """
+    One callable, with as much of its signature as the backend reported.
+
+    The arrow is dropped rather than left dangling when there is no result to
+    put after it: `count() -> ` reads as a broken signature where `count()`
+    reads as an unknown one, and ClickHouse reports no signatures at all.
+
+    A kind other than `function` is named, because that is the part a reader
+    cannot infer from the name — `count` being an aggregate and `rank` a window
+    function is what decides whether either belongs where the caret is.
+    """
+    signature = f'{function.name}({function.args or ""})'
+    if function.result:
+        signature = f'{signature} -> {function.result}'
+    if function.kind != 'function':
+        signature = f'{signature}  {function.kind}'
     return Candidate(
         text=function.name,
-        kind=Kind.FUNCTION,
+        kind=kind,
         detail=signature,
         type=function.result,
         takes_arguments=function.takes_arguments,

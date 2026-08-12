@@ -70,7 +70,15 @@ QUERIES = CatalogQueries(
         # zero-argument overload spells its arguments `''`, which is exactly the
         # distinction `Function.takes_arguments` reads.
         sql='SHOW FUNCTIONS',
-        row=lambda row: Function(schema=None, name=str(row[0]), args=str(row[2]), result=str(row[1])),
+        row=lambda row: Function(
+            schema=None,
+            name=str(row[0]),
+            args=str(row[2]),
+            result=str(row[1]),
+            # Column 3 is the kind, which was fetched and ignored. Trino spells
+            # a plain function `scalar`; the other two spellings match ours.
+            kind='function' if str(row[3]) == 'scalar' else str(row[3]),
+        ),
     ),
 )
 

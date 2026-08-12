@@ -88,7 +88,7 @@ def test_the_catalog_decides_which_it_is() -> None:
 
 def test_an_unknown_signature_is_treated_as_taking_arguments() -> None:
     """ClickHouse reports no signatures, and the safe guess is to park inside."""
-    cat = MemoryCatalog(SNAPSHOT, functions=(Function(schema=None, name='nowhere', args=None, result='function'),))
+    cat = MemoryCatalog(SNAPSHOT, functions=(Function(schema=None, name='nowhere', args=None, result=None),))
     found = next(s for s in complete('SELECT no', 9, POSTGRES, cat) if s.text == 'nowhere')
     assert found.takes_arguments is True
 

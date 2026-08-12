@@ -95,7 +95,26 @@ class Function:
     insertion, `count(` is not. ClickHouse's system.functions carries no
     signatures, so None there means unknown rather than empty.
     """
-    result: str
+    result: str | None
+    """
+    The type it returns, or None where there is nothing to report.
+
+    None means two different true things and neither is a lie: a backend that
+    keeps no signatures (ClickHouse), and a callable that returns nothing at all
+    (a procedure, where `pg_get_function_result` is NULL). Both render the same
+    way — without an arrow — because both mean "no return type to show".
+    """
+    kind: str = 'function'
+    """
+    Which sort of callable: function, aggregate, window, procedure.
+
+    Defaulted so that every existing construction keeps working and a backend
+    that cannot distinguish says the safe thing. `procedure` is the one value
+    that changes behaviour: a procedure cannot appear in an expression —
+    Postgres answers `… is a procedure. HINT: To call a procedure, use CALL.` —
+    so the expression positions filter it out and `CALL` filters everything
+    else out.
+    """
 
     @property
     def takes_arguments(self) -> bool:

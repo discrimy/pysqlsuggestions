@@ -9,6 +9,8 @@ from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
 
+_PROKIND = {'f': 'function', 'a': 'aggregate', 'w': 'window', 'p': 'procedure'}
+
 _RELKIND = {
     'r': 'table',
     'p': 'partitioned table',
@@ -76,7 +78,7 @@ QUERIES = CatalogQueries(
     functions=Query(
         sql="""
             SELECT n.nspname, p.proname,
-                   pg_get_function_arguments(p.oid), pg_get_function_result(p.oid)
+                   pg_get_function_arguments(p.oid), pg_get_function_result(p.oid), p.prokind
             FROM pg_proc p
             JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE ($1 = '' AND n.nspname IN ('pg_catalog', 'public') OR n.nspname = $1)
@@ -93,7 +95,15 @@ QUERIES = CatalogQueries(
             ORDER BY p.proname
             LIMIT 10000
         """,
-        row=lambda row: Function(schema=str(row[0]), name=str(row[1]), args=str(row[2]), result=str(row[3])),
+        row=lambda row: Function(
+            schema=str(row[0]),
+            name=str(row[1]),
+            args=str(row[2]),
+            # NULL for a procedure, which returns nothing. `str(None)` would put
+            # the word `None` in a detail column a user reads.
+            result=str(row[3]) if row[3] is not None else None,
+            kind=_PROKIND.get(str(row[4]), 'function'),
+        ),
     ),
     # Two sources, exhaustive first. An enum type lists every value it permits,
     # which no statistic can improve on; `format_type` reports only the type's
