@@ -49,6 +49,16 @@ _NAMESPACE_KINDS = {
     'table': Kind.TABLE,
 }
 
+_NOT_A_RELATION = frozenset({Kind.PROCEDURE})
+"""
+Kinds naming something the namespace rules do not describe.
+
+A schema holds relations, so `_qualified_kinds` answers one segment with tables
+and columns. A clause suggesting one of these is asking for something else, and
+two positions have to say so: past a dot, and inside the clause's own argument
+list.
+"""
+
 
 def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     """
@@ -358,6 +368,10 @@ def _clause_kinds(
     found = dialect.clauses.get(clause)
     if found is None:
         return (Kind.KEYWORD,)
+    if inside_a_group and _NOT_A_RELATION & set(found.suggests):
+        # `CALL proc(⌶` is an argument list. There is no FROM, so no column is
+        # in scope, and a procedure cannot nest inside one.
+        return ()
 
     kinds = found.suggests
     # Whether anything at all may follow this clause, before the caret's own

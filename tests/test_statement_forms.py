@@ -138,10 +138,13 @@ def test_an_unmodelled_form_offers_nothing() -> None:
     """
     A form the engine does not know is a position it has nothing true to say
     about. It used to say `SELECT`.
+
+    `CALL` was on this list and has been modelled since; what it answers is
+    asserted in `tests/test_procedures.py`. The rule is unchanged — these are
+    the forms still unmodelled, and the list is expected to shrink.
     """
     assert offered('GRANT ') == []
     assert offered('VACUUM ') == []
-    assert offered('CALL ') == []
     assert offered('CREATE TABLE t (id ') == []
 
 

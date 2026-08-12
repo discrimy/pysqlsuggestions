@@ -233,6 +233,19 @@ class ClauseModel:
         kept = tuple(added.pop(clause.name, clause) for clause in self.clauses)
         return ClauseModel(clauses=kept + tuple(added.values()))
 
+    def without(self, *names: str) -> ClauseModel:
+        """
+        A new model with `names` removed. The receiver is untouched.
+
+        The counterpart to `extend`, and needed for the same reason: a dialect
+        composed from ANSI inherits clauses the standard has and its backend does
+        not. ClickHouse has no `CALL` — its parser lists every form it accepts
+        and CALL is not among them — and inheriting one would offer a word whose
+        statement the server rejects outright.
+        """
+        dropped = set(names)
+        return ClauseModel(clauses=tuple(clause for clause in self.clauses if clause.name not in dropped))
+
     def get(self, name: str) -> Clause | None:
         """The clause called `name`, or None. Linear scan over a few dozen entries."""
         for clause in self.clauses:

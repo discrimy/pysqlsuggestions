@@ -128,7 +128,13 @@ CLICKHOUSE = replace(
         placeholders=(Placeholder(opens='{', body='any', closes='}'),),
     ),
     namespace=Namespace(levels=('database', 'table')),
-    clauses=ANSI.clauses.extend(
+    # ClickHouse has no CALL. Its parser answers `CALL foo()` with a syntax
+    # error whose message lists every form it does accept, and none of them is
+    # this one. Both the clause and the statement start have to go: the
+    # conformance corpus reports a statement start whose clause is missing, so
+    # doing only one of the two fails the suite.
+    statement_start=tuple(phrase for phrase in ANSI.statement_start if phrase != 'CALL'),
+    clauses=ANSI.clauses.without('CALL').extend(
         Clause(
             name='PREWHERE',
             follows=frozenset({'FROM', 'SAMPLE', 'FINAL'}),

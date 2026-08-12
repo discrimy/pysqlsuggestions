@@ -337,6 +337,9 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         # `SELECT archive_old_reports(…)` answers `… is a procedure`.
         candidates += [_function_candidate(f) for f in reader.functions() if f.kind != 'procedure']
 
+    if Kind.PROCEDURE in request.kinds:
+        candidates += [_function_candidate(f, Kind.PROCEDURE) for f in reader.functions() if f.kind == 'procedure']
+
     if Kind.SNIPPET in request.kinds:
         candidates += [
             Candidate(

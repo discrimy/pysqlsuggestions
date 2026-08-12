@@ -115,3 +115,39 @@ def test_the_postgres_query_now_asks_for_procedures() -> None:
     query = POSTGRES.catalog_queries.functions
     assert query is not None
     assert "'p'" in query.sql
+
+
+def test_call_offers_procedures_and_not_functions() -> None:
+    """The mirror of the expression case: `CALL now()` is refused just as firmly."""
+    found = offered('CALL ')
+    assert 'archive_old_reports' in found
+    assert 'count' not in found
+
+
+def test_a_procedure_arrives_ready_for_its_arguments() -> None:
+    """`CALL archive_old_reports(` with the caret inside, which is what a call needs next."""
+    [found] = [s for s in complete('CALL ', 5, POSTGRES, catalog()) if s.text == 'archive_old_reports']
+    assert found.takes_arguments is True
+
+
+def test_the_argument_list_of_a_call_offers_nothing() -> None:
+    """
+    `CALL proc(⌶` has no FROM, so no column is in scope, and a procedure cannot
+    nest inside a procedure. Everything the clause would otherwise suggest is a
+    wrong answer here.
+    """
+    assert offered('CALL archive_old_reports(') == []
+
+
+def test_clickhouse_does_not_offer_a_statement_it_cannot_parse() -> None:
+    """
+    Server-verified: ClickHouse answers `Syntax error … Expected one of: Query,
+    …` for `CALL foo()`, and its list of accepted forms has no CALL in it.
+
+    Both halves have to go — the clause and the statement start — because the
+    conformance corpus reports a statement start whose clause is missing.
+    """
+    assert 'CALL' not in CLICKHOUSE.statement_start
+    assert CLICKHOUSE.clauses.get('CALL') is None
+    assert 'CALL' in POSTGRES.statement_start
+    assert 'CALL' in TRINO.statement_start
