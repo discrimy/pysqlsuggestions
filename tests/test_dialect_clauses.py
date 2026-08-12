@@ -92,6 +92,7 @@ def test_extending_did_not_disturb_ansi() -> None:
         'DROP SEQUENCE',
         'ALTER SEQUENCE',
         'DROP MATERIALIZED VIEW',
+        'DROP INDEX',
     }
     assert {clause.name for clause in ANSI.clauses.clauses} == base
 

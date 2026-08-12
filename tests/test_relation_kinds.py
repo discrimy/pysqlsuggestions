@@ -102,3 +102,43 @@ def test_postgres_replaces_ansis_drop_table_rather_than_adding_one() -> None:
     assert postgres is not None
     assert ansi.relation_kinds == ()
     assert postgres.relation_kinds == ('table', 'partitioned table', 'foreign table')
+
+
+INDEXED = {**SNAPSHOT, ('public', 'auth_user_pkey'): [('id', 'bigint')]}
+INDEX_KINDS = {**KINDS, ('public', 'auth_user_pkey'): 'index'}
+
+
+def indexed() -> MemoryCatalog:
+    """The same fixture with an index in it, which most positions must ignore."""
+    return MemoryCatalog(INDEXED, table_kinds=INDEX_KINDS, search_path=('public',))
+
+
+def test_an_index_is_not_a_relation_position() -> None:
+    """
+    `SELECT * FROM auth_user_pkey` is `ERROR: cannot open relation`, so an index
+    belongs out of a FROM list for the reason a sequence does — and there are
+    far more of them: 31 in the demo database against 19 tables.
+    """
+    sql = 'SELECT * FROM '
+    found = [s.text for s in complete(sql, len(sql), POSTGRES, indexed())]
+    assert 'auth_user' in found
+    assert 'auth_user_pkey' not in found
+
+
+def test_dropping_an_index_offers_indexes_only() -> None:
+    """The one position that wants precisely what every other position hides."""
+    sql = 'DROP INDEX '
+    found = [s.text for s in complete(sql, len(sql), POSTGRES, indexed())]
+    assert 'auth_user_pkey' in found
+    assert 'auth_user' not in found
+    assert 'reports_active' not in found
+
+
+def test_the_postgres_query_fetches_indexes() -> None:
+    """Both paths, because a prefix search must reach one outside the search path."""
+    tables = POSTGRES.catalog_queries.tables
+    search = POSTGRES.catalog_queries.relation_search
+    assert tables is not None
+    assert search is not None
+    assert "'i'" in tables.sql
+    assert "'i'" in search.sql

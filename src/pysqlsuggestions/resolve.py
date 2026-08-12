@@ -56,9 +56,15 @@ the engines a ClickHouse installation has, and one that tried would empty its
 FROM clause.
 """
 
-_NOT_QUERYABLE = frozenset({_SEQUENCE})
+_NOT_QUERYABLE = frozenset({_SEQUENCE, 'index'})
 """
 Relation kinds that live in the catalog and cannot be read from.
+
+A sequence and an index: `SELECT * FROM a_seq` returns its state and is merely
+useless, while `SELECT * FROM an_idx` is `ERROR: cannot open relation`. Both are
+in `pg_class` and neither is what anybody means by `FROM ⌶` — and indexes
+outnumber tables in an ordinary schema, 31 against 19 in the fixture this
+library develops against.
 
 Still a negative test, for the reason the single-kind version was: `Table.kind`
 is the storage engine name on ClickHouse — `mergetree`, `replacingmergetree` —
