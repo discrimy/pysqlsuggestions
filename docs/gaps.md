@@ -12,28 +12,7 @@ Ordered by value per unit of work, not by size.
 
 ---
 
-## 1. Procedures and sequences
-
-`CALL ⌶` and `nextval('⌶')` are ordinary SQL and answer with nothing. The
-catalog knows functions and not much else: `Catalog.functions` is one method and
-`Function` has no notion of a procedure that returns nothing, a sequence, or a
-package.
-
-`CALL ⌶` now answers with nothing deliberately rather than by omission — it is
-an unrecognised statement form, and those are silent. That removes the wrong
-answer and leaves the missing one.
-
-A sequence is the cheaper half — it is a name in a namespace, so it is a `Table`
-with a different `kind` in everything but spelling, and `pg_class` already
-reports it. A procedure needs two things this engine still lacks: a `Kind` of
-its own, and a `CALL` clause to put it in. The clause is cheap now that the
-statement-form machinery exists — `DROP TABLE` is the same shape — so this is no
-longer blocked on anything but the catalog work.
-
-Trino has neither, ClickHouse has no sequences, so this is largely a Postgres
-feature and should be built as one.
-
-## 2. CREATE TABLE
+## 1. CREATE TABLE
 
 `CREATE TABLE t (id ⌶` has nothing to say. `DROP TABLE`, `TRUNCATE`,
 `ALTER TABLE` and `EXPLAIN` are modelled now, and every other unrecognised form
@@ -52,7 +31,7 @@ well enough to be useful is a different size of thing than one that knows
 that reason — and because a bare `DROP` among its continuations would make
 `DROP ⌶` stop answering `TABLE`, the way `ON ⌶` does not answer `CONFLICT`.
 
-## 3. History ranking
+## 2. History ranking
 
 Named in the v0.1 design as out of scope and still the honest answer to the
 problem `engine/joins.py` refuses to solve by inference. A join mined from
@@ -75,6 +54,28 @@ first in its key, and for the same reason.
 
 Kept rather than deleted, because a list whose entries only ever disappear tells
 a later reader nothing about what was decided.
+
+- **Procedures and sequences.** `CALL ⌶` offers procedures, `nextval('⌶` offers
+  sequences, and `DROP SEQUENCE ⌶` and `ALTER SEQUENCE ⌶` offer them too. Both
+  halves are one filter over two records — the catalog reports a subtype, and
+  the position admits only some subtypes — which is why they were built
+  together rather than in sequence.
+
+  This entry called the sequence half "the cheaper" one and it was not. What it
+  did not say is that `prokind IN ('f', 'a', 'w')` was already load-bearing: a
+  procedure in an expression is refused by the server outright, so widening
+  that filter without a matching one downstream would have traded a missing
+  answer for a wrong one. Nor that stock Postgres ships **no procedures at
+  all**, which makes `CALL ⌶` invisible until somebody writes one — the seed
+  grew two so the integration tests assert against something.
+
+  The identifier keeps its quotes inside the string:
+  `nextval('billing."MonthlyTotals_id_seq"')` runs and the bare spelling is
+  refused, because the server reads that literal as a `regclass` rather than as
+  text.
+
+  ClickHouse now says what it *lacks* for the first time — it has no `CALL`, and
+  inheriting one from ANSI would have offered a word its parser rejects.
 
 - **DROP, TRUNCATE, ALTER TABLE and EXPLAIN.** They name a relation, or a
   statement, and now offer one. Every form still unmodelled — `GRANT`, `CALL`,
@@ -114,6 +115,13 @@ a later reader nothing about what was decided.
 Carried from the v0.1 design's out-of-scope list and the README's status
 paragraph, repeated here so the whole list lives in one place:
 
+- **Relation-kind filtering finer than one notch.** `DROP VIEW ⌶` and
+  `DROP INDEX ⌶` still answer nothing. `Table.kind` already carries `view`,
+  `materialized view` and `foreign table`, so the catalog half is done, and the
+  filter exists — it is what keeps sequences out of `FROM`. What is undecided is
+  the shape: a `Kind` per relation type, or a list of kinds on `Clause`. Two
+  kinds is what there were users for, and choosing between those shapes with one
+  hypothetical consumer is how a field gets designed wrong.
 - **Physical layout ranking.** `Table.rows` is fetched and stored; nothing
   scores on it. A relation with millions of rows and one with dozens are
   currently indistinguishable in a ranked list.
@@ -143,7 +151,7 @@ not mistake them for oversights:
   and Combined next to Semantic because it could not retire the first. That is
   a migration artefact, not a feature.
 - **Join conditions inferred from column names.** Argued at length in
-  `engine/joins.py` and `ports.py`; the answer is gap 3, not a heuristic.
+  `engine/joins.py` and `ports.py`; the answer is gap 2, not a heuristic.
 - **AI anything.** Query execution, formatting, linting and full validation
   remain non-goals, and generating SQL from prose is further outside them than
   any of those.
