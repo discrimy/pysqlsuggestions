@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 
 SNAPSHOT = {('public', 'auth_user'): [('id', 'bigint'), ('email', 'varchar')]}
@@ -102,3 +103,31 @@ def test_recursive_is_not_read_as_a_cte_name() -> None:
     accept `WITH RECURSIVE`, and only Trino reserved the word.
     """
     assert offered('WITH RECURSIVE ') == []
+
+
+def test_postgres_takes_a_data_modifying_cte() -> None:
+    """
+    `WITH a AS (INSERT INTO … RETURNING id) SELECT * FROM a` plans, and so do
+    the UPDATE and DELETE forms. A Postgres extension: ClickHouse refuses the
+    same statement with a syntax error.
+    """
+    found = offered('WITH a AS (')
+    assert 'INSERT INTO' in found
+    assert 'UPDATE' in found
+    assert 'DELETE FROM' in found
+
+
+def test_postgres_takes_one_after_the_list_too() -> None:
+    """`WITH a AS (SELECT 1) INSERT INTO … SELECT x FROM a` plans."""
+    assert 'INSERT INTO' in offered('WITH a AS (SELECT 1) ')
+
+
+def test_clickhouse_keeps_the_conservative_body() -> None:
+    """
+    Inherited rather than declared, and the refusal is why: a dialect that
+    cannot run the statement should not offer the word that starts it.
+    """
+    sql = 'WITH a AS ('
+    found = [s.text for s in complete(sql, len(sql), CLICKHOUSE, MemoryCatalog(SNAPSHOT))]
+    assert 'SELECT' in found
+    assert 'INSERT INTO' not in found
