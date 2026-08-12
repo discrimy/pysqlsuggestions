@@ -300,9 +300,15 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
                 candidates += _columns_of(relation, reader, seen, qualify=relation.label or None)
         else:
             # Nothing is in the FROM yet, so each column carries the relation it
-            # would need there. Choosing one is choosing its table as well.
+            # would need there. Choosing one is choosing its table as well — and
+            # the schema with it, because a searched column may live outside the
+            # default namespace and `FROM invoices` would not resolve.
+            #
+            # The reference itself stays bare: a qualified FROM entry answers to
+            # its relation name, so `SELECT invoices.amount FROM billing.invoices`
+            # is what this writes and what Postgres plans.
             candidates += [
-                _column_candidate(c, qualify=c.table, relation=(c.table,))
+                _column_candidate(c, qualify=c.table, relation=(c.schema, c.table))
                 for c in reader.loose_columns(request.prefix, limit)
             ]
 

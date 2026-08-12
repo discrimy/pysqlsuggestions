@@ -146,7 +146,6 @@ QUERIES = CatalogQueries(
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-              AND pg_catalog.pg_table_is_visible(c.oid)
               AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
               AND position(lower($1) in lower(a.attname)) > 0
             ORDER BY position(lower($1) in lower(a.attname)), length(a.attname), n.nspname, c.relname, a.attname

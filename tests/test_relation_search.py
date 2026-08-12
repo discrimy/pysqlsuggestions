@@ -12,6 +12,7 @@ from __future__ import annotations
 from pysqlsuggestions.api import apply_suggestion, complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.types import Kind
 
 SNAPSHOT = {
     ('public', 'reports'): [('id', 'bigint'), ('name', 'text')],
@@ -109,3 +110,27 @@ def test_a_catalog_without_the_capability_is_unchanged() -> None:
 
     sql = 'SELECT * FROM invo'
     assert [s.text for s in complete(sql, len(sql), POSTGRES, Plain(catalog()))] == []  # type: ignore[arg-type]
+
+
+def test_a_searched_column_carries_its_schema_into_the_from_clause() -> None:
+    """
+    Without this the engine writes `FROM invoices`, which Postgres refuses with
+    `relation "invoices" does not exist` — a wrong answer where there had been a
+    missing one.
+    """
+    sql = 'SELECT amou'
+    [found] = [s for s in complete(sql, len(sql), POSTGRES, catalog()) if s.kind is Kind.COLUMN]
+    assert found.relation == ('billing', 'invoices')
+    written = apply_suggestion(sql, found, dialect=POSTGRES)[0]
+    assert written == 'SELECT invoices.amount FROM billing.invoices'
+
+
+def test_the_column_reference_stays_bare() -> None:
+    """
+    A qualified FROM entry answers to its bare relation name, so the schema in
+    the column reference too would be noise. Postgres plans
+    `SELECT invoices.amount FROM billing.invoices` and this test pins that shape.
+    """
+    sql = 'SELECT amou'
+    [found] = [s for s in complete(sql, len(sql), POSTGRES, catalog()) if s.kind is Kind.COLUMN]
+    assert found.text == 'invoices.amount'
