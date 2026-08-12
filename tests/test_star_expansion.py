@@ -10,10 +10,28 @@ cannot serve both.
 
 from __future__ import annotations
 
-from pysqlsuggestions.api import derive_request
+from pysqlsuggestions.api import apply_suggestion, complete, derive_request
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.rank import rank
-from pysqlsuggestions.types import Candidate, Kind, Request
+from pysqlsuggestions.types import Candidate, Kind, Request, Suggestion
+
+SNAPSHOT = {
+    ('public', 'users'): [('id', 'bigint'), ('name', 'text'), ('email', 'text')],
+    ('public', 'orders'): [('id', 'bigint'), ('user_id', 'bigint'), ('total', 'numeric')],
+}
+
+
+def catalog() -> MemoryCatalog:
+    """Two relations that share a column name, which is what makes qualifying necessary."""
+    return MemoryCatalog(SNAPSHOT)
+
+
+def only_expansion(sql: str, caret: int, source: MemoryCatalog | None = None) -> Suggestion:
+    """The one expansion offered at `caret`, asserted to be exactly one."""
+    found = [s for s in complete(sql, caret, POSTGRES, source or catalog()) if s.kind is Kind.EXPANSION]
+    assert len(found) == 1, f'expected one expansion, got {[s.text for s in found]}'
+    return found[0]
 
 
 def test_a_candidate_may_carry_its_own_span() -> None:
@@ -100,3 +118,72 @@ def test_a_star_inside_a_call_is_not_expanded() -> None:
 def test_multiplication_is_not_a_star() -> None:
     """`SELECT a * ⌶` and `WHERE 5 * ⌶` are the operator, and open an operand."""
     assert request_at('SELECT a * 2 FROM users u', caret=10).star is None
+
+
+def test_one_relation_expands_bare() -> None:
+    """Nothing is ambiguous, so nothing needs a prefix."""
+    assert only_expansion('SELECT * FROM users u', 8).text == 'id, name, email'
+
+
+def test_two_relations_expand_qualified() -> None:
+    """`users` and `orders` both have `id`, and the unqualified list is a query Postgres refuses."""
+    sql = 'SELECT * FROM users u JOIN orders o ON o.user_id = u.id'
+    assert only_expansion(sql, 8).text == 'u.id, u.name, u.email, o.id, o.user_id, o.total'
+
+
+def test_a_qualified_star_expands_its_own_relation_qualified() -> None:
+    """`u.*` names one relation, and the qualifier it was written with is kept."""
+    sql = 'SELECT u.* FROM users u JOIN orders o ON o.user_id = u.id'
+    assert only_expansion(sql, 10).text == 'u.id, u.name, u.email'
+
+
+def test_accepting_replaces_the_star() -> None:
+    """The whole point of the candidate's own span, asserted on the resulting text."""
+    sql = 'SELECT * FROM users u'
+    written = apply_suggestion(sql, only_expansion(sql, 8), dialect=POSTGRES)[0]
+    assert written == 'SELECT id, name, email FROM users u'
+
+
+def test_accepting_a_qualified_star_replaces_the_qualifier_too() -> None:
+    """Leaving `u.` in place would give `u.u.id`."""
+    sql = 'SELECT u.* FROM users u'
+    written = apply_suggestion(sql, only_expansion(sql, 10), dialect=POSTGRES)[0]
+    assert written == 'SELECT u.id, u.name, u.email FROM users u'
+
+
+def test_from_is_still_offered_beside_the_expansion() -> None:
+    """The expansion leads; it does not take the position over."""
+    found = [s.text for s in complete('SELECT * FROM users u', 8, POSTGRES, catalog())]
+    assert found[0] == 'id, name, email'
+    assert 'WHERE' in found
+
+
+def test_a_cte_expands_with_no_catalog_at_all() -> None:
+    """A relation the statement described carries its own projection, which is the offline claim."""
+    sql = 'WITH recent AS (SELECT id, total FROM orders) SELECT * FROM recent r'
+    found = [s for s in complete(sql, sql.index('*') + 1, POSTGRES) if s.kind is Kind.EXPANSION]
+    assert [s.text for s in found] == ['id, total']
+
+
+def test_the_detail_names_the_relations() -> None:
+    """The label shows the star as written; the detail says what it covers."""
+    offered = only_expansion('SELECT * FROM users u', 8)
+    assert offered.label == 'expand *'
+    assert offered.detail == '3 columns of users'
+
+
+def test_a_qualified_star_says_so_in_its_label() -> None:
+    """Two stars in one select list are otherwise indistinguishable in the popup."""
+    assert only_expansion('SELECT u.* FROM users u', 10).label == 'expand u.*'
+
+
+def test_a_name_needing_quotes_is_quoted() -> None:
+    """The text is inserted verbatim, so quoting is this stage's job, as it is for a join clause."""
+    snapshot = {('public', 'users'): [('id', 'bigint'), ('Mixed Case', 'text')]}
+    assert only_expansion('SELECT * FROM users u', 8, MemoryCatalog(snapshot)).text == 'id, "Mixed Case"'
+
+
+def test_a_relation_the_catalog_cannot_answer_for_offers_no_expansion() -> None:
+    """An expansion to zero columns is worse than none: it would delete the star."""
+    sql = 'SELECT * FROM missing m'
+    assert [s for s in complete(sql, 8, POSTGRES, catalog()) if s.kind is Kind.EXPANSION] == []

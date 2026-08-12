@@ -304,6 +304,15 @@ class Request:
     `*` names every relation of its own query level, which is `Scope.relations`
     and not `visible()`: a star does not reach into an enclosing query.
     """
+    star_qualifier: str | None = None
+    """
+    The label written left of the star's dot, as in `u.*`. None for a bare star.
+
+    Carried because `star_of` cannot stand in for it: a qualified star names
+    exactly one relation, and so does a bare star over a one-relation FROM.
+    Without it `u.*` expanded bare — and since the span covers the qualifier
+    too, the `u.` the author wrote was deleted rather than repeated.
+    """
 
 
 @dataclass(frozen=True, slots=True)

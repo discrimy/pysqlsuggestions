@@ -409,6 +409,12 @@ def star_span(tokens: Sequence[Token], index: int) -> tuple[int, int]:
     return start, tokens[index].end
 
 
+def star_qualifier(tokens: Sequence[Token], index: int) -> str | None:
+    """The label written left of the star's dot, as in `u.*`, or None for a bare star."""
+    found = _star_qualifier(tokens, index)
+    return tokens[found].value if found is not None else None
+
+
 def star_relations(tokens: Sequence[Token], index: int, scope: Scope | None) -> tuple[Relation, ...]:
     """
     The relations the star at `index` stands for.

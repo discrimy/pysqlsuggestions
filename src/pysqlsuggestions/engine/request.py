@@ -30,6 +30,7 @@ from pysqlsuggestions.engine.analyse import (
     qualifier_and_prefix,
     scope_of,
     star_at,
+    star_qualifier,
     star_relations,
     star_span,
     statement_at,
@@ -108,6 +109,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         keyword_case=_keyword_case(tokens, caret, dialect),
         star=star_span(tokens, star) if star is not None else None,
         star_of=star_of,
+        star_qualifier=star_qualifier(tokens, star) if star is not None else None,
     )
 
 
