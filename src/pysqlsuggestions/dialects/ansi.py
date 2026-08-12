@@ -229,6 +229,15 @@ CLAUSES = ClauseModel(
         # leaves `DROP TABLE users ` offering a second relation, which cannot
         # follow without a comma.
         Clause(name='DROP TABLE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
+        # The one kind-narrowed clause that belongs in the baseline: all three
+        # backends have the statement and all three spell the kind `view` —
+        # ClickHouse's view engine lowercases to exactly that.
+        Clause(
+            name='DROP VIEW',
+            suggests=RELATION_REFERENCE,
+            followed_by=('CASCADE', 'RESTRICT'),
+            relation_kinds=('view',),
+        ),
         Clause(name='TRUNCATE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
         # Two words each, and neither head is a phrase of its own. A bare `DROP`
         # here would make `('DROP',)` a phrase, and `_half_written_clauses`
@@ -247,7 +256,7 @@ CLAUSES = ClauseModel(
     ),
 )
 
-STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'TRUNCATE', 'ALTER TABLE', 'CALL')
+STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'DROP VIEW', 'TRUNCATE', 'ALTER TABLE', 'CALL')
 
 TYPES = (
     'varchar',

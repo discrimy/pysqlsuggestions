@@ -6,6 +6,28 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A clause says which relations it means
+
+`DROP TABLE ⌶` used to offer views. `DROP TABLE public.reports_active` is
+refused — `"reports_active" is not a table` — so that was a wrong answer, and it
+is the reason this landed rather than staying a nicety.
+
+`DROP VIEW ⌶`, `DROP MATERIALIZED VIEW ⌶` and `DROP INDEX ⌶` now offer what they
+mean. Indexes reach the catalog for the first time, and reach no other position:
+`SELECT * FROM an_index` is `cannot open relation`, and there are more indexes
+than tables in an ordinary schema — 31 against 19 in the fixture this library
+develops against.
+
+`Clause` gains `relation_kinds`. It is a positive list, so it is only true where
+the vocabulary is known — `DROP TABLE`'s narrowing is declared for Postgres,
+which wrote its own `relkind` mapping, while ClickHouse reports storage engine
+names and keeps the unnarrowed clause. `DROP VIEW` is the one that reaches the
+baseline: all three backends have the statement and all three spell that kind
+`view`.
+
+**`FROM ⌶` is unchanged**, which is most of the work: a view is queryable and
+still belongs there, a sequence and an index are not and still do not.
+
 ### `WITH` answers where it never did
 
 `WITH a AS (⌶` offers the statements a CTE body may contain — `SELECT`,
@@ -142,12 +164,11 @@ modelled now — see *Procedures and sequences* above.) A half-typed keyword is
 not an unrecognised form: `SELEC⌶` still completes to `SELECT`, and so do an
 empty editor, the position after a `;`, and the position after a comment.
 
-`DROP VIEW` and `DROP INDEX` are among the silent ones. Offering them relations
-would mean offering tables for `DROP VIEW`, which the server refuses. Filtering
-by relation kind exists now — it is what keeps sequences out of `FROM` — but
-only one notch coarse: `Kind.TABLE` means "not a sequence". Telling a view from
-a table needs either a kind per relation type or a list of kinds per clause, and
-that choice waits for a second consumer.
+`DROP VIEW` and `DROP INDEX` were among the silent ones when this shipped, and
+are not any longer — see *A clause says which relations it means* above. The
+choice that was waiting for a second consumer got one, and ClickHouse settled
+it: reporting storage engines rather than relational categories is what makes a
+positive kind list dialect-local rather than universal.
 
 `ALTER TABLE` offers `ADD COLUMN` and `RENAME TO` and stops there. A bare `DROP`
 among its continuations would make `DROP ⌶` stop answering `TABLE`, for the same

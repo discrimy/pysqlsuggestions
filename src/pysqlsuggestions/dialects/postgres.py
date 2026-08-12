@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE
+from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE, RELATION_REFERENCE
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import (
     CatalogQueries,
@@ -26,6 +26,7 @@ _RELKIND = {
     'm': 'materialized view',
     'f': 'foreign table',
     'S': 'sequence',
+    'i': 'index',
 }
 
 # `$1 = '' AND visible OR nspname = $1` reads as `($1='' AND visible) OR (nspname=$1)`,
@@ -47,7 +48,7 @@ QUERIES = CatalogQueries(
             -- 'S' is a sequence. It is fetched here rather than by a query of
             -- its own because it is a relation in every sense pg_class knows;
             -- `resolve` is what keeps it out of a FROM list.
-            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'i')
               AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
               -- pg_table_is_visible is true for pg_catalog, so an unqualified
               -- position would otherwise open with pg_aggregate. Naming a system
@@ -190,7 +191,7 @@ QUERIES = CatalogQueries(
             SELECT n.nspname, c.relname, c.relkind, c.reltuples
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'i')
               AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
               AND position(lower($1) in lower(c.relname)) > 0
             ORDER BY position(lower($1) in lower(c.relname)), length(c.relname), n.nspname, c.relname
@@ -291,7 +292,13 @@ POSTGRES = replace(
         placeholders=(Placeholder(opens='$', body='digits'), Placeholder(opens=':')),
     ),
     namespace=Namespace(levels=('schema', 'table')),
-    statement_start=(*ANSI.statement_start, 'DROP SEQUENCE', 'ALTER SEQUENCE'),
+    statement_start=(
+        *ANSI.statement_start,
+        'DROP SEQUENCE',
+        'ALTER SEQUENCE',
+        'DROP MATERIALIZED VIEW',
+        'DROP INDEX',
+    ),
     clauses=ANSI.clauses.extend(
         Clause(
             name='LATERAL',
@@ -345,6 +352,29 @@ POSTGRES = replace(
             name='ALTER SEQUENCE',
             suggests=(Kind.SEQUENCE, Kind.SCHEMA),
             followed_by=('RENAME TO', 'OWNED BY'),
+        ),
+        # Postgres's own relkind vocabulary, so the narrowing is expressible
+        # here and not in ANSI — ClickHouse reports storage engines and a
+        # positive list naming `table` would empty the position there.
+        # `DROP TABLE` takes all three of these and refuses a view:
+        # `"reports_active" is not a table`.
+        Clause(
+            name='DROP TABLE',
+            suggests=RELATION_REFERENCE,
+            followed_by=('CASCADE', 'RESTRICT'),
+            relation_kinds=('table', 'partitioned table', 'foreign table'),
+        ),
+        Clause(
+            name='DROP MATERIALIZED VIEW',
+            suggests=RELATION_REFERENCE,
+            followed_by=('CASCADE', 'RESTRICT'),
+            relation_kinds=('materialized view',),
+        ),
+        Clause(
+            name='DROP INDEX',
+            suggests=RELATION_REFERENCE,
+            followed_by=('CASCADE', 'RESTRICT'),
+            relation_kinds=('index',),
         ),
         # Data-modifying CTEs, which are Postgres's own: all three forms plan
         # inside a body and after the list, and ClickHouse refuses the first

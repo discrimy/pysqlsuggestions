@@ -286,3 +286,15 @@ def test_a_dialect_declaring_no_group_words_gets_no_case() -> None:
     """
     bare = replace(ANSI, clauses=ClauseModel(clauses=(Clause(name='SELECT', suggests=(Kind.COLUMN,)),)))
     assert not [case for case in DialectConformance.cases(bare) if 'group' in case.name]
+
+
+def test_the_corpus_asks_a_dialect_about_the_kinds_it_narrows_to() -> None:
+    """
+    A clause naming kinds no relation in the catalog has is silent rather than
+    wrong — a misspelt kind, or one this backend does not report. Only a
+    behavioural case sees it.
+    """
+    for dialect in SHIPPED:
+        narrowed = [c for c in dialect.clauses.clauses if c.relation_kinds]
+        cases = [case for case in DialectConformance.cases(dialect) if 'kinds' in case.name]
+        assert bool(cases) == bool(narrowed), dialect.name
