@@ -100,7 +100,18 @@ depend on stubs for a package the library itself never imports.
 
 
 def misplaced(connection: Any, sql: str) -> str:
-    """Postgres's complaint if `sql` has a token that cannot be there, else ''."""
+    """
+    Postgres's complaint if `sql` has a token that cannot be there, else ''.
+
+    Only queries can be checked this way. The parse happens by prefixing
+    `EXPLAIN`, and `EXPLAIN DROP TABLE t` is itself a syntax error — as is
+    `EXPLAIN EXPLAIN SELECT 1`. So `CORPUS` holds DML and nothing else, and the
+    DDL statement forms are covered by `tests/test_statement_forms.py` instead.
+
+    The alternative would be executing DDL and rolling the savepoint back, which
+    would cost this connection its one useful property: it parses, and never
+    runs anything.
+    """
     with connection.cursor() as cursor:
         try:
             cursor.execute('SAVEPOINT probe')
