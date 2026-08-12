@@ -93,7 +93,9 @@ def rank(
                 Suggestion(
                     text=text,
                     kind=candidate.kind,
-                    replace_span=request.replace_span,
+                    # Spelled against None rather than truthiness: a span is a
+                    # tuple and the falsy-looking `(0, 0)` is a real one.
+                    replace_span=candidate.span if candidate.span is not None else request.replace_span,
                     score=round(score, 3),
                     detail=candidate.detail,
                     takes_arguments=candidate.takes_arguments,

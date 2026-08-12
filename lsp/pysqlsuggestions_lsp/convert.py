@@ -45,6 +45,7 @@ ITEM_KINDS: dict[Kind, CompletionItemKind] = {
     Kind.SNIPPET: CompletionItemKind.Snippet,
     Kind.VALUE: CompletionItemKind.Value,
     Kind.JOIN: CompletionItemKind.Snippet,
+    Kind.EXPANSION: CompletionItemKind.Snippet,
 }
 """Every Kind the engine can emit. A test fails if one is added and not mapped."""
 

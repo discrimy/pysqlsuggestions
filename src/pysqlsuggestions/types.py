@@ -39,6 +39,14 @@ class Kind(Enum):
     Not a TABLE: accepting it writes `auth_user au ON r.author_id = au.id`, not a
     name. Ranking treats it as whatever the position wanted — see `_kind_bonus`.
     """
+    EXPANSION = 'expansion'
+    """
+    The column list a `*` stands for, as one accept.
+
+    Not a COLUMN: a front end colouring by kind should not claim that a
+    comma-separated list of six names is a column. Not a SNIPPET either, which
+    means a statement shape with blanks to fill.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +286,24 @@ class Request:
     it is lowercase — and the prefix is empty there, so the casing has to come
     from somewhere else.
     """
+    star: tuple[int, int] | None = None
+    """
+    The span of a `*` the caret sits on, qualifier included, when it stands for something.
+
+    `u.*` is replaced whole rather than in part: each expanded column carries its
+    own `u.`, so leaving the written one in place would emit the first column
+    bare and the rest qualified. None when the caret is not on a star, and also
+    when it is on one that stands for no relation — `SELECT *` before any FROM
+    has nothing to expand, and saying so here keeps the kind out of the list.
+    """
+    star_of: tuple[Relation, ...] = ()
+    """
+    The relations that star stands for. Non-empty exactly when `star` is set.
+
+    `t.*` names one — the relation answering to the label left of the dot. A bare
+    `*` names every relation of its own query level, which is `Scope.relations`
+    and not `visible()`: a star does not reach into an enclosing query.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,6 +356,14 @@ class Candidate:
 
     Distinct from `detail`, which says what the thing *is*. A front end may render
     it differently — the annotation is the teaching part of a ranked list.
+    """
+    span: tuple[int, int] | None = None
+    """
+    What to replace, when that is not what the rest of the position replaces.
+
+    A star expansion overwrites the star; the `FROM` offered at the same caret
+    is inserted beside it. `Request.replace_span` belongs to the position, and
+    one span cannot serve both — accepting `FROM` would delete the star.
     """
 
 
