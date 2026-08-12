@@ -11,6 +11,7 @@
     --column: #2b7a4b; --table: #9a5b18; --schema: #7048a8; --function: #1b6f8a;
     --keyword: #8a1b4b; --alias: #6b6862; --cte: #2f6f6f; --operator: #6b6862;
     --value: #a8501b; --type: #7048a8; --snippet: #2f6f6f; --join: #1b6a8a;
+    --expansion: #6a5300;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
@@ -20,6 +21,7 @@
       --column: #6bcf94; --table: #e0a566; --schema: #c0a0f0; --function: #6cc5de;
       --keyword: #f091b8; --alias: #9b9791; --cte: #7fd0d0; --operator: #9b9791;
       --value: #e8a271; --type: #c0a0f0; --snippet: #7fd0d0; --join: #7cc3e0;
+      --expansion: #d8c26a;
     }
   }
   * { box-sizing: border-box; }
@@ -88,6 +90,7 @@
   .k-cte { color: var(--cte); } .k-operator { color: var(--operator); }
   .k-value { color: var(--value); } .k-type { color: var(--type); }
   .k-snippet { color: var(--snippet); } .k-join { color: var(--join); }
+  .k-expansion { color: var(--expansion); }
 
   .boot { color: var(--muted); font-size: 12px; margin: 6px 0; }
   .boot[data-done="yes"] { display: none; }

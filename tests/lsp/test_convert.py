@@ -212,3 +212,17 @@ def test_detail_and_note_both_survive() -> None:
 def test_the_label_is_shown_when_the_text_would_read_poorly() -> None:
     """What is inserted and what is displayed are not always the same string."""
     assert item('', suggestion('count()', Kind.FUNCTION, label='count')).label == 'count'
+
+
+def test_an_expansion_is_offered_as_a_snippet() -> None:
+    """It writes several things at once, which is the nearest thing LSP has to a name for it."""
+    offered = suggestion('id, name, email', Kind.EXPANSION, (7, 8))
+    assert item('SELECT *', offered).kind is CompletionItemKind.Snippet
+
+
+def test_an_expansion_replaces_the_star_it_was_offered_for() -> None:
+    """The span is the candidate's own, and it must survive the trip to a text edit."""
+    offered = suggestion('id, name, email', Kind.EXPANSION, (7, 8))
+    edit = edit_of(item('SELECT * FROM users u', offered))
+    assert (edit.range.start.character, edit.range.end.character) == (7, 8)
+    assert edit.new_text == 'id, name, email'
