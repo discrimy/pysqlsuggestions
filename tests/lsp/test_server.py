@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from lsprotocol.types import INITIALIZE, TEXT_DOCUMENT_COMPLETION
+from pygls.feature_manager import is_thread_function
 
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.postgres import POSTGRES
@@ -266,3 +267,39 @@ def test_every_concurrent_caret_still_gets_an_answer() -> None:
     found = concurrently(refusing_session([], []))
     assert len(found) == 8  # noqa: PLR2004
     assert all('recent' in answer for answer in found)
+
+
+def dispatched_in_a_thread(handler: Any) -> bool:
+    """
+    Whether pygls will run `handler` in its thread pool rather than on the loop.
+
+    Wrapped because pygls ships `is_thread_function` untyped and this project
+    type-checks strictly — one ignore in one place rather than one per caller.
+    """
+    marked: bool = is_thread_function(handler)  # type: ignore[no-untyped-call]
+    return marked
+
+
+def test_completion_is_dispatched_off_the_event_loop() -> None:
+    """
+    A completion may read a database, and pygls calls an unmarked handler
+    inline on the event loop — so a slow introspection query would stop the
+    server answering anything at all, including the client's own cancellation
+    of the request that is stuck.
+
+    Asserted through pygls's own predicate rather than by looking for our
+    decorator: `is_thread_function` is the branch the dispatcher takes, and it
+    is what a pygls major version would change.
+    """
+    handler = create_server().protocol.fm.features[TEXT_DOCUMENT_COMPLETION]
+    assert dispatched_in_a_thread(handler)
+
+
+def test_initialize_stays_on_the_event_loop() -> None:
+    """
+    It touches no database — `Profile.from_options` is pure — so a thread hop
+    would buy nothing and cost a context switch on the one request that
+    everything else waits for anyway.
+    """
+    handler = create_server().protocol.fm.features[INITIALIZE]
+    assert not dispatched_in_a_thread(handler)

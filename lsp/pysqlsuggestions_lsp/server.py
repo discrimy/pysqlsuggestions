@@ -227,8 +227,16 @@ def create_server(connect: Connect | None = None) -> SqlServer:
             log.info('no connection profile; completing from the statement alone')
 
     @server.feature(TEXT_DOCUMENT_COMPLETION, CompletionOptions(trigger_characters=TRIGGERS))
+    @server.thread()
     def completion(params: CompletionParams) -> CompletionList:
-        """Suggestions for the caret. Never raises."""
+        """
+        Suggestions for the caret. Never raises.
+
+        Marked for the thread pool because it may read a database. pygls calls
+        an unmarked handler inline on the event loop, where a slow
+        introspection query would stop the server answering anything — the
+        session's lock is what makes that concurrency safe.
+        """
         document = server.workspace.get_text_document(params.text_document.uri)
         offset = document.offset_at_position(params.position)
         return CompletionList(is_incomplete=False, items=server.session.suggest(document.source, offset))
