@@ -46,3 +46,12 @@ def pytest_terminal_summary(terminalreporter: TerminalReporter) -> None:
         f'grammar burn-down: {answered}/{len(GRAMMAR_CASES)} SELECT positions answered, '
         f'{refused} of the {gaps} gaps refused',
     )
+
+    # A count rather than a ratio. Every case naming a dialect passes on it, so
+    # a ratio would read n/n forever; the number worth printing is how much of
+    # the shared baseline is asserted there at all, and a case that stopped
+    # holding fails the run rather than moving this line.
+    shared = sorted({name for case in GRAMMAR_CASES for name in case.dialects} - {'postgres'})
+    if shared:
+        counts = ', '.join(f'{sum(1 for c in GRAMMAR_CASES if name in c.dialects)} on {name}' for name in shared)
+        terminalreporter.write_line(f'  also holding: {counts}')

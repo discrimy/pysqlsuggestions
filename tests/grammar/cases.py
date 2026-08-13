@@ -83,6 +83,20 @@ class GrammarCase:
     second golden-request corpus: `WINDOW ⌶` offering a column is not a missing
     answer, it is an answer that writes SQL the server refuses.
     """
+    dialects: tuple[str, ...] = ('postgres',)
+    """
+    Which backends this case must hold on. Postgres alone by default.
+
+    Declared rather than derived. Running every case against every dialect and
+    recording what passes would absorb a regression as though it were a
+    decision — the value of naming them is that a case marked shared and newly
+    failing is a backend losing behaviour nothing else covers.
+
+    Postgres is the default because the synopsis is Postgres's. A case naming
+    another dialect claims the production is not Postgres's alone, which is a
+    claim about SQL rather than about this repository, so it is made explicitly
+    and one case at a time.
+    """
     pending: bool = False
     """True for a case the engine cannot satisfy today: an xfail(strict=True)."""
     refused: str = ''
@@ -123,29 +137,50 @@ a set of two strings is auditable, and a rule that skipped "short lines" would
 silently swallow a real production later.
 """
 
+_EVERY_DIALECT = ('postgres', 'clickhouse', 'trino')
+"""
+A production all three shipped backends have, at a caret all three answer alike.
+
+Measured before it was claimed — every case carrying this passed against
+`CLICKHOUSE` and `TRINO` when it was added. That is the baseline, and a case
+here going red means a dialect lost behaviour no other test covers.
+"""
+
+_POSTGRES_AND_TRINO = ('postgres', 'trino')
+"""
+Trino declares `TABLESAMPLE` and ClickHouse does not, which is the whole of it.
+
+Three cases divide here, and they are the reason `dialects` is a tuple rather
+than a boolean: `shared` would have had to mean "all of them" and these are not.
+"""
+
 CASES: tuple[GrammarCase, ...] = (
     # --- with_query -------------------------------------------------------
     GrammarCase(
         sql='⌶',
         cite='[ WITH [ RECURSIVE ] with_query [, ...] ]',
         offers=('WITH', 'SELECT'),
+        dialects=_EVERY_DIALECT,
         note='the empty editor, where a statement may begin',
     ),
     GrammarCase(
         sql='WITH rec⌶',
         cite='[ WITH [ RECURSIVE ] with_query [, ...] ]',
         offers=('RECURSIVE',),
+        dialects=_EVERY_DIALECT,
         note='prefix-gated: request.py withholds before_the_item at an empty caret, on purpose',
     ),
     GrammarCase(
         sql='WITH x ⌶',
         cite=_WITH_QUERY,
         offers=('AS',),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='WITH x (⌶',
         cite=_WITH_QUERY,
         refuses=('SELECT', 'VALUES', 'users'),
+        dialects=_EVERY_DIALECT,
         refused='a CTE column list names columns being defined, so there is nothing to suggest; the fix is silence',
         note='the paren is a name list rather than the CTE body, told apart by the alias word',
     ),
@@ -159,8 +194,18 @@ CASES: tuple[GrammarCase, ...] = (
     GrammarCase(
         sql='WITH x AS (⌶',
         cite=_WITH_QUERY,
-        offers=('SELECT', 'VALUES', 'INSERT INTO', 'UPDATE', 'DELETE FROM'),
-        note='MERGE is in the grammar and in no dialect here; not asserted',
+        offers=('SELECT', 'VALUES'),
+        dialects=_EVERY_DIALECT,
+        note='the two body forms every backend has',
+    ),
+    GrammarCase(
+        sql='WITH x AS (⌶',
+        cite=_WITH_QUERY,
+        offers=('INSERT INTO', 'UPDATE', 'DELETE FROM'),
+        note=(
+            "data-modifying CTEs, which are Postgres's; ClickHouse refuses the first outright. "
+            'MERGE is in the grammar and in no dialect here, so it is not asserted'
+        ),
     ),
     GrammarCase(
         sql='WITH RECURSIVE x AS (SELECT 1) SEARCH ⌶',
@@ -183,12 +228,14 @@ CASES: tuple[GrammarCase, ...] = (
         cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
         offers=('users.id',),
         refuses=('ALL', 'DISTINCT'),
+        dialects=_EVERY_DIALECT,
         note='a column is what belongs here; the modifiers are prefix-gated and must not crowd it',
     ),
     GrammarCase(
         sql='SELECT dis⌶',
         cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
         offers=('DISTINCT',),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT al⌶',
@@ -199,6 +246,7 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT id, ⌶',
         cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
         refuses=('DISTINCT', 'ALL'),
+        dialects=_EVERY_DIALECT,
         note='both are legal only directly after SELECT; this is the position they must not reach',
     ),
     GrammarCase(
@@ -210,11 +258,13 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT DISTINCT ON (⌶',
         cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT id ⌶',
         cite='[ { * | expression [ [ AS ] output_name ] } [, ...] ]',
         offers=('AS', 'FROM'),
+        dialects=_EVERY_DIALECT,
     ),
     # --- from_item --------------------------------------------------------
     GrammarCase(
@@ -228,18 +278,21 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM ONLY ⌶',
         cite='[ ONLY ] table_name [ * ] [ [ AS ] alias [ ( column_alias [, ...] ) ] ]',
         offers=('users',),
+        dialects=_EVERY_DIALECT,
         note='an accidental green: ONLY is skipped as an unrecognised token and FROM carries the position',
     ),
     GrammarCase(
         sql='SELECT * FROM users ⌶',
         cite='[ ONLY ] table_name [ * ] [ [ AS ] alias [ ( column_alias [, ...] ) ] ]',
         offers=('AS', 'TABLESAMPLE'),
-        note='AS is offered, TABLESAMPLE is not',
+        dialects=_POSTGRES_AND_TRINO,
+        note='ClickHouse declares no TABLESAMPLE clause, so this caret offers less there and is not claimed for it',
     ),
     GrammarCase(
         sql='SELECT * FROM users AS u (⌶',
         cite='[ ONLY ] table_name [ * ] [ [ AS ] alias [ ( column_alias [, ...] ) ] ]',
         refuses=('users', 'orders', 'public'),
+        dialects=_EVERY_DIALECT,
         refused='a column alias list names columns being defined; silence is the answer, not a relation',
         note='a list of names being defined; silent by the rule in engine/analyse.py',
     ),
@@ -247,15 +300,23 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users TABLESAMPLE ⌶',
         cite='[ TABLESAMPLE sampling_method ( argument [, ...] ) [ REPEATABLE ( seed ) ] ]',
         refuses=('JOIN', 'WHERE', 'users'),
+        dialects=_POSTGRES_AND_TRINO,
         refused='sampling methods are extensible per installation; a list here could not be kept true',
-        note='the clause exists to stop this caret answering as though it were still inside FROM',
+        note=(
+            'the clause exists to stop this caret answering as though it were still inside FROM; '
+            'ClickHouse declares no TABLESAMPLE, so it is not claimed there'
+        ),
     ),
     GrammarCase(
         sql='SELECT * FROM users TABLESAMPLE BERNOULLI (10) REPEATABLE (⌶',
         cite='[ TABLESAMPLE sampling_method ( argument [, ...] ) [ REPEATABLE ( seed ) ] ]',
         refuses=('users', 'orders', 'public'),
+        dialects=_POSTGRES_AND_TRINO,
         refused='a repeat seed is a number; nothing in a catalog answers it',
-        note='offers relation names where a seed belongs',
+        note=(
+            'was offering relation names where a seed belongs; ClickHouse declares no TABLESAMPLE, '
+            'so it is not claimed there'
+        ),
     ),
     GrammarCase(
         sql='SELECT * FROM LATERAL (⌶',
@@ -268,6 +329,7 @@ CASES: tuple[GrammarCase, ...] = (
         sql='WITH x AS (SELECT 1) SELECT * FROM x ⌶',
         cite='with_query_name [ [ AS ] alias [ ( column_alias [, ...] ) ] ]',
         offers=('AS',),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM LATERAL ⌶',
@@ -286,6 +348,7 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM generate_series(1, 2) AS t (⌶',
         cite='[ LATERAL ] function_name ( [ argument [, ...] ] ) [ AS ] alias ( column_definition [, ...] )',
         refuses=('users', 'orders', 'public'),
+        dialects=_EVERY_DIALECT,
         refused='a column definition list is DDL inside a query, the authoring this engine stops short of',
         note='a list of names being defined; silent by the rule in engine/analyse.py',
     ),
@@ -293,6 +356,7 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM generate_series(1, 2) AS (⌶',
         cite='[ LATERAL ] function_name ( [ argument [, ...] ] ) AS ( column_definition [, ...] )',
         refuses=('users', 'orders', 'public'),
+        dialects=_EVERY_DIALECT,
         refused='the anonymous spelling of the definition list above, refused for the same reason',
         note='a list of names being defined; silent by the rule in engine/analyse.py',
     ),
@@ -308,18 +372,21 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users u ⌶',
         cite=_JOIN,
         offers=('JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'CROSS JOIN'),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users u JOIN orders o ⌶',
         cite=_JOIN,
         offers=('ON', 'USING'),
         refuses=('AS',),
+        dialects=_EVERY_DIALECT,
         note='AS is correctly withheld: the alias is spent, and a second one parses as nothing',
     ),
     GrammarCase(
         sql='SELECT * FROM users u JOIN orders o ON ⌶',
         cite=_JOIN,
         offers=('u.id', 'o.user_id'),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users u JOIN orders o USING (id) ⌶',
@@ -335,24 +402,28 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users u NATURAL ⌶',
         cite='from_item NATURAL join_type from_item',
         offers=('JOIN', 'LEFT JOIN'),
+        dialects=_EVERY_DIALECT,
         note='an accidental green: NATURAL is skipped and FROM offers its joins anyway',
     ),
     GrammarCase(
         sql='SELECT * FROM users u CROSS ⌶',
         cite='from_item CROSS JOIN from_item',
         offers=('JOIN',),
+        dialects=_EVERY_DIALECT,
     ),
     # --- the clauses that shape a result ----------------------------------
     GrammarCase(
         sql='SELECT * FROM users WHERE ⌶',
         cite='[ WHERE condition ]',
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY ⌶',
         cite='[ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]',
         offers=('users.id',),
         refuses=('ROLLUP', 'CUBE'),
+        dialects=_EVERY_DIALECT,
         note='columns belong here; the grouping words are prefix-gated',
     ),
     GrammarCase(
@@ -384,40 +455,47 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users GROUP BY (⌶',
         cite='( expression [, ...] )',
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
         note='covers the bare `expression` and `( )` alternatives too; see UNCITED',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY ROLLUP (⌶',
         cite='ROLLUP ( { expression | ( expression [, ...] ) } [, ...] )',
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
         note='an accidental green: ROLLUP is skipped and GROUP BY carries the position',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY CUBE (⌶',
         cite='CUBE ( { expression | ( expression [, ...] ) } [, ...] )',
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
         note='accidental, as ROLLUP is',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY GROUPING SETS (⌶',
         cite='GROUPING SETS ( grouping_element [, ...] )',
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
         note='accidental, as ROLLUP is',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY id HAVING ⌶',
         cite='[ HAVING condition ]',
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users WINDOW ⌶',
         cite='[ WINDOW window_name AS ( window_definition ) [, ...] ]',
         refuses=('users.id', 'users.email'),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users WINDOW w AS (⌶',
         cite='[ WINDOW window_name AS ( window_definition ) [, ...] ]',
         offers=('PARTITION BY', 'ORDER BY'),
+        dialects=_EVERY_DIALECT,
     ),
     # --- set operations ---------------------------------------------------
     GrammarCase(
@@ -455,6 +533,7 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users ORDER BY ⌶',
         cite=_ORDER_BY,
         offers=('users.id',),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users ORDER BY id ⌶',
@@ -478,6 +557,7 @@ CASES: tuple[GrammarCase, ...] = (
         cite=_ORDER_BY,
         offers=('NULLS FIRST', 'NULLS LAST'),
         refuses=('ASC', 'DESC'),
+        dialects=_EVERY_DIALECT,
         note='EXCLUSIVE in dialects/base.py settles the direction once, which is what this pins',
     ),
     # --- the row-count clauses --------------------------------------------
@@ -485,6 +565,7 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users LIMIT ⌶',
         cite='[ LIMIT { count | ALL } ]',
         refuses=('OFFSET', 'FETCH', 'ALL'),
+        dialects=_EVERY_DIALECT,
         note=(
             'a row count belongs here and nothing can suggest one. LIMIT deliberately has no kind: '
             'its docstring records that giving it one made this caret offer OFFSET, which goes after '
@@ -500,21 +581,25 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users OFFSET 10 ⌶',
         cite='[ OFFSET start [ ROW | ROWS ] ]',
         offers=('ROW', 'ROWS', 'FETCH'),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users FETCH ⌶',
         cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
         offers=('FIRST', 'NEXT'),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users FETCH FIRST 10 ⌶',
         cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
         offers=('ROW', 'ROWS'),
+        dialects=_EVERY_DIALECT,
     ),
     GrammarCase(
         sql='SELECT * FROM users FETCH FIRST 10 ROWS ⌶',
         cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
         offers=('ONLY', 'WITH TIES'),
+        dialects=_EVERY_DIALECT,
     ),
     # --- the locking clause -----------------------------------------------
     GrammarCase(
