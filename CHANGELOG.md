@@ -6,6 +6,25 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### ClickHouse and Trino answer from a catalog in the editor
+
+Both read one now, so `FROM ⌶`, `db.⌶` and `alias.⌶` offer real relations and
+columns against either backend instead of keywords alone. Neither declares
+foreign keys, so join proposals stay Postgres-only; Trino ships no
+relation-search query, so a bare prefix still finds nothing there. Both were
+already true for library users and are now reachable from the extension.
+
+The readers are the library's own, over each backend's HTTP interface —
+`catalogs/clickhouse_http.py` and `catalogs/trino_http.py`, stdlib only. Their
+official clients hard-require lz4, orjson, zstandard or a C extension, every one
+of them to compress a wire carrying seven introspection queries against a cache
+that is warm for the rest of a session. The clients remain supported: a caller
+holding a `trino` connection still passes its cursor to `DbapiCatalog`.
+
+A connection can now say `secure` to speak TLS. Trino refuses password
+authentication without it, and the reader says so at connect time rather than
+sending the password to find out.
+
 ## 0.4.1
 
 A packaging fix. Nothing about what the engine offers at a caret changed.

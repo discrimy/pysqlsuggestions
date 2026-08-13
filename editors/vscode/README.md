@@ -22,10 +22,13 @@ environment is never touched. If no suitable interpreter is found it says so
 once and stays out of the way; point `pysqlsuggestions.pythonPath` at one if it
 lives somewhere unusual.
 
-**PostgreSQL**, for anything schema-aware. ClickHouse, Trino and `ansi` are
-selectable and give you the right keywords and quoting, but read no schema:
-their drivers are not pure Python, and bundling them would mean a separate
-download per operating system.
+**PostgreSQL, ClickHouse and Trino** all read a catalog, so completion is
+schema-aware against any of them. Postgres additionally answers foreign keys,
+column search and most-common-values, which is where join proposals and value
+hints come from; the other two declare no constraints, so they get neither.
+
+`ansi` is selectable too and completes from the statement alone — keywords,
+aliases, CTE columns and select-list names, with no connection at all.
 
 ## Connections
 
@@ -69,7 +72,7 @@ workspace's `.vscode/settings.json` is edited where it lives.
 
 | setting | what it does |
 | --- | --- |
-| `pysqlsuggestions.connections` | the connections themselves — name, dialect, host, port, database, user |
+| `pysqlsuggestions.connections` | the connections themselves — name, dialect, host, port, database, user, secure |
 | `pysqlsuggestions.defaultConnection` | which one to use |
 | `pysqlsuggestions.pythonPath` | interpreter used to build the extension's own environment, not the one your project runs on |
 
