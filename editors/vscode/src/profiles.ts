@@ -17,6 +17,8 @@ export interface Profile {
   port?: number;
   database?: string;
   user?: string;
+  /** TLS. Undefined and false mean the same thing; the server defaults to plaintext. */
+  secure?: boolean;
 }
 
 function text(value: unknown): string | undefined {
@@ -50,6 +52,7 @@ export function readProfiles(raw: unknown): Profile[] {
       port: typeof record.port === 'number' ? record.port : undefined,
       database: text(record.database),
       user: text(record.user),
+      secure: typeof record.secure === 'boolean' ? record.secure : undefined,
     });
   }
   return profiles;
@@ -120,6 +123,9 @@ export function initializationOptions(
   }
   if (profile.user !== undefined) {
     options.user = profile.user;
+  }
+  if (profile.secure !== undefined) {
+    options.secure = profile.secure;
   }
   if (password !== undefined) {
     options.password = password;

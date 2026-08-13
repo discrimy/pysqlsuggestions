@@ -77,7 +77,8 @@
               "host": { "type": "string" },
               "port": { "type": "number" },
               "database": { "type": "string" },
-              "user": { "type": "string" }
+              "user": { "type": "string" },
+              "secure": { "type": "boolean", "default": false, "description": "Speak TLS. Trino requires it before it will accept a password." }
             },
             "additionalProperties": false
           }

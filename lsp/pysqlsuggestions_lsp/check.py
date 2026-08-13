@@ -62,6 +62,10 @@ def _timed_connect(profile: Profile) -> Any:
     module, _ = DRIVERS[profile.dialect]
     driver = import_module(module)
     arguments: dict[str, Any] = {'host': profile.host, 'timeout': CONNECT_TIMEOUT}
+    # Only the readers understand `secure`; pg8000 takes `ssl_context`. Same
+    # rule as `connections._connect`, and for the same reason.
+    if module.startswith('pysqlsuggestions.'):
+        arguments['secure'] = profile.secure
     for name, value in (
         ('port', profile.port),
         ('database', profile.database),

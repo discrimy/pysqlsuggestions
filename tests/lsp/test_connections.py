@@ -14,7 +14,7 @@ from importlib import import_module
 from typing import Any
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
-from pysqlsuggestions_lsp.connections import DRIVERS, Profile, open_catalog
+from pysqlsuggestions_lsp.connections import DRIVERS, Profile, _connect, open_catalog
 
 PROFILE = Profile(dialect='postgres', host='localhost', port=5432, database='app', user='ana', password='secret')
 
@@ -216,3 +216,54 @@ def test_a_clickhouse_profile_opens_a_catalog() -> None:
     """Nothing is connected — this asserts the profile resolves to a catalog at all."""
     profile = Profile(dialect='clickhouse', host='localhost')
     assert open_catalog(profile, connect=lambda _: FakeConnection()) is not None
+
+
+def test_secure_defaults_to_false_and_survives_the_wire() -> None:
+    """
+    A profile that says nothing is plaintext, and one that says so is not.
+
+    Defaulting the other way would be safer in the abstract and wrong here: the
+    docker fixtures are plaintext, and a default that breaks every local setup
+    to protect a remote one nobody described is a default people turn off.
+    """
+    assert Profile(dialect='trino', host='h').secure is False
+    profile = Profile.from_options({'dialect': 'trino', 'host': 'h', 'secure': True})
+    assert profile is not None
+    assert profile.secure is True
+
+
+def test_a_non_boolean_secure_is_ignored_like_every_other_bad_field() -> None:
+    """This is whatever the client put on the wire, and `"yes"` is not True."""
+    profile = Profile.from_options({'dialect': 'trino', 'host': 'h', 'secure': 'yes'})
+    assert profile is not None
+    assert profile.secure is False
+
+
+def test_secure_reaches_a_reader() -> None:
+    """A flag that is parsed and not passed is worse than one that does not exist."""
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='clickhouse', host='h', secure=True), opener=fake_connect)
+    assert seen['secure'] is True
+
+
+def test_secure_is_withheld_from_a_driver_that_never_heard_of_it() -> None:
+    """
+    pg8000 takes `ssl_context`, not `secure`.
+
+    Passing it anyway is a TypeError raised from inside the driver on the first
+    catalog read — which degrades to a catalog-free completion list, so the
+    user sees fewer suggestions and no reason for it.
+    """
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='postgres', host='h', secure=True), opener=fake_connect)
+    assert 'secure' not in seen

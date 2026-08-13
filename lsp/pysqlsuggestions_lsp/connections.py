@@ -52,6 +52,17 @@ class Profile:
     password: str | None = field(default=None, repr=False)
     """Kept out of `repr` — this object reaches logs and crash reports."""
 
+    secure: bool = False
+    """
+    Whether to speak TLS.
+
+    Default false because the docker fixtures and most local backends are
+    plaintext, and a default that breaks every local setup to protect a remote
+    one nobody described is a default people turn off rather than one that
+    protects anybody. Trino refuses password authentication without it and says
+    so at connect time, rather than sending the password to find out.
+    """
+
     @classmethod
     def from_options(cls, options: object) -> Profile | None:
         """
@@ -79,6 +90,9 @@ class Profile:
             database=_text(options.get('database')),
             user=_text(options.get('user')),
             password=_text(options.get('password')),
+            # `is True` rather than `bool(...)`: this field is type-checked like
+            # every other, and a `"yes"` from hand-edited settings is not True.
+            secure=options.get('secure') is True,
         )
 
 
@@ -87,11 +101,23 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _connect(profile: Profile) -> Any:
-    """Open a connection with the driver the dialect names."""
+def _connect(profile: Profile, opener: Callable[..., Any] | None = None) -> Any:
+    """
+    Open a connection with the driver the dialect names.
+
+    `opener` exists so a test can see what would be passed. Patching
+    `import_module` instead would assert against a mock rather than against the
+    arguments, which is the part that can be wrong.
+    """
     module, _ = DRIVERS[profile.dialect]
-    driver = import_module(module)
+    connect_to = opener or import_module(module).connect
     arguments: dict[str, Any] = {'host': profile.host}
+    # pg8000 takes `ssl_context`, not `secure`; only the readers understand this
+    # flag. Passing it to a driver that has never heard of it is a TypeError
+    # raised on the first catalog read, which degrades to a catalog-free list —
+    # so the user sees fewer suggestions and no reason for it.
+    if module.startswith('pysqlsuggestions.'):
+        arguments['secure'] = profile.secure
     for name, value in (
         ('port', profile.port),
         ('database', profile.database),
@@ -100,7 +126,7 @@ def _connect(profile: Profile) -> Any:
     ):
         if value is not None:
             arguments[name] = value
-    return driver.connect(**arguments)
+    return connect_to(**arguments)
 
 
 def open_catalog(profile: Profile, connect: Connect | None = None) -> DbapiCatalog | None:

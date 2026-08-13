@@ -115,3 +115,15 @@ test('a profile the user already declined is not asked again', () => {
 test('no profile wants nothing', () => {
   assert.equal(needsPassword(undefined, undefined, new Set()), false);
 });
+
+test('secure is read when it is a boolean and dropped when it is not', () => {
+  const profiles = readProfiles([
+    { name: 'a', dialect: 'trino', host: 'h', secure: true },
+    { name: 'b', dialect: 'trino', host: 'h', secure: 'yes' },
+    { name: 'c', dialect: 'trino', host: 'h' },
+  ]);
+  assert.deepStrictEqual(
+    profiles.map((profile) => profile.secure),
+    [true, undefined, undefined],
+  );
+});
