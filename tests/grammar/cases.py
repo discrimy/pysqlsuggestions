@@ -41,6 +41,9 @@ _ROWS_FROM = (
 )
 """The multi-function FROM item, named for the same reason as `_WITH_QUERY`."""
 
+_JOIN = 'from_item join_type from_item { ON join_condition | USING ( join_column [, ...] ) [ AS join_using_alias ] }'
+"""The join production, cited by four cases."""
+
 
 @dataclass(frozen=True)
 class GrammarCase:
@@ -293,5 +296,99 @@ CASES: tuple[GrammarCase, ...] = (
         pending=True,
         refused='a multi-function FROM item is exotica; the position must stay silent',
         note='reads ROWS FROM( as an ordinary FROM and offers relations',
+    ),
+    # --- joins ------------------------------------------------------------
+    GrammarCase(
+        sql='SELECT * FROM users u ⌶',
+        cite=_JOIN,
+        offers=('JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'CROSS JOIN'),
+        pending=True,
+        note='RIGHT JOIN and FULL JOIN are absent from _JOINS in ansi.py; only four spellings exist',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u JOIN orders o ⌶',
+        cite=_JOIN,
+        offers=('ON', 'USING'),
+        refuses=('AS',),
+        note='AS is correctly withheld: the alias is spent, and a second one parses as nothing',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u JOIN orders o ON ⌶',
+        cite=_JOIN,
+        offers=('u.id', 'o.user_id'),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u JOIN orders o USING (id) ⌶',
+        cite=_JOIN,
+        offers=('AS',),
+        pending=True,
+        note='the join_using_alias, new in PG 14; USING goes straight to the next clause',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u NATURAL ⌶',
+        cite='from_item NATURAL join_type from_item',
+        offers=('JOIN', 'LEFT JOIN'),
+        note='an accidental green: NATURAL is skipped and FROM offers its joins anyway',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u CROSS ⌶',
+        cite='from_item CROSS JOIN from_item',
+        offers=('JOIN',),
+    ),
+    # --- the clauses that shape a result ----------------------------------
+    GrammarCase(
+        sql='SELECT * FROM users WHERE ⌶',
+        cite='[ WHERE condition ]',
+        offers=('users.id',),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY ⌶',
+        cite='[ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]',
+        offers=('ALL', 'DISTINCT', 'ROLLUP', 'CUBE', 'GROUPING SETS'),
+        pending=True,
+        note='offers columns only; none of the five grouping words reaches this caret',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY (⌶',
+        cite='( expression [, ...] )',
+        offers=('users.id',),
+        note='covers the bare `expression` and `( )` alternatives too; see UNCITED',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY ROLLUP (⌶',
+        cite='ROLLUP ( { expression | ( expression [, ...] ) } [, ...] )',
+        offers=('users.id',),
+        note='an accidental green: ROLLUP is skipped and GROUP BY carries the position',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY CUBE (⌶',
+        cite='CUBE ( { expression | ( expression [, ...] ) } [, ...] )',
+        offers=('users.id',),
+        note='accidental, as ROLLUP is',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY GROUPING SETS (⌶',
+        cite='GROUPING SETS ( grouping_element [, ...] )',
+        offers=('users.id',),
+        note='accidental, as ROLLUP is',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY id HAVING ⌶',
+        cite='[ HAVING condition ]',
+        offers=('users.id',),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users WINDOW ⌶',
+        cite='[ WINDOW window_name AS ( window_definition ) [, ...] ]',
+        refuses=('users.id', 'users.email'),
+        pending=True,
+        note='a window name is being defined here; offering a column writes SQL the server refuses',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users WINDOW w AS (⌶',
+        cite='[ WINDOW window_name AS ( window_definition ) [, ...] ]',
+        offers=('PARTITION BY', 'ORDER BY'),
+        pending=True,
+        note='offers columns; PARTITION BY exists as a clause and is not reachable from here',
     ),
 )
