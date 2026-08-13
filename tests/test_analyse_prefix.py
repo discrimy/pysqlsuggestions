@@ -217,6 +217,13 @@ def test_a_paren_that_opens_a_list_of_names(marked: str) -> None:
         'SELECT * FROM users WHERE id IN (⌶',
         'SELECT * FROM users GROUP BY ROLLUP (⌶',
         'SELECT DISTINCT ON (⌶',
+        # A clause written *inside* the group. `_group_start` returns the CTE
+        # body for all of these, so without the check that the governing clause
+        # lies outside the paren, the introducing `AS` silenced whole bodies.
+        'WITH a AS (SELECT * FROM ⌶',
+        'WITH a AS (SELECT ⌶',
+        'WITH a AS (SELECT id FROM t WHERE ⌶',
+        'SELECT * FROM users AS u (a, b) ⌶',
         # Ordinary grouping and subqueries.
         'SELECT * FROM (⌶',
         'SELECT * FROM users WHERE (⌶',

@@ -376,6 +376,17 @@ def opens_a_name_list(
         return False
     alias = governing.aliases_with.upper()
 
+    # The governing clause has to lie outside this paren for the introducer to
+    # say anything about it. `WITH a AS (SELECT * FROM ⌶` is governed by FROM,
+    # which is *inside* the CTE body, and `_group_start` returns that body
+    # either way — so without this the introducer read as `AS` and the whole
+    # body went quiet. A clause written inside the group is that group's
+    # business, and this one is not a name list.
+    head = governing.name.upper().split()[0]
+    for index in range(start, _index_before(tokens, caret) + 1):
+        if _plain_word(tokens, index) == head:
+            return False
+
     if governing.opens_a_group:
         return introducer != alias
     # Either the alias word introduced the paren, or it introduced the name that did.
