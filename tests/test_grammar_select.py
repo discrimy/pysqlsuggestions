@@ -14,7 +14,7 @@ from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from tests.corpus.cases import CARET, split_caret
-from tests.grammar.cases import CASES, SYNOPSIS, GrammarCase
+from tests.grammar.cases import CASES, SYNOPSIS, UNCITED, GrammarCase
 
 SNAPSHOT = {
     ('public', 'users'): [('id', 'bigint'), ('email', 'text')],
@@ -86,3 +86,37 @@ def test_every_case_asserts_something(case: GrammarCase) -> None:
 def test_every_cite_is_a_line_of_the_synopsis(case: GrammarCase) -> None:
     """A citation invented at the keyboard would make the coverage test meaningless."""
     assert _collapse(case.cite) in {_collapse(line) for line in SYNOPSIS.splitlines()}
+
+
+def _grammar_lines() -> list[str]:
+    """
+    The productions in `select.txt`, without the provenance header or the prose.
+
+    Lines ending in a colon are the document's own connective tissue — "where
+    from_item can be one of:" — and name no position.
+    """
+    lines = []
+    for raw in SYNOPSIS.splitlines():
+        line = _collapse(raw)
+        if not line or line.startswith('#') or line.endswith(':'):
+            continue
+        lines.append(line)
+    return lines
+
+
+def test_every_synopsis_line_is_cited() -> None:
+    """
+    The suite tracks a document, and this is what keeps that claim true.
+
+    Re-sync `select.txt` with a later server and any production nobody wrote a
+    case for is named here, rather than silently going unmeasured.
+    """
+    cited = {_collapse(case.cite) for case in CASES}
+    uncovered = [line for line in _grammar_lines() if line not in cited and line not in UNCITED]
+    assert not uncovered, f'synopsis lines with no case: {uncovered}'
+
+
+def test_uncited_lines_are_really_in_the_synopsis() -> None:
+    """An UNCITED entry that matches nothing is an exemption for a line that no longer exists."""
+    lines = set(_grammar_lines())
+    assert UNCITED.issubset(lines)

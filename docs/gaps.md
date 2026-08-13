@@ -10,6 +10,12 @@ later decision to build or refuse any of it starts from something.
 
 Ordered by value per unit of work, not by size.
 
+For `SELECT` specifically there is now a second, finer list that maintains
+itself: `tests/grammar/` measures every position the official PostgreSQL
+synopsis names and prints a burn-down on each run. This document stays the place
+for decisions with reasons; that suite is the place for coverage, and neither
+restates the other.
+
 ---
 
 ## 1. CREATE TABLE
