@@ -93,6 +93,19 @@ def test_extending_did_not_disturb_ansi() -> None:
         'ALTER SEQUENCE',
         'DROP MATERIALIZED VIEW',
         'DROP INDEX',
+        # Row locking. Four two-word names rather than one `FOR`, because a bare
+        # head that is already a phrase is skipped by `_half_written_clauses`.
+        'FOR UPDATE',
+        'FOR NO KEY UPDATE',
+        'FOR SHARE',
+        'FOR KEY SHARE',
+        'OF',
+        # Declared to make a caret stop answering rather than to make it answer:
+        # until each was a clause, the position after it stayed governed by the
+        # clause before and offered relations or the CTE body words.
+        'TABLESAMPLE',
+        'SEARCH',
+        'CYCLE',
     }
     assert {clause.name for clause in ANSI.clauses.clauses} == base
 

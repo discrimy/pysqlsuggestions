@@ -340,6 +340,83 @@ POSTGRES = replace(
         # No kind, still: ansi.py records that giving LIMIT one made `LIMIT ⌶`
         # offer OFFSET, which goes after the number rather than instead of it.
         replace(_ansi('LIMIT'), before_the_item=('ALL',)),
+        # TABLESAMPLE is derived from `follows` for most clauses, but `FROM`'s
+        # continuations are an explicit list and derivation only adds what that
+        # list omits — so the word has to be named here to reach the caret after
+        # a relation. Declaring the clause alone silences `TABLESAMPLE ⌶`; this
+        # is what offers the word in the one place it can go.
+        #
+        # `WITH ORDINALITY` is deliberately not here. It applies to a function
+        # item and `followed_by` is per clause rather than per item kind, so
+        # naming it would offer it after `FROM users ⌶` too, where the server
+        # refuses it.
+        # Last in the list, because the list is ranked: TABLESAMPLE ahead of the
+        # joins put a word almost nobody writes above the one almost everybody
+        # does, which `tests/test_joins_resolve.py` caught immediately.
+        replace(_ansi('FROM'), followed_by=(*_ansi('FROM').followed_by, 'TABLESAMPLE')),
+        # Four two-word clause names rather than one `FOR` with continuations,
+        # for the reason DROP SEQUENCE and ALTER TABLE record: a bare `FOR`
+        # would make ('FOR',) a phrase in its own right, and
+        # `_half_written_clauses` skips a head that is already a phrase — so
+        # `FOR ⌶` would stop answering `UPDATE`.
+        #
+        # Until these existed `FOR` was not a clause at all, so the caret after
+        # it was still governed by FROM: `SELECT * FROM users FOR ⌶` offered
+        # `users`, and accepting wrote `FROM users FOR users`.
+        *(
+            Clause(
+                name=name,
+                follows=frozenset({'FROM', 'JOIN', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET'}),
+                statements=frozenset({'SELECT'}),
+                suggests=(Kind.KEYWORD,),
+                followed_by=('OF', 'NOWAIT', 'SKIP LOCKED'),
+            )
+            for name in ('FOR UPDATE', 'FOR NO KEY UPDATE', 'FOR SHARE', 'FOR KEY SHARE')
+        ),
+        # `OF` names a relation the statement already has, and nothing in `Kind`
+        # means that. `Kind.TABLE` would offer every catalog relation, and once
+        # the relation is aliased the server takes only the alias — so
+        # `FROM users u FOR UPDATE OF users` is refused, and offering `users`
+        # there would be a confident wrong answer where silence is available.
+        # `Kind.ALIAS` does not serve either: it invents a name for the relation
+        # just written rather than listing the ones in scope.
+        Clause(
+            name='OF',
+            follows=frozenset({'FOR UPDATE', 'FOR NO KEY UPDATE', 'FOR SHARE', 'FOR KEY SHARE'}),
+            statements=frozenset({'SELECT'}),
+            suggests=(),
+            followed_by=('NOWAIT', 'SKIP LOCKED'),
+        ),
+        # `TABLE t` is `SELECT * FROM t` and is deliberately *not* modelled.
+        #
+        # It was, and the acceptance suite caught what that costs: a statement
+        # form is found by scanning for the first word that starts one, and
+        # `TABLE` is a word inside `CREATE TABLE`. So `CREATE TABLE t (id ⌶`
+        # began offering `users`, in a definition list where a relation cannot
+        # go — trading the silence an unmodelled form correctly gives for a
+        # wrong answer, in a statement written far more often than `TABLE t`.
+        #
+        # Modelling it needs `CREATE TABLE` modelled first, so that the longer
+        # form wins the match. That is gap 1 in docs/gaps.md and a project of
+        # its own.
+        #
+        # These three exist to make a caret stop answering, not to make it
+        # answer. Until a word is a clause the analyser reads the caret after it
+        # as still inside the clause before — so `FROM t TABLESAMPLE ⌶` offered
+        # JOIN and WHERE, and `… CYCLE ⌶` offered the CTE body words. Declaring
+        # the clause is the whole fix, and `trino.py` already does exactly this
+        # for its own TABLESAMPLE.
+        #
+        # No sampling method is named. Postgres ships BERNOULLI and SYSTEM and
+        # an extension may add more, so a static list here would go quietly
+        # wrong on any installation that has one.
+        Clause(name='TABLESAMPLE', follows=frozenset({'FROM', 'JOIN'}), suggests=(Kind.KEYWORD,)),
+        # SEARCH and CYCLE follow a recursive CTE's body. BREADTH and DEPTH are
+        # the only two words SEARCH takes, so it can answer as well as stop a
+        # wrong one; CYCLE takes a column of the CTE, a scope this position
+        # cannot see, so it says nothing.
+        Clause(name='SEARCH', follows=frozenset({'WITH'}), suggests=(Kind.KEYWORD,), followed_by=('BREADTH', 'DEPTH')),
+        Clause(name='CYCLE', follows=frozenset({'WITH'}), suggests=()),
         # `USING operator` is Postgres's alone — an explicit ordering operator,
         # where the standard has only ASC and DESC. The operator itself is not
         # offered: operators reach a caret through `Clause.operators`, which
@@ -358,6 +435,10 @@ POSTGRES = replace(
             follows=frozenset({'FROM', 'JOIN'}),
             opens_an_item=True,
             suggests=(Kind.TABLE, Kind.FUNCTION),
+            # `[ LATERAL ] ( select )` takes a whole statement, the way a CTE
+            # body does. Without this the paren was read as an ordinary FROM
+            # position and answered with relations.
+            opens_a_group=('SELECT',),
         ),
         Clause(name='DISTINCT ON', follows=frozenset({'SELECT'}), suggests=(Kind.COLUMN, Kind.FUNCTION)),
         Clause(

@@ -168,7 +168,6 @@ CASES: tuple[GrammarCase, ...] = (
         cite='[ SEARCH { BREADTH | DEPTH } FIRST BY column_name [, ...] SET search_seq_col_name ]',
         offers=('BREADTH', 'DEPTH'),
         refuses=('SELECT', 'INSERT INTO'),
-        pending=True,
         refused='recursive search ordering is a production this engine does not intend to model',
         note='reads SEARCH as still inside WITH and offers the CTE body words',
     ),
@@ -176,7 +175,6 @@ CASES: tuple[GrammarCase, ...] = (
         sql='WITH RECURSIVE x AS (SELECT 1) CYCLE ⌶',
         cite=_CYCLE,
         refuses=('SELECT', 'INSERT INTO'),
-        pending=True,
         refused='cycle detection is a production this engine does not intend to model',
         note='same fault as SEARCH: the CTE body words leak past the closing paren',
     ),
@@ -237,7 +235,6 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users ⌶',
         cite='[ ONLY ] table_name [ * ] [ [ AS ] alias [ ( column_alias [, ...] ) ] ]',
         offers=('AS', 'TABLESAMPLE'),
-        pending=True,
         note='AS is offered, TABLESAMPLE is not',
     ),
     GrammarCase(
@@ -251,17 +248,14 @@ CASES: tuple[GrammarCase, ...] = (
     GrammarCase(
         sql='SELECT * FROM users TABLESAMPLE ⌶',
         cite='[ TABLESAMPLE sampling_method ( argument [, ...] ) [ REPEATABLE ( seed ) ] ]',
-        offers=('BERNOULLI', 'SYSTEM'),
-        refuses=('JOIN', 'WHERE'),
-        pending=True,
+        refuses=('JOIN', 'WHERE', 'users'),
         refused='sampling methods are extensible per installation; a list here could not be kept true',
-        note='offers the clauses that follow a relation, so accepting writes TABLESAMPLE JOIN',
+        note='the clause exists to stop this caret answering as though it were still inside FROM',
     ),
     GrammarCase(
         sql='SELECT * FROM users TABLESAMPLE BERNOULLI (10) REPEATABLE (⌶',
         cite='[ TABLESAMPLE sampling_method ( argument [, ...] ) [ REPEATABLE ( seed ) ] ]',
         refuses=('users', 'orders', 'public'),
-        pending=True,
         refused='a repeat seed is a number; nothing in a catalog answers it',
         note='offers relation names where a seed belongs',
     ),
@@ -270,7 +264,6 @@ CASES: tuple[GrammarCase, ...] = (
         cite='[ LATERAL ] ( select ) [ [ AS ] alias [ ( column_alias [, ...] ) ] ]',
         offers=('SELECT',),
         refuses=('users', 'orders'),
-        pending=True,
         note='a parenthesised LATERAL takes a whole subquery; the position offers relations instead',
     ),
     GrammarCase(
@@ -534,47 +527,63 @@ CASES: tuple[GrammarCase, ...] = (
         cite=_FOR,
         offers=('UPDATE', 'NO KEY UPDATE', 'SHARE', 'KEY SHARE'),
         refuses=('users', 'orders', 'public'),
-        pending=True,
-        note=(
-            'the sharpest wrong answer in the suite: FOR is not a clause, so the caret is still '
-            'read as inside FROM and accepting writes `FROM users FOR users`'
-        ),
+        note='was the worst answer in the suite: FOR was not a clause, so this caret was still governed by FROM',
     ),
     GrammarCase(
         sql='SELECT * FROM users FOR UPDATE ⌶',
         cite=_FOR,
         offers=('OF', 'NOWAIT', 'SKIP LOCKED'),
         refuses=('users', 'orders'),
-        pending=True,
-        note='offers relations, having read UPDATE as the start of an UPDATE statement',
     ),
     GrammarCase(
         sql='SELECT * FROM users u FOR UPDATE OF ⌶',
         cite=_FOR,
         offers=('u',),
+        refuses=('users',),
         pending=True,
-        note='OF takes a from_reference, so the alias in scope is the answer; the engine offers `o` instead',
+        refused=(
+            'OF names a relation already in scope and no Kind means that; Kind.TABLE would answer '
+            'an aliased relation with its bare name, which the server refuses'
+        ),
+        note='silent by choice — see the OF clause in postgres.py',
     ),
     GrammarCase(
         sql='SELECT * FROM users u FOR UPDATE OF u ⌶',
         cite=_FOR,
         offers=('NOWAIT', 'SKIP LOCKED'),
-        pending=True,
-        note='silent',
     ),
     # --- the TABLE form ---------------------------------------------------
     GrammarCase(
         sql='TABLE ⌶',
         cite='TABLE [ ONLY ] table_name [ * ]',
-        offers=('users', 'ONLY'),
+        offers=('users',),
         pending=True,
-        note='silent: TABLE is not in statement_start, and an unrecognised form correctly says nothing',
+        refused=(
+            'a statement form is found by the first word that starts one, and TABLE is a word inside '
+            'CREATE TABLE — modelling it made `CREATE TABLE t (id ⌶` offer relations, so it waits on '
+            'CREATE TABLE being modelled first'
+        ),
+    ),
+    GrammarCase(
+        sql='TABLE on⌶',
+        cite='TABLE [ ONLY ] table_name [ * ]',
+        offers=('ONLY',),
+        pending=True,
+        refused=(
+            'a statement form is found by the first word that starts one, and TABLE is a word inside '
+            'CREATE TABLE — modelling it made `CREATE TABLE t (id ⌶` offer relations, so it waits on '
+            'CREATE TABLE being modelled first'
+        ),
     ),
     GrammarCase(
         sql='TABLE ONLY ⌶',
         cite='TABLE [ ONLY ] table_name [ * ]',
         offers=('users',),
         pending=True,
-        note='silent for the same reason',
+        refused=(
+            'a statement form is found by the first word that starts one, and TABLE is a word inside '
+            'CREATE TABLE — modelling it made `CREATE TABLE t (id ⌶` offer relations, so it waits on '
+            'CREATE TABLE being modelled first'
+        ),
     ),
 )
