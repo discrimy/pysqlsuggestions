@@ -83,13 +83,28 @@ A conformance suite for the official PostgreSQL `SELECT` grammar, in
 it comes from, so the suite can be checked against the document rather than
 against memory of it; a test asserts that no line goes uncited.
 
-Fifty-six of sixty-eight positions are answered, and none of the twelve it still
+Fifty-seven of sixty-nine positions are answered, and none of the twelve it still
 records is a wrong answer — every one of them is a caret that stays silent. They
 are listed in that file with a reason each: four withdrawn deliberately and
 described above, three waiting on `CREATE TABLE` so the longer form wins the
 match, and five needing a capability that does not exist — a `Kind` meaning "a
 relation this statement already has", an operator outside a predicate clause,
 `MATERIALIZED`, and the item-openers `resolve.py` filters out on purpose.
+
+The conformance suite runs on more than Postgres. Thirty-eight of its cases
+describe behaviour ClickHouse and Trino share, and a `dialects` field on each
+case says so — the `FETCH` tail, `OFFSET`'s noise words, `RIGHT` and `FULL
+JOIN`, `WINDOW`'s definition body, and the rule that a parenthesis naming
+columns answers nothing.
+
+All five of those were added to the shared baseline in this release and reached
+those two backends with nothing asserting them there. The marking is measured
+rather than assumed: every case naming a dialect was run against it first.
+
+Three cases name Trino and not ClickHouse, which declares no `TABLESAMPLE`, and
+eighteen name Postgres alone because the productions are Postgres's — `LATERAL`,
+`ROWS FROM`, the `FOR UPDATE` family, the grouping words, `DISTINCT ON`,
+`LIMIT ALL`, `SEARCH` and `CYCLE`, `ORDER BY … USING`.
 
 The test summary also stopped lying about the ported report_service suite. That
 line counted passes under `tests/reference/`, which is not a path here, against
