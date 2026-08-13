@@ -83,6 +83,20 @@ class GrammarCase:
     second golden-request corpus: `WINDOW ⌶` offering a column is not a missing
     answer, it is an answer that writes SQL the server refuses.
     """
+    dialects: tuple[str, ...] = ('postgres',)
+    """
+    Which backends this case must hold on. Postgres alone by default.
+
+    Declared rather than derived. Running every case against every dialect and
+    recording what passes would absorb a regression as though it were a
+    decision — the value of naming them is that a case marked shared and newly
+    failing is a backend losing behaviour nothing else covers.
+
+    Postgres is the default because the synopsis is Postgres's. A case naming
+    another dialect claims the production is not Postgres's alone, which is a
+    claim about SQL rather than about this repository, so it is made explicitly
+    and one case at a time.
+    """
     pending: bool = False
     """True for a case the engine cannot satisfy today: an xfail(strict=True)."""
     refused: str = ''

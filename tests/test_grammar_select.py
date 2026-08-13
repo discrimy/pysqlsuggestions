@@ -12,7 +12,11 @@ import pytest
 
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects.ansi import ANSI
+from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.dialects.trino import TRINO
 from pysqlsuggestions.types import Function
 from tests.corpus.cases import CARET, split_caret
 from tests.grammar.cases import CASES, SYNOPSIS, UNCITED, GrammarCase
@@ -44,9 +48,19 @@ def catalog() -> MemoryCatalog:
     return MemoryCatalog(SNAPSHOT, functions=FUNCTIONS)
 
 
-def offered(sql: str, caret: int) -> list[str]:
-    """The suggestion texts at `caret` in `sql`."""
-    return [suggestion.text for suggestion in complete(sql, caret, POSTGRES, catalog())]
+def offered(sql: str, caret: int, dialect: Dialect = POSTGRES) -> list[str]:
+    """The suggestion texts at `caret` in `sql`, for `dialect`."""
+    return [suggestion.text for suggestion in complete(sql, caret, dialect, catalog())]
+
+
+DIALECTS = {'ansi': ANSI, 'postgres': POSTGRES, 'clickhouse': CLICKHOUSE, 'trino': TRINO}
+"""
+Every dialect a case may name, by the name it names it with.
+
+The same mapping `tests/test_golden_requests.py` keeps, and for the same reason:
+a misspelt dialect looked up here raises, where a bare string compared against
+the shipped dialects would silently match nothing and skip the case.
+"""
 
 
 def _collapse(text: str) -> str:
@@ -54,21 +68,30 @@ def _collapse(text: str) -> str:
     return ' '.join(text.split())
 
 
+def _pairs() -> list[tuple[GrammarCase, str]]:
+    """Every (case, dialect) the suite runs, one per dialect a case names."""
+    return [(case, name) for case in CASES for name in case.dialects]
+
+
 def _params() -> list[object]:
-    """Each case, marked xfail(strict=True) while it is still pending."""
+    """Each pair, marked xfail(strict=True) while the case is still pending."""
     return [
-        pytest.param(case, marks=pytest.mark.xfail(strict=True, reason=case.note or 'pending'))
+        pytest.param(case, name, marks=pytest.mark.xfail(strict=True, reason=case.note or 'pending'))
         if case.pending
-        else pytest.param(case)
-        for case in CASES
+        else pytest.param(case, name)
+        for case, name in _pairs()
     ]
 
 
-@pytest.mark.parametrize('case', _params(), ids=[f'{c.cite[:40]} :: {c.sql}' for c in CASES])
-def test_grammar_position(case: GrammarCase) -> None:
+@pytest.mark.parametrize(
+    ('case', 'dialect'),
+    _params(),
+    ids=[f'{name}: {case.cite[:32]} :: {case.sql}' for case, name in _pairs()],
+)
+def test_grammar_position(case: GrammarCase, dialect: str) -> None:
     """Every word the synopsis puts at this caret is offered, and none it forbids."""
     sql, caret = split_caret(case.sql)
-    found = offered(sql, caret)
+    found = offered(sql, caret, DIALECTS[dialect])
 
     missing = [word for word in case.offers if word not in found]
     assert not missing, f'not offered: {missing}; got {found}'
@@ -130,3 +153,21 @@ def test_uncited_lines_are_really_in_the_synopsis() -> None:
     """An UNCITED entry that matches nothing is an exemption for a line that no longer exists."""
     lines = set(_grammar_lines())
     assert UNCITED.issubset(lines)
+
+
+@pytest.mark.parametrize('case', CASES, ids=[c.sql for c in CASES])
+def test_every_named_dialect_exists(case: GrammarCase) -> None:
+    """A misspelt name would skip the dialect rather than fail it, which is the worse failure."""
+    assert set(case.dialects) <= set(DIALECTS)
+
+
+@pytest.mark.parametrize('case', CASES, ids=[c.sql for c in CASES])
+def test_only_a_passing_case_names_more_than_one_dialect(case: GrammarCase) -> None:
+    """
+    A pending case marked shared would xfail once per dialect for one reason.
+
+    The burn-down would then count a single gap two or three times, and the
+    reason printed beside each would be the same sentence. A case earns its
+    other dialects by passing on Postgres first.
+    """
+    assert not case.pending or len(case.dialects) == 1
