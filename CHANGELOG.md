@@ -25,9 +25,10 @@ interpreter discovery, virtual-environment creation and the whole matrix of
 environment failures alive on the machines that set it — and almost nobody
 would, so that code would go untested until it broke for someone.
 
-The download is now per platform: nine builds rather than one, between about
-21 MB and 40 MB each. The marketplace picks the right one; installing a `.vsix`
-by hand means picking the one matching your OS and architecture.
+The download is now per platform: nine builds rather than one, between 17 MB
+(win32-arm64) and 34 MB (linux-x64). The marketplace picks the right one;
+installing a `.vsix` by hand means picking the one matching your OS and
+architecture.
 
 ### ClickHouse and Trino answer from a catalog in the editor
 
