@@ -139,3 +139,17 @@ def test_a_set_operator_does_not_claim_the_word_DISTINCT(name: str) -> None:
     clause = ANSI.clauses.get(name)
     assert clause is not None
     assert 'DISTINCT' not in clause.followed_by
+
+
+@pytest.mark.parametrize('name', ['LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'FULL JOIN', 'CROSS JOIN'])
+def test_every_join_spelling_is_offered_after_a_relation(name: str) -> None:
+    """
+    Promoted to ANSI, so the two dialects the grammar suite does not cover inherit them.
+
+    Asserted through FROM's continuations rather than through `clauses.get`,
+    because none of these is a clause of its own — `clause_at` matches `JOIN`
+    and the modifier rides along, which is why widening the list was the whole
+    change.
+    """
+    for dialect in (ANSI, POSTGRES, CLICKHOUSE, TRINO):
+        assert name in dialect.clauses.continuations('FROM'), f'{dialect.name} does not offer {name}'

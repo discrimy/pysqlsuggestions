@@ -322,8 +322,6 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users u ⌶',
         cite=_JOIN,
         offers=('JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'CROSS JOIN'),
-        pending=True,
-        note='RIGHT JOIN and FULL JOIN are absent from _JOINS in ansi.py; only four spellings exist',
     ),
     GrammarCase(
         sql='SELECT * FROM users u JOIN orders o ⌶',
@@ -342,7 +340,10 @@ CASES: tuple[GrammarCase, ...] = (
         cite=_JOIN,
         offers=('AS',),
         pending=True,
-        note='the join_using_alias, new in PG 14; USING goes straight to the next clause',
+        refused=(
+            'the PG 14 join_using_alias; both aliases_with and a bare followed_by entry are '
+            'dropped by the alias-spending machinery before this caret renders'
+        ),
     ),
     GrammarCase(
         sql='SELECT * FROM users u NATURAL ⌶',
