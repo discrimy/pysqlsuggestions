@@ -13,6 +13,7 @@ import pytest
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.types import Function
 from tests.corpus.cases import CARET, split_caret
 from tests.grammar.cases import CASES, SYNOPSIS, UNCITED, GrammarCase
 
@@ -29,9 +30,18 @@ assertion trustworthy.
 """
 
 
+FUNCTIONS = (Function(schema='public', name='now', args='', result='timestamptz'),)
+"""
+One function, because two positions need the catalog to have any.
+
+`ROWS FROM(⌶` takes a function call and `SELECT ⌶` offers functions beside
+columns, and a fixture with none cannot tell an empty answer from a wrong one.
+"""
+
+
 def catalog() -> MemoryCatalog:
     """A fresh catalog per case, so no case can be affected by another's caching."""
-    return MemoryCatalog(SNAPSHOT)
+    return MemoryCatalog(SNAPSHOT, functions=FUNCTIONS)
 
 
 def offered(sql: str, caret: int) -> list[str]:

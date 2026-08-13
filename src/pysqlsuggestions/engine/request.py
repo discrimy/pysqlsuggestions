@@ -27,6 +27,7 @@ from pysqlsuggestions.engine.analyse import (
     in_placeholder,
     inside_a_cast_awaiting_as,
     literal_argument_call,
+    opens_a_name_list,
     predicate_complete,
     qualifier_and_prefix,
     scope_of,
@@ -87,6 +88,16 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         return _inside_a_literal(tokens, caret, clause, scope, comparand, dialect)
 
     qualifier, prefix, span = qualifier_and_prefix(tokens, caret)
+    if opens_a_name_list(tokens, caret, clause, dialect.clauses):
+        # A list of names being defined. Both halves of the answer have to go
+        # quiet, not just the keywords — the fault this fixes was `users` being
+        # offered, which is a kind rather than a word — so this returns rather
+        # than narrowing what follows, the way `in_placeholder` above does.
+        #
+        # `prefix` and `span` are kept: the author may be part-way through a
+        # name, and an editor still needs the range a completion would replace
+        # even when there is nothing to put in it.
+        return Request(kinds=(), prefix=prefix, replace_span=span, clause=clause, scope=scope)
     continues, only = _continues(tokens, lo, hi, caret, dialect, clause, prefix)
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
 
