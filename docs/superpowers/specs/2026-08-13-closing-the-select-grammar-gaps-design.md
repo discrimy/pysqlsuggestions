@@ -78,8 +78,48 @@ therefore clause data. Only the six inside parentheses need the analyser.
 
 ## 2. What this does not do
 
-`engine/` is untouched. Every change is a `Clause` field, an `EXCLUSIVE` entry,
-a `statement_start` entry, or a case rewrite.
+Every change is a `Clause` field, an `EXCLUSIVE` entry, a `statement_start`
+entry, or a case rewrite — with one exception, found by prototyping and added
+here after the design was first approved.
+
+### The one engine change: `at_the_clause_start` is broken
+
+`engine/analyse.py:313` compares the run of words before the caret to the clause
+name by equality, and `_words_before` walks back through consecutive identifiers
+without stopping at the clause boundary:
+
+| caret | `_words_before` | equals the name? |
+| --- | --- | --- |
+| `SELECT dis⌶` | `('SELECT',)` | yes |
+| `GROUP BY rol⌶` | `('USERS', 'GROUP', 'BY')` | no |
+| `LIMIT al⌶` | `('USERS', 'LIMIT')` | no |
+
+So `before_the_item` is dead for every clause that does not begin its statement,
+and `DISTINCT` works only because `SELECT` happens to lead. The function's own
+docstring says it reports "whether nothing has been written in `clause` yet",
+which at `GROUP BY ⌶` is true and it answers false.
+
+The fix is to ask whether the run *ends with* the name rather than equals it.
+Three lines, its own task and its own commit so it can be reverted alone, and
+the guards hold: `SELECT id, dis⌶` and `GROUP BY id, rol⌶` both stay silent,
+because a comma breaks the run before either can match.
+
+Taken deliberately rather than deferred with the rest of the analyser work. It
+is a defect in a function used by one caller, not the paren-context feature —
+and without it `GROUP BY ROLLUP` and `LIMIT ALL` cannot be expressed at all.
+
+### `FOR UPDATE OF` stays pending
+
+`OF` takes a `from_reference`, and once a relation is aliased Postgres accepts
+only the alias. `Kind.TABLE` offers catalog relations, so it answers
+`FROM users u FOR UPDATE OF ⌶` with `users` — which the server refuses.
+`Kind.ALIAS` is no help either: it *generates* a name for the relation just
+written rather than listing the ones in scope.
+
+Nothing in the `Kind` vocabulary means "a relation this statement already has",
+so `OF` is declared with `suggests=()`. A silent caret rather than a confident
+wrong one, which is the trade this repository makes everywhere else. The
+capability is worth its own design.
 
 Six positions stay pending and refused, all of them inside parentheses:
 `WITH x (⌶`, `FROM users AS u (⌶`, `REPEATABLE (⌶`, `AS t (⌶`, `AS (⌶`,
@@ -207,7 +247,9 @@ each merging on its own, each ending with the burn-down as its criterion:
 3. the join vocabulary;
 4. the Postgres forms and the three silencing clauses.
 
-**The target is six pending cases, all of them the paren-context refusals.** The
+**The target is seven pending cases** — the six paren-context refusals, plus
+`FOR UPDATE OF ⌶`, which §2 records as needing a capability that does not
+exist. The
 denominator is whatever the rewrites make it, so the goal is stated as the
 remainder rather than as a ratio — the plan measures both, as the previous plan
 did, and no flag is written down that has not been run.
