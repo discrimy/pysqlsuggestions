@@ -44,6 +44,25 @@ def test_import_pulls_in_no_drivers() -> None:
     assert not (DRIVERS & loaded), f'drivers leaked into import: {sorted(DRIVERS & loaded)}'
 
 
+READERS = {'pysqlsuggestions.catalogs.trino_http', 'pysqlsuggestions.catalogs.clickhouse_http'}
+
+
+def test_import_pulls_in_no_catalog_readers() -> None:
+    """
+    The stdlib readers are adapters, and no adapter is imported by the package root.
+
+    `test_import_pulls_in_no_drivers` guards the same property against
+    third-party drivers and cannot see these: they take no dependency, so a
+    reader reaching `sys.modules` on a bare import would leak past every check
+    the project has. Two backends now have their transport inside this library,
+    which is why the guard needs restating rather than assuming.
+    """
+    code = 'import sys, pysqlsuggestions; print(" ".join(sorted(sys.modules)))'
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
+    loaded = set(result.stdout.split())
+    assert not (READERS & loaded), f'a catalog reader leaked into import: {sorted(READERS & loaded)}'
+
+
 def _imported_modules(path: Path) -> set[str]:
     """Fully-qualified module names imported by `path`, resolving relative imports."""
     package_parts = path.relative_to(ENGINE.parents[1]).with_suffix('').parts
