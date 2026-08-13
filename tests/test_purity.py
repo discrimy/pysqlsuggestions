@@ -208,6 +208,22 @@ def test_the_extension_declares_no_python_requirement_it_no_longer_has() -> None
     assert 'pythonPath' not in readme
 
 
+def test_the_lock_names_a_runtime_for_every_target_the_build_packages() -> None:
+    """
+    Two lists that must agree, in two files, neither of which reads the other.
+
+    `TARGETS` decides what `vsce package --target` is invoked for and the lock
+    decides what can be fetched, so a target in one and not the other is a build
+    that fails eight-ninths of the way through — after twenty minutes of
+    downloads.
+    """
+    from scripts.runtime import LOCK, TARGETS, read_lock, verify_lock
+
+    assets = read_lock(LOCK.read_text(encoding='utf-8'))
+    assert set(assets) == set(TARGETS)
+    assert verify_lock(assets) == []
+
+
 def test_the_bundle_ships_a_runtime_and_not_the_wheels_that_built_it() -> None:
     """
     `bundled/wheels` feeds the install that produced the runtime and has nothing to do at run time.
