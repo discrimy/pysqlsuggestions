@@ -132,11 +132,10 @@ CASES: tuple[GrammarCase, ...] = (
         note='the empty editor, where a statement may begin',
     ),
     GrammarCase(
-        sql='WITH ⌶',
+        sql='WITH rec⌶',
         cite='[ WITH [ RECURSIVE ] with_query [, ...] ]',
         offers=('RECURSIVE',),
-        pending=True,
-        note='offers nothing; RECURSIVE is in before_the_item and never reaches this caret',
+        note='prefix-gated: request.py withholds before_the_item at an empty caret, on purpose',
     ),
     GrammarCase(
         sql='WITH x ⌶',
@@ -185,9 +184,21 @@ CASES: tuple[GrammarCase, ...] = (
     GrammarCase(
         sql='SELECT ⌶',
         cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
-        offers=('ALL', 'DISTINCT'),
+        offers=('users.id',),
+        refuses=('ALL', 'DISTINCT'),
+        note='a column is what belongs here; the modifiers are prefix-gated and must not crowd it',
+    ),
+    GrammarCase(
+        sql='SELECT dis⌶',
+        cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
+        offers=('DISTINCT',),
+    ),
+    GrammarCase(
+        sql='SELECT al⌶',
+        cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
+        offers=('ALL',),
         pending=True,
-        note='offers columns only; `before_the_item` carries DISTINCT and omits ALL',
+        note='ALL is absent from SELECT.before_the_item; DISTINCT is there and answers',
     ),
     GrammarCase(
         sql='SELECT id, ⌶',
@@ -353,9 +364,44 @@ CASES: tuple[GrammarCase, ...] = (
     GrammarCase(
         sql='SELECT * FROM users GROUP BY ⌶',
         cite='[ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]',
-        offers=('ALL', 'DISTINCT', 'ROLLUP', 'CUBE', 'GROUPING SETS'),
+        offers=('users.id',),
+        refuses=('ROLLUP', 'CUBE'),
+        note='columns belong here; the grouping words are prefix-gated',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY al⌶',
+        cite='[ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]',
+        offers=('ALL',),
         pending=True,
-        note='offers columns only; none of the five grouping words reaches this caret',
+        note='before_the_item never fired here at all until at_the_clause_start was fixed',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY dis⌶',
+        cite='[ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]',
+        offers=('DISTINCT',),
+        pending=True,
+        note='as ALL',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY rol⌶',
+        cite='ROLLUP ( { expression | ( expression [, ...] ) } [, ...] )',
+        offers=('ROLLUP',),
+        pending=True,
+        note='as ALL',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY cu⌶',
+        cite='CUBE ( { expression | ( expression [, ...] ) } [, ...] )',
+        offers=('CUBE',),
+        pending=True,
+        note='as ALL',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users GROUP BY grouping⌶',
+        cite='GROUPING SETS ( grouping_element [, ...] )',
+        offers=('GROUPING SETS',),
+        pending=True,
+        note='as ALL',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY (⌶',
@@ -454,9 +500,19 @@ CASES: tuple[GrammarCase, ...] = (
     GrammarCase(
         sql='SELECT * FROM users LIMIT ⌶',
         cite='[ LIMIT { count | ALL } ]',
+        refuses=('OFFSET', 'FETCH', 'ALL'),
+        note=(
+            'a row count belongs here and nothing can suggest one. LIMIT deliberately has no kind: '
+            'its docstring records that giving it one made this caret offer OFFSET, which goes after '
+            'the number rather than instead of it'
+        ),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users LIMIT al⌶',
+        cite='[ LIMIT { count | ALL } ]',
         offers=('ALL',),
         pending=True,
-        note='offers nothing; LIMIT ALL is the spelling that takes a word rather than a number',
+        note='LIMIT ALL is the spelling that takes a word; before_the_item is where it goes',
     ),
     GrammarCase(
         sql='SELECT * FROM users OFFSET 10 ⌶',
