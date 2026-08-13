@@ -9,18 +9,18 @@ suite stays runnable without docker. Bring them up with:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from typing import Any
+from collections.abc import Iterator
 
 import pytest
 
-from pysqlsuggestions.catalogs.dbapi import Cursor, DbapiCatalog
+from pysqlsuggestions.catalogs import clickhouse_http, trino_http
+from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
 
 POSTGRES_DSN = 'postgresql://report:report@localhost:57432/report_service'
-CLICKHOUSE_HOST, CLICKHOUSE_PORT = 'localhost', 57900
+CLICKHOUSE_HOST, CLICKHOUSE_PORT = 'localhost', 57123
 TRINO_HOST, TRINO_PORT = 'localhost', 57080
 
 
@@ -42,38 +42,44 @@ def postgres_catalog() -> Iterator[DbapiCatalog]:
 
 @pytest.fixture(scope='session')
 def clickhouse_catalog() -> Iterator[DbapiCatalog]:
-    """A catalog over clickhouse-driver's DB-API layer, which speaks `pyformat`."""
-    dbapi = pytest.importorskip('clickhouse_driver.dbapi')
+    """
+    A catalog over the library's own HTTP reader, which speaks `named`.
+
+    Port 57123, not 57900: this is the HTTP interface, not the native protocol
+    the compiled client used. Nothing is skip-guarded on an import any more —
+    the reader is part of the library — so the only reason to skip is a backend
+    that is not up.
+    """
+    # The database matters: the introspection SQL falls back to currentDatabase()
+    # when no schema is given, and that is `default` unless the connection says otherwise.
+    connection = clickhouse_http.connect(
+        host=CLICKHOUSE_HOST,
+        port=CLICKHOUSE_PORT,
+        user='report',
+        password='report',
+        database='analytics',
+    )
     try:
-        # The database matters: the introspection SQL falls back to currentDatabase()
-        # when no schema is given, and that is `default` unless the connection says otherwise.
-        connection = dbapi.connect(
-            host=CLICKHOUSE_HOST,
-            port=CLICKHOUSE_PORT,
-            user='report',
-            password='report',
-            database='analytics',
-        )
         connection.cursor().execute('SELECT 1')
     except Exception as error:  # noqa: BLE001
         _skip('clickhouse', error)
-    yield DbapiCatalog(connection.cursor, CLICKHOUSE, paramstyle=dbapi.paramstyle)
+    yield DbapiCatalog(connection.cursor, CLICKHOUSE, paramstyle=clickhouse_http.paramstyle)
     connection.close()
 
 
 @pytest.fixture(scope='session')
 def trino_catalog() -> Iterator[DbapiCatalog]:
-    """A catalog over the `trino` client, which speaks `qmark`."""
-    trino = pytest.importorskip('trino.dbapi')
+    """
+    A catalog over the library's own HTTP reader, which speaks `qmark`.
+
+    `_reconnecting_cursor` is gone: it existed because a `trino` client cursor
+    is single-use, and `Connection.cursor()` here returns a fresh one every
+    time by construction.
+    """
+    connection = trino_http.connect(host=TRINO_HOST, port=TRINO_PORT, user='pysqlsuggestions', database='postgresql')
     try:
-        connection = trino.connect(host=TRINO_HOST, port=TRINO_PORT, user='pysqlsuggestions', catalog='postgresql')
         connection.cursor().execute('SELECT 1')
     except Exception as error:  # noqa: BLE001
         _skip('trino', error)
-    yield DbapiCatalog(_reconnecting_cursor(connection), TRINO, paramstyle=trino.paramstyle)
+    yield DbapiCatalog(connection.cursor, TRINO, paramstyle=trino_http.paramstyle)
     connection.close()
-
-
-def _reconnecting_cursor(connection: Any) -> Callable[[], Cursor]:
-    """Trino cursors are single-use, so each query gets a fresh one."""
-    return lambda: connection.cursor()
