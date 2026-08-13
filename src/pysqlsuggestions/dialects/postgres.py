@@ -440,6 +440,22 @@ POSTGRES = replace(
             # position and answered with relations.
             opens_a_group=('SELECT',),
         ),
+        # `ROWS FROM( f(), g() )` takes a list of function calls. Two words, so
+        # `_half_written_clauses` answers `ROWS ⌶` with `FROM`; `opens_an_item`
+        # because it begins a FROM item rather than following a finished one,
+        # which is what LATERAL declares for the same reason.
+        #
+        # A clause rather than a case in `opens_a_name_list`: that rule reads
+        # `Clause.aliases_with` so no SQL word enters engine/, and `ROWS FROM`
+        # is Postgres spelling. Modelling it also answers the caret instead of
+        # merely silencing it — the grammar puts a function there, and the
+        # catalog has those.
+        Clause(
+            name='ROWS FROM',
+            follows=frozenset({'FROM', 'JOIN'}),
+            opens_an_item=True,
+            suggests=(Kind.FUNCTION,),
+        ),
         Clause(name='DISTINCT ON', follows=frozenset({'SELECT'}), suggests=(Kind.COLUMN, Kind.FUNCTION)),
         Clause(
             name='ON CONFLICT',

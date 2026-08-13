@@ -106,6 +106,9 @@ def test_extending_did_not_disturb_ansi() -> None:
         'TABLESAMPLE',
         'SEARCH',
         'CYCLE',
+        # A multi-function FROM item. Modelled rather than silenced, because the
+        # grammar puts a function call inside it and a catalog has those.
+        'ROWS FROM',
     }
     assert {clause.name for clause in ANSI.clauses.clauses} == base
 

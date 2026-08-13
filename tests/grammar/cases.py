@@ -299,10 +299,9 @@ CASES: tuple[GrammarCase, ...] = (
     GrammarCase(
         sql='SELECT * FROM ROWS FROM(⌶',
         cite=_ROWS_FROM,
+        offers=('now',),
         refuses=('users', 'orders', 'public'),
-        pending=True,
-        refused='a multi-function FROM item is exotica; the position must stay silent',
-        note='reads ROWS FROM( as an ordinary FROM and offers relations',
+        note='a function, which the grammar puts here and a catalog has; it was offering relations',
     ),
     # --- joins ------------------------------------------------------------
     GrammarCase(

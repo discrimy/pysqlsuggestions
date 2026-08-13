@@ -21,6 +21,17 @@ offered relations, `WITH … CYCLE ⌶` offered `SELECT` and `INSERT INTO`, and
 `FROM LATERAL (⌶` offered relations where a subquery belongs. All four are quiet
 or correct now, three of them because the word became a clause at all.
 
+A parenthesis that opens a list of names being defined offered relations or the
+CTE body words. `WITH x (⌶` proposed `SELECT` and `VALUES` inside a column list,
+`FROM t AS u (⌶` and `FROM f(1) AS t (⌶` proposed table names where a column is
+being named, and `FROM ROWS FROM(⌶` read the construct as an ordinary `FROM`.
+
+The first four are quiet now. They are told apart from the bodies and calls that
+must go on answering — a CTE body, a function's arguments, `INSERT`'s column
+list, `IN`'s values — by the word that introduced the paren, read from the
+dialect's own `aliases_with` rather than matched against `AS`. `ROWS FROM(⌶`
+offers a function, which is what the grammar puts there.
+
 ### Positions that had no answer
 
 The `FETCH { FIRST | NEXT } … { ONLY | WITH TIES }` tail, at all four of its
@@ -72,12 +83,13 @@ A conformance suite for the official PostgreSQL `SELECT` grammar, in
 it comes from, so the suite can be checked against the document rather than
 against memory of it; a test asserts that no line goes uncited.
 
-Fifty-one of sixty-eight positions are answered. The seventeen it still records are
-listed in that file with a reason each: five inside a paren whose opening
-construct the analyser does not track, four withdrawn deliberately and described
-above, and the rest needing a capability that does not exist — a `Kind` meaning
-"a relation this statement already has", or an operator outside a predicate
-clause.
+Fifty-six of sixty-eight positions are answered, and none of the twelve it still
+records is a wrong answer — every one of them is a caret that stays silent. They
+are listed in that file with a reason each: four withdrawn deliberately and
+described above, three waiting on `CREATE TABLE` so the longer form wins the
+match, and five needing a capability that does not exist — a `Kind` meaning "a
+relation this statement already has", an operator outside a predicate clause,
+`MATERIALIZED`, and the item-openers `resolve.py` filters out on purpose.
 
 The test summary also stopped lying about the ported report_service suite. That
 line counted passes under `tests/reference/`, which is not a path here, against
