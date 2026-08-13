@@ -6,6 +6,65 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Wrong answers that are now right
+
+`SELECT * FROM users FOR ⌶` offered `users`, and accepting wrote
+`SELECT * FROM users FOR users`. `FOR` was not a clause, so the caret after it
+was still read as inside `FROM`. The four locking forms are clauses now, and
+that caret offers `UPDATE`, `NO KEY UPDATE`, `SHARE` and `KEY SHARE`.
+
+`WINDOW ⌶` offered a column where a window name is being defined. It suggests
+nothing now, and `WINDOW w AS (⌶` offers `PARTITION BY` and `ORDER BY`.
+
+`FROM t TABLESAMPLE ⌶` offered `JOIN` and `WHERE`, `TABLESAMPLE … REPEATABLE (⌶`
+offered relations, `WITH … CYCLE ⌶` offered `SELECT` and `INSERT INTO`, and
+`FROM LATERAL (⌶` offered relations where a subquery belongs. All four are quiet
+or correct now, three of them because the word became a clause at all.
+
+### Positions that had no answer
+
+The `FETCH { FIRST | NEXT } … { ONLY | WITH TIES }` tail, at all four of its
+carets. `OFFSET n ⌶` takes `ROW` and `ROWS`. `ORDER BY id ⌶` offers `USING`.
+`RIGHT JOIN` and `FULL JOIN` join the join list, everywhere a join is offered.
+`FROM t ⌶` offers `TABLESAMPLE`, and `WITH … SEARCH ⌶` offers `BREADTH` and
+`DEPTH`.
+
+Behind a prefix, where the engine puts words that would otherwise crowd out a
+column: `SELECT al⌶` → `ALL`; `GROUP BY rol⌶` → `ROLLUP`, with `CUBE`,
+`GROUPING SETS`, `ALL` and `DISTINCT`; `LIMIT al⌶` → `ALL`.
+
+### A bug that had hidden all of those
+
+`before_the_item` — the mechanism that puts a word behind a prefix — did nothing
+for any clause that was not the first in its statement. `at_the_clause_start`
+compared the whole run of words before the caret to the clause name, and that
+run does not stop at a clause boundary, so `GROUP BY rol` compared
+`('USERS', 'GROUP', 'BY')` and failed. `DISTINCT` worked, and only because
+`SELECT` comes first, which is why nothing had noticed.
+
+A dialect that declared `before_the_item` on any other clause was silently
+getting nothing.
+
+### Four things tried and withdrawn
+
+Each is a position the grammar names, reachable, and refused because reaching it
+cost more elsewhere. All four keep a case in `tests/grammar/` recording the
+reason.
+
+- **`UNION DISTINCT`.** `_half_written_clauses` treats every `followed_by` entry
+  as a phrase and skips a head that is already one, so naming `DISTINCT` there
+  made `SELECT DISTINCT ⌶` stop offering `ON`. `DISTINCT ON` is a feature people
+  write; `UNION DISTINCT` is a default spelled out.
+- **`TABLE t`.** A statement form is found by the first word that starts one,
+  and `TABLE` is a word inside `CREATE TABLE` — so modelling it made
+  `CREATE TABLE t (id ⌶` offer relations in a column definition list. It waits
+  on `CREATE TABLE`.
+- **`USING (…) AS join_using_alias`.** Both spellings are dropped by the
+  alias-spending machinery before the caret renders.
+- **`WITH ORDINALITY`.** It applies to a function item, and `followed_by` is per
+  clause rather than per item kind, so offering it after `generate_series(…) ⌶`
+  would also offer it after `FROM users ⌶`, where the server refuses it.
+
 ### Nothing changes at a caret
 
 A conformance suite for the official PostgreSQL `SELECT` grammar, in
@@ -13,18 +72,12 @@ A conformance suite for the official PostgreSQL `SELECT` grammar, in
 it comes from, so the suite can be checked against the document rather than
 against memory of it; a test asserts that no line goes uncited.
 
-Twenty-two of fifty-nine positions are answered. The gaps it records are mostly
-missing — the whole `FETCH … {ONLY | WITH TIES}` tail is silent, along with
-`LIMIT ALL`, `OFFSET … ROWS`, `RIGHT JOIN` and `FULL JOIN`, `GROUP BY` with
-`ROLLUP`, `CUBE` or `GROUPING SETS`, `ORDER BY … USING`, `DISTINCT` after a set
-operator, and the bare `TABLE` form.
-
-Fourteen are wrong rather than missing, which is the more expensive kind.
-`SELECT * FROM users FOR ⌶` offers `users`, because `FOR` is not a clause and
-the caret is still read as inside `FROM`; accepting writes
-`SELECT * FROM users FOR users`. `WINDOW ⌶` offers a column where a name is
-being defined. `TABLESAMPLE ⌶`, `ROWS FROM(⌶` and the column-definition lists
-all answer as though an ordinary relation position.
+Fifty-one of sixty-eight positions are answered. The seventeen it still records are
+listed in that file with a reason each: five inside a paren whose opening
+construct the analyser does not track, four withdrawn deliberately and described
+above, and the rest needing a capability that does not exist — a `Kind` meaning
+"a relation this statement already has", or an operator outside a predicate
+clause.
 
 The test summary also stopped lying about the ported report_service suite. That
 line counted passes under `tests/reference/`, which is not a path here, against

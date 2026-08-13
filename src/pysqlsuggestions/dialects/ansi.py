@@ -50,8 +50,23 @@ Curating a dozen independent lists is how `ON` ended up offering ORDER BY but
 not HAVING, LIMIT or OFFSET: every one of them was a separate chance to forget.
 """
 
-_JOINS = ('JOIN', 'LEFT JOIN', 'INNER JOIN', 'CROSS JOIN')
-"""A join may follow another join's ON, so these are added back where the order alone would not."""
+_JOINS = ('JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'FULL JOIN', 'CROSS JOIN')
+"""
+A join may follow another join's ON, so these are added back where the order alone would not.
+
+Ordered by how often each is what you meant. None of them is a `Clause` of its
+own: `clause_at` matches the longest clause *name*, and `JOIN` is a name, so
+`LEFT JOIN orders ⌶` resolves through `JOIN` with the modifier riding along.
+Naming each spelling as its own clause would say nothing the shared one does not.
+
+The `OUTER` spellings are deliberately absent. `LEFT OUTER JOIN` means what
+`LEFT JOIN` means, the shorter is what people write, and offering both doubles a
+list whose whole value is being short enough to read. `NATURAL` is absent for
+the opposite reason: it changes the meaning, choosing the join columns by name,
+which is the inference `engine/joins.py` refuses at length.
+
+All three backends accept `FULL OUTER JOIN`, verified against the containers.
+"""
 
 EXPLAINABLE = ('SELECT', 'WITH', 'INSERT INTO', 'UPDATE', 'DELETE FROM')
 """
@@ -157,6 +172,12 @@ CLAUSES = ClauseModel(
             follows=frozenset({'JOIN'}),
             repeats=True,
             suggests=(Kind.COLUMN,),
+            # PG 14's `USING (...) AS join_using_alias` is not offered. Both
+            # spellings were tried: `aliases_with='AS'` never reaches this
+            # caret, and a bare `AS` in the list is dropped by the same
+            # alias-spending machinery before it is rendered. Naming it here
+            # would be configuration that does nothing, which is worse than an
+            # absence with a reason.
             followed_by=(*_JOINS, *_onwards('WHERE')),
         ),
         Clause(
@@ -187,7 +208,22 @@ CLAUSES = ClauseModel(
             after_operand=_CONTINUES_PREDICATE,
             followed_by=('AND', 'OR', *_onwards('WINDOW')),
         ),
-        Clause(name='WINDOW', statements=_QUERY, suggests=COLUMN_EXPRESSION, followed_by=_onwards('UNION')),
+        # `suggests=()` because what belongs at `WINDOW ⌶` is a name being
+        # invented, and the engine has nothing to invent it from. It used to
+        # offer columns, which is not a missing answer but one that writes a
+        # statement the server refuses. `opens_a_group` carries the definition's
+        # own words, the way WITH's body words are carried.
+        Clause(
+            name='WINDOW',
+            statements=_QUERY,
+            suggests=(),
+            aliases_with='AS',
+            opens_a_group=('PARTITION BY', 'ORDER BY'),
+            # `AS` is in the list because `aliases_with` names it: a clause that
+            # aliases with a word it does not offer is a contradiction, and
+            # `DialectConformance` reports it. WITH declares the pair the same way.
+            followed_by=('AS', *_onwards('UNION')),
+        ),
         Clause(
             name='ORDER BY',
             statements=_QUERY,
@@ -202,8 +238,20 @@ CLAUSES = ClauseModel(
         # instead of it. UNION keeps its kind because `UNION ALL` really does
         # come next, which is why this is per-clause and not a rule.
         Clause(name='LIMIT', statements=_QUERY, followed_by=_onwards('OFFSET')),
-        Clause(name='OFFSET', statements=_QUERY, followed_by=_onwards('FETCH')),
-        Clause(name='FETCH', statements=_QUERY, suggests=(Kind.KEYWORD,)),
+        # `ROW` and `ROWS` are noise words the standard allows after the count,
+        # and all three backends take them — verified against the containers
+        # rather than argued from the standard.
+        Clause(name='OFFSET', statements=_QUERY, followed_by=('ROW', 'ROWS', *_onwards('FETCH'))),
+        # Every word of the tail in one list, with EXCLUSIVE doing the ordering.
+        # Naming them per position would need a clause per word, and the count
+        # in the middle is not a word at all. Without the EXCLUSIVE entry this
+        # list offers `ONLY` at `FETCH ⌶`, where it cannot go.
+        Clause(
+            name='FETCH',
+            statements=_QUERY,
+            suggests=(Kind.KEYWORD,),
+            followed_by=('FIRST', 'NEXT', 'ROW', 'ROWS', 'ONLY', 'WITH TIES'),
+        ),
         Clause(
             name='SET',
             follows=frozenset({'UPDATE'}),
@@ -214,6 +262,18 @@ CLAUSES = ClauseModel(
         ),
         Clause(name='VALUES', statements=frozenset({'INSERT INTO'}), suggests=COLUMN_EXPRESSION),
         # A set operator combines two result sets, so it needs one to its left.
+        #
+        # `DISTINCT` is deliberately *not* offered here, though all three
+        # backends accept `UNION DISTINCT`. `_half_written_clauses` builds its
+        # phrase set from every `followed_by` entry and then skips any head that
+        # is already a phrase — so naming DISTINCT here makes ('DISTINCT',) a
+        # phrase and `SELECT DISTINCT ⌶` stops offering `ON`. The same trap the
+        # `DROP` comment below records, reached from the other direction.
+        #
+        # Postgres's `DISTINCT ON` is a feature people write; `UNION DISTINCT`
+        # is the default spelled out. Trading the first for the second is a bad
+        # exchange, so the word stays out until a mechanism exists that can
+        # offer it without claiming the head.
         Clause(name='UNION', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='INTERSECT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='EXCEPT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),

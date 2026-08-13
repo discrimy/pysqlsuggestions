@@ -309,8 +309,19 @@ def at_the_clause_start(tokens: Sequence[Token], caret: int, clause: str) -> boo
     star are not words, so the run of words before the caret is empty rather
     than the clause's own name. What stands between a clause and its first item
     belongs here and only here.
+
+    A suffix rather than an equality, because `_words_before` walks back through
+    consecutive identifiers and does not stop at a clause boundary: the run
+    before `GROUP BY rol` is ('USERS', 'GROUP', 'BY'), and comparing that whole
+    run to the name reported false wherever a relation preceded the clause.
+    `before_the_item` was therefore dead for every clause but a leading one, and
+    `DISTINCT` worked by the accident of SELECT coming first. The guards are
+    unaffected: a comma or a star breaks the run, so `SELECT id, ⌶` still has
+    nothing to match.
     """
-    return _words_before(tokens, caret) == tuple(clause.upper().split())
+    words = _words_before(tokens, caret)
+    name = tuple(clause.upper().split())
+    return len(words) >= len(name) and words[-len(name) :] == name
 
 
 def _words_before(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:

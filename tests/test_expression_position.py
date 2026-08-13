@@ -225,7 +225,16 @@ def test_a_row_count_is_typed_rather_than_suggested() -> None:
     settled per clause rather than by a rule about operand positions.
     """
     assert texts('SELECT * FROM events ORDER BY id LIMIT ⌶') == []
-    assert texts('SELECT * FROM events ORDER BY id LIMIT 10 ⌶') == ['OFFSET']
+    # `LIMIT 10 ` continues into OFFSET and into the locking clause, which is
+    # legal after a row count: `SELECT … LIMIT 10 FOR UPDATE` runs. The count
+    # position itself stays empty, which is what this test is about.
+    assert texts('SELECT * FROM events ORDER BY id LIMIT 10 ⌶') == [
+        'OFFSET',
+        'FOR UPDATE',
+        'FOR NO KEY UPDATE',
+        'FOR SHARE',
+        'FOR KEY SHARE',
+    ]
     assert texts('SELECT id FROM events UNION ⌶') == ['ALL', 'SELECT']
 
 
