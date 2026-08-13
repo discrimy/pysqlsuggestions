@@ -324,6 +324,74 @@ def at_the_clause_start(tokens: Sequence[Token], caret: int, clause: str) -> boo
     return len(words) >= len(name) and words[-len(name) :] == name
 
 
+def opens_a_name_list(
+    tokens: Sequence[Token],
+    caret: int,
+    clause: str | None,
+    clauses: ClauseModel,
+) -> bool:
+    """
+    Whether the paren the caret sits in opens a list of names being defined.
+
+    Four shapes, all of them positions where the author is inventing names and
+    a catalog therefore has nothing to say:
+
+        WITH x (a, b) AS (...)      a CTE's column list
+        FROM t AS u (a, b)          a relation's column aliases
+        FROM f(1) AS t (a int)      a function's column definitions
+        FROM f(1) AS (a int)        the same, unnamed
+
+    Depth and the governing clause do not separate them from anything: the
+    caret's clause is `WITH` in the first and `FROM` in the rest, exactly as it
+    is for the bodies and calls that must go on answering. What separates them
+    is the token that introduced the paren.
+
+    A clause declaring `opens_a_group` has already said what its group holds, so
+    the only question is whether this paren *is* that group — it is when the
+    alias word introduces it, and `WITH x (` is the list that precedes one. A
+    clause with no group answers the same question the other way round: a paren
+    the alias word introduced, or that a name the alias word introduced
+    introduced, is names being defined.
+
+    Read from `Clause.aliases_with` rather than matched against `AS`, so no SQL
+    vocabulary enters this module and a dialect aliasing with another word gets
+    the same behaviour. `ROWS FROM(` is deliberately not here for that reason:
+    it is Postgres spelling, and a clause of its own.
+    """
+    depth = depth_at(tokens, caret)
+    if depth <= 0:
+        return False
+    start = _group_start(tokens, caret, depth)
+    if start <= 0:
+        return False
+
+    # `start - 1` is the paren itself, so the word that introduced it is before that.
+    at = _skip_back(tokens, start - 2)
+    introducer = _plain_word(tokens, at)
+    if introducer is None:
+        return False
+
+    governing = clauses.get(clause) if clause else None
+    if governing is None or not governing.aliases_with:
+        return False
+    alias = governing.aliases_with.upper()
+
+    if governing.opens_a_group:
+        return introducer != alias
+    # Either the alias word introduced the paren, or it introduced the name that did.
+    return introducer == alias or _plain_word(tokens, _skip_back(tokens, at - 1)) == alias
+
+
+def _plain_word(tokens: Sequence[Token], index: int) -> str | None:
+    """The uppercased value at `index`, or None where it is not an unquoted word."""
+    if index < 0 or index >= len(tokens):
+        return None
+    token = tokens[index]
+    if token.type is not TokenType.IDENT or token.quoted:
+        return None
+    return token.value.upper()
+
+
 def _words_before(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:
     """The unbroken run of plain words immediately left of the caret, in order."""
     index = _index_before(tokens, caret)
