@@ -47,6 +47,12 @@ _JOIN = 'from_item join_type from_item { ON join_condition | USING ( join_column
 _ORDER_BY = '[ ORDER BY expression [ ASC | DESC | USING operator ] [ NULLS { FIRST | LAST } ] [, ...] ]'
 """The ordering production, cited by four cases."""
 
+_FOR = (
+    '[ FOR { UPDATE | NO KEY UPDATE | SHARE | KEY SHARE } [ OF from_reference [, ...] ] '
+    '[ NOWAIT | SKIP LOCKED ] [...] ]'
+)
+"""The locking clause, named for the same reason as `_WITH_QUERY`."""
+
 
 @dataclass(frozen=True)
 class GrammarCase:
@@ -479,5 +485,54 @@ CASES: tuple[GrammarCase, ...] = (
         offers=('ONLY', 'WITH TIES'),
         pending=True,
         note='silent, and this is the one place WITH TIES can go',
+    ),
+    # --- the locking clause -----------------------------------------------
+    GrammarCase(
+        sql='SELECT * FROM users FOR ⌶',
+        cite=_FOR,
+        offers=('UPDATE', 'NO KEY UPDATE', 'SHARE', 'KEY SHARE'),
+        refuses=('users', 'orders', 'public'),
+        pending=True,
+        note=(
+            'the sharpest wrong answer in the suite: FOR is not a clause, so the caret is still '
+            'read as inside FROM and accepting writes `FROM users FOR users`'
+        ),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users FOR UPDATE ⌶',
+        cite=_FOR,
+        offers=('OF', 'NOWAIT', 'SKIP LOCKED'),
+        refuses=('users', 'orders'),
+        pending=True,
+        note='offers relations, having read UPDATE as the start of an UPDATE statement',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u FOR UPDATE OF ⌶',
+        cite=_FOR,
+        offers=('u',),
+        pending=True,
+        note='OF takes a from_reference, so the alias in scope is the answer; the engine offers `o` instead',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u FOR UPDATE OF u ⌶',
+        cite=_FOR,
+        offers=('NOWAIT', 'SKIP LOCKED'),
+        pending=True,
+        note='silent',
+    ),
+    # --- the TABLE form ---------------------------------------------------
+    GrammarCase(
+        sql='TABLE ⌶',
+        cite='TABLE [ ONLY ] table_name [ * ]',
+        offers=('users', 'ONLY'),
+        pending=True,
+        note='silent: TABLE is not in statement_start, and an unrecognised form correctly says nothing',
+    ),
+    GrammarCase(
+        sql='TABLE ONLY ⌶',
+        cite='TABLE [ ONLY ] table_name [ * ]',
+        offers=('users',),
+        pending=True,
+        note='silent for the same reason',
     ),
 )
