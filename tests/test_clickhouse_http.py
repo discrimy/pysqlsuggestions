@@ -109,3 +109,45 @@ def test_a_refusal_carries_clickhouses_own_message() -> None:
 def test_the_paramstyle_is_what_the_catalog_must_be_told() -> None:
     """DbapiCatalog takes paramstyle as a constructor argument; this is the value for it."""
     assert clickhouse_http.paramstyle == 'named'
+
+
+def test_an_exception_inside_a_200_is_still_a_failure() -> None:
+    """
+    ClickHouse flushes headers before it knows a query will succeed.
+
+    A failure part-way through a large result therefore arrives as 200, with the
+    rows already sent and an `exception` beside them. Returning those rows would
+    be a partial answer presented as a complete one — which a completion list
+    has no way to show, so it must raise instead.
+    """
+    partial = Response(
+        status=200,
+        body=json.dumps(
+            {'meta': [], 'data': [['a'], ['b']], 'rows': 2, 'exception': 'Code: 159. DB::Exception: Timeout exceeded'}
+        ).encode(),
+    )
+    cursor = clickhouse_http.connect(host='h', transport=Recorder(partial)).cursor()
+    with pytest.raises(clickhouse_http.ClickHouseError, match='Timeout exceeded'):
+        cursor.execute('SELECT * FROM big')
+
+
+def test_a_json_failure_is_reported_as_its_sentence_not_its_envelope() -> None:
+    """`Code: 60. DB::Exception: ...` is what a user can act on; the JSON around it is not."""
+    refused = Response(
+        status=404,
+        body=json.dumps(
+            {'meta': [], 'data': [], 'rows': 0, 'exception': 'Code: 60. DB::Exception: Unknown table'}
+        ).encode(),
+    )
+    cursor = clickhouse_http.connect(host='h', transport=Recorder(refused)).cursor()
+    with pytest.raises(clickhouse_http.ClickHouseError) as raised:
+        cursor.execute('SELECT * FROM system.nope')
+    assert str(raised.value) == 'Code: 60. DB::Exception: Unknown table'
+
+
+def test_a_plain_text_refusal_still_comes_through() -> None:
+    """Authentication failures are not JSON, so the status branch has to keep working."""
+    refused = Response(status=403, body=b'Code: 516. DB::Exception: report: Authentication failed')
+    cursor = clickhouse_http.connect(host='h', transport=Recorder(refused)).cursor()
+    with pytest.raises(clickhouse_http.ClickHouseError, match='Authentication failed'):
+        cursor.execute('SELECT 1')

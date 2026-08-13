@@ -130,10 +130,34 @@ class Connection:
             timeout=self._timeout,
             verify=self._verify,
         )
+        payload = _decoded(answer)
+        # Checked before the status, and on every answer including a 200.
+        # ClickHouse flushes headers before it knows a query will succeed, so a
+        # failure part-way through a large result arrives as 200 with the rows
+        # it had already sent plus an `exception`. Reading the status first
+        # would return that partial answer as a complete one — silently, which
+        # is the one failure mode a completion list cannot show.
+        failure = payload.get('exception')
+        if failure is not None:
+            raise ClickHouseError(' '.join(str(failure).split()))
         if answer.status != 200:
             raise ClickHouseError(answer.text())
-        payload = answer.json()
         return [tuple(row) for row in payload.get('data', ())]
+
+
+def _decoded(answer: _http.Response) -> dict[str, Any]:
+    """
+    The answer as a JSON object, or empty when it is not one.
+
+    Authentication failures arrive as plain text rather than JSON — measured
+    against the docker fixture, not assumed — so failing to parse is a normal
+    path here and the status check downstream is what reports those.
+    """
+    try:
+        payload = answer.json()
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _typed(sql: str) -> str:
