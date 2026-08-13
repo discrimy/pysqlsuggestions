@@ -72,7 +72,7 @@ workspace's `.vscode/settings.json` is edited where it lives.
 
 | setting | what it does |
 | --- | --- |
-| `pysqlsuggestions.connections` | the connections themselves — name, dialect, host, port, database, user, secure |
+| `pysqlsuggestions.connections` | the connections themselves — name, dialect, host, port, database, user, secure, verify |
 | `pysqlsuggestions.defaultConnection` | which one to use |
 | `pysqlsuggestions.pythonPath` | interpreter used to build the extension's own environment, not the one your project runs on |
 

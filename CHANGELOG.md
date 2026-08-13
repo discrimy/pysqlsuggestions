@@ -25,6 +25,22 @@ A connection can now say `secure` to speak TLS. Trino refuses password
 authentication without it, and the reader says so at connect time rather than
 sending the password to find out.
 
+`verify` turns certificate checking off for one connection, for the case it
+exists to serve: a self-signed certificate on an internal server. It is off only
+when set to exactly `false` — a missing or malformed value leaves checking on,
+which is the opposite of how every other field in a profile behaves and is
+deliberate. Turning it off stops the hostname being checked too, because a
+self-signed certificate rarely names the host it is reached by and half-checking
+would fail on exactly those endpoints while reading as though something were
+still being verified.
+
+A ClickHouse query that fails part-way through a large result is no longer
+silently truncated. ClickHouse flushes headers before it knows a query will
+succeed, so such a failure arrives as HTTP 200 carrying the rows already sent
+plus an `exception`; the reader returned those rows as a complete answer. It now
+checks for the exception on every response, before the status, and reports the
+server's sentence rather than the JSON around it.
+
 ## 0.4.1
 
 A packaging fix. Nothing about what the engine offers at a caret changed.
