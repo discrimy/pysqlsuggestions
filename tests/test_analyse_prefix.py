@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.engine.analyse import depth_at, in_literal, qualifier_and_prefix, statement_at
+from pysqlsuggestions.engine.analyse import (
+    at_the_clause_start,
+    depth_at,
+    in_literal,
+    qualifier_and_prefix,
+    statement_at,
+)
 from pysqlsuggestions.engine.lex import lex
 from tests.corpus.cases import split_caret
 
@@ -131,3 +137,34 @@ def test_a_doubled_quote_is_unescaped_in_the_prefix() -> None:
 def test_an_unfinished_quoted_name_still_ends_at_the_caret() -> None:
     """With no closing quote there is nothing to strand, and the text right of the caret is not ours."""
     assert at('SELECT * FROM "auth_u⌶') == ((), 'auth_u', (14, 21))
+
+
+def _at_start(marked: str, clause: str) -> bool:
+    """Run at_the_clause_start on ⌶-marked SQL, for the postgres dialect."""
+    sql, caret = split_caret(marked)
+    tokens = lex(sql, POSTGRES.syntax)
+    return at_the_clause_start(tokens, caret, clause)
+
+
+def test_a_clause_that_does_not_begin_the_statement_still_has_a_start() -> None:
+    """
+    `_words_before` walks back through consecutive identifiers without stopping.
+
+    So the run before `GROUP BY rol` was ('USERS', 'GROUP', 'BY'), which equals
+    no clause name, and `before_the_item` was dead for every clause but the
+    leading one. DISTINCT worked only because SELECT comes first.
+    """
+    assert _at_start('SELECT * FROM users GROUP BY rol⌶', 'GROUP BY')
+    assert _at_start('SELECT * FROM users LIMIT al⌶', 'LIMIT')
+
+
+def test_a_written_item_still_ends_the_clause_start() -> None:
+    """The guard the equality check was providing, which the suffix check must keep."""
+    assert not _at_start('SELECT id, dis⌶', 'SELECT')
+    assert not _at_start('SELECT * FROM users GROUP BY id, rol⌶', 'GROUP BY')
+
+
+def test_the_leading_clause_is_unchanged() -> None:
+    """`SELECT dis` was the one case that worked, and it must go on working."""
+    assert _at_start('SELECT dis⌶', 'SELECT')
+    assert not _at_start('SELECT * FROM users ⌶', 'FROM')
