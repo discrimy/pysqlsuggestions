@@ -250,14 +250,17 @@ It is a separate distribution in `lsp/`, not part of the library: a server needs
 pygls and a driver, and the library's promise is that importing it pulls in
 neither. See `lsp/README.md`.
 
-`editors/vscode/` is a VS Code extension over that server. It builds its own
-Python environment from wheels shipped inside it — nothing is downloaded, and
-the project's own environment is untouched — and manages connections from a view
-in the Explorer, passwords in secret storage rather than settings. It needs
-Python 3.10+ on PATH, and reads a schema from all three backends: Postgres
-through pg8000, ClickHouse and Trino through the library's own HTTP readers,
-which exist because both of those clients hard-require compression codecs that
-ship compiled. See `editors/vscode/README.md`.
+`editors/vscode/` is a VS Code extension over that server. It carries its own
+CPython with the server already installed into it, so it needs no Python on the
+machine and touches neither the system's nor the project's — nothing is
+downloaded and nothing is built on first run. Connections are managed from a
+view in the Explorer, passwords in secret storage rather than settings.
+
+It reads a schema from all three backends: Postgres through pg8000, ClickHouse
+and Trino through the library's own HTTP readers, which exist because both of
+those clients hard-require compression codecs that ship compiled. That every
+bundled wheel is `none-any` is what lets the same wheel set install into all
+nine platform builds. See `editors/vscode/README.md`.
 
 ## Design
 

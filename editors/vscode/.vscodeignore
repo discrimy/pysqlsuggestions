@@ -1,6 +1,12 @@
-# The VSIX carries the bundled wheels and the built extension, nothing else.
-# `bundled/wheels` is the one build output that must ship: without it the
-# extension has no server to install and no way to fetch one.
+# The VSIX carries the bundled runtime and the built extension, nothing else.
+# `bundled/runtime.tar.gz` is the one build output that must ship: it is the
+# interpreter and the server both, and without it the extension has nothing to
+# run and no way to fetch one.
+#
+# `bundled/wheels` is an intermediate. It feeds the install that produced the
+# runtime and has no reader at run time, so shipping it would add 1 MB of
+# already-installed packages to every one of the nine builds.
+bundled/wheels/**
 src/**
 out/test/**
 node_modules/**

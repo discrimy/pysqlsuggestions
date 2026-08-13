@@ -61,11 +61,9 @@ async function completionsFor(sql: string): Promise<string[]> {
 suite('pysqlsuggestions', () => {
   suiteSetup(async function () {
     this.timeout(180000);
+    // No interpreter to point at any more: the extension unpacks the one it
+    // ships with, and PYSQLSUGGESTIONS_TEST_PYTHON had nothing left to select.
     const settings = vscode.workspace.getConfiguration('pysqlsuggestions');
-    const python = process.env.PYSQLSUGGESTIONS_TEST_PYTHON;
-    if (python !== undefined && python.length > 0) {
-      await settings.update('pythonPath', python, vscode.ConfigurationTarget.Global);
-    }
     await settings.update('connections', [PROFILE], vscode.ConfigurationTarget.Global);
 
     // The password has to reach SecretStorage, and there is deliberately no

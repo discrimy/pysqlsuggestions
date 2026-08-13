@@ -4,8 +4,9 @@
  * Order matters. The client starts even with no profile, because completing
  * from the statement alone is a useful mode rather than a failure — and it is
  * exactly what a user gets before they have configured anything at all. The
- * one thing that stops the extension is having no Python to run the server
- * with, and that is reported once rather than on every `.sql` file opened.
+ * one thing that stops the extension is failing to unpack the interpreter it
+ * ships with, and that is reported once rather than on every `.sql` file
+ * opened. Nothing about the machine's own Python is consulted.
  */
 
 import * as cp from 'node:child_process';
@@ -14,7 +15,7 @@ import * as vscode from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions } from 'vscode-languageclient/node';
 import { type Spawn, testConnection } from './check';
 import { type Profile, initializationOptions, needsPassword, readProfiles, resolveProfile } from './profiles';
-import { MINIMUM_PYTHON, ensureVenv, findInterpreter, stampFor, stampPath } from './runtime';
+import { ensureRuntime, stampFor, stampPath } from './runtime';
 import { forgetPassword, promptForPassword, readPassword } from './secrets';
 import { Status } from './status';
 import {
@@ -36,12 +37,12 @@ let output: vscode.OutputChannel | undefined;
 let tree: ConnectionTree | undefined;
 
 /**
- * The managed venv's interpreter, once there is one.
+ * The bundled interpreter, once it is unpacked.
  *
  * Undefined means nothing can be tested, which the test flow reports rather
  * than spawning something that cannot exist.
  */
-let venvPython: string | undefined;
+let serverPython: string | undefined;
 
 /**
  * Profiles the user declined to give a password for, this window.
@@ -52,23 +53,17 @@ let venvPython: string | undefined;
 const declined = new Set<string>();
 
 /**
- * The wheels the VSIX carries, by name and size.
+ * The runtime archive the VSIX carries, by name and size.
  *
- * Empty when the directory is unreadable, which makes the stamp depend on the
- * version alone — the behaviour before this existed, and the right fallback:
- * an unreadable bundle is a broken install that the install step will report
- * far more clearly than a stamp mismatch would.
+ * Undefined when it is unreadable, which makes the stamp depend on the version
+ * alone — the right fallback: a missing archive is a broken install that the
+ * extraction step reports far more clearly than a stamp mismatch would.
  */
-async function bundledWheels(directory: string): Promise<{ name: string; size: number }[]> {
+async function bundledRuntime(archive: string): Promise<{ name: string; size: number } | undefined> {
   try {
-    const names = await fs.readdir(directory);
-    return await Promise.all(
-      names
-        .filter((name) => name.endsWith('.whl'))
-        .map(async (name) => ({ name, size: (await fs.stat(`${directory}/${name}`)).size })),
-    );
+    return { name: 'runtime.tar.gz', size: (await fs.stat(archive)).size };
   } catch {
-    return [];
+    return undefined;
   }
 }
 
@@ -146,40 +141,26 @@ function run(command: string, args: string[]): Promise<void> {
   });
 }
 
-/** Run a command and return what it printed. */
-function capture(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = cp.spawn(command, args, { windowsHide: true });
-    let collected = '';
-    child.stdout.on('data', (chunk: Buffer) => (collected += chunk.toString()));
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve(collected);
-      } else {
-        reject(new Error(`${command} exited ${String(code)}`));
-      }
-    });
-  });
-}
-
 /**
- * Ask an interpreter what version it is.
+ * Unpack a tar.gz using the system `tar`.
  *
- * `sys.version_info` rather than `--version`, because the Windows Store stub
- * answers `--version` with the word `Python` and exit code zero. Asking it to
- * execute something makes the difference visible.
+ * Every target platform ships one, including Windows 10 1803 and later, which
+ * is below VS Code's own floor. It handles what a hand-rolled extractor gets
+ * wrong: the symlinks the interpreter's `bin/` and `lib/` are built from,
+ * execute bits, and — on macOS — unpacking without stamping every file with
+ * `com.apple.quarantine`, which is what produces a "cannot be opened because
+ * the developer cannot be verified" dialog for a binary the user never chose
+ * to run.
+ *
+ * The one genuine dependency on the machine this design otherwise removes. If a
+ * target turns out to lack a usable `tar`, the fallback is vendoring an
+ * extractor — about 200 lines of file-format code that has to be right about
+ * symlinks and permissions on three operating systems, and not worth paying up
+ * front for a program that has shipped with every one of them for years.
  */
-function probePython(command: string): Promise<string> {
-  return capture(command, ['-c', "import sys; print('%d.%d.%d' % sys.version_info[:3])"]);
-}
-
-/** The first interpreter that runs and is new enough, or undefined. */
-function findPython(configured: string | null): Promise<string | undefined> {
-  const candidates = [configured, 'python3', 'python', 'py'].filter(
-    (candidate): candidate is string => candidate !== null && candidate.length > 0,
-  );
-  return findInterpreter(candidates, probePython);
+async function extract(archive: string, into: string): Promise<void> {
+  await fs.mkdir(into, { recursive: true });
+  await run('tar', ['-xzf', archive, '-C', into]);
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -236,20 +217,21 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
   await fs.mkdir(root, { recursive: true });
 
   const version = (context.extension.packageJSON as { version: string }).version;
-  const wheelDir = vscode.Uri.joinPath(context.extensionUri, 'bundled', 'wheels').fsPath;
+  const archive = vscode.Uri.joinPath(context.extensionUri, 'bundled', 'runtime.tar.gz').fsPath;
   const runtime = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Window, title: 'pysqlsuggestions: preparing Python…' },
+    { location: vscode.ProgressLocation.Window, title: 'pysqlsuggestions: unpacking Python…' },
     async () =>
-      ensureVenv({
+      ensureRuntime({
         root,
-        // The bundle, not just the version: a server rebuilt under an unchanged
-        // version would otherwise leave a venv holding code the VSIX no longer
-        // carries, and nothing would notice.
-        version: stampFor(version, await bundledWheels(wheelDir)),
-        wheelDir,
+        // The archive, not just the version: a server rebuilt under an unchanged
+        // version would otherwise leave a runtime holding code the VSIX no
+        // longer carries, and nothing would notice.
+        version: stampFor(version, await bundledRuntime(archive)),
+        archive,
         platform: process.platform,
-        findPython: () => findPython(settings.get<string | null>('pythonPath', null)),
-        run,
+        extract,
+        makeExecutable: (path) => fs.chmod(path, 0o755),
+        remove: (path) => fs.rm(path, { recursive: true, force: true }),
         readStamp: () =>
           fs
             .readFile(stampPath(root), 'utf8')
@@ -261,24 +243,24 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
 
   if (!runtime.ready) {
     status?.set('dormant');
+    // Nothing here names a fix the user can apply, because there is no longer
+    // one to name: the interpreter ships inside the VSIX, so a failure means
+    // the install itself is damaged. The logs carry `tar`'s own words.
     void vscode.window
       .showErrorMessage(
-        `pysqlsuggestions needs Python ${MINIMUM_PYTHON} or newer and found none on PATH. ` +
-          'Set "pysqlsuggestions.pythonPath" if you have one elsewhere.',
+        'pysqlsuggestions could not unpack its Python runtime, so completion will answer ' +
+          'from the statement alone. Reinstalling the extension is the fix.',
         'Show logs',
-        'Open settings',
       )
       .then((choice) => {
         if (choice === 'Show logs') {
           output?.show();
-        } else if (choice === 'Open settings') {
-          void vscode.commands.executeCommand('workbench.action.openSettings', 'pysqlsuggestions.pythonPath');
         }
       });
     return;
   }
 
-  venvPython = runtime.python;
+  serverPython = runtime.python;
 
   const profiles = readProfiles(settings.get('connections', []));
   const profile = resolveProfile(profiles, settings.get<string | null>('defaultConnection', null));
@@ -406,13 +388,13 @@ function isInUse(name: string): boolean {
 /** Test one connection and record the verdict on its row. Never throws. */
 async function runTest(context: vscode.ExtensionContext, entry: Stored): Promise<void> {
   const name = entry.profile.name;
-  if (venvPython === undefined) {
+  if (serverPython === undefined) {
     tree?.setHealth(name, 'failed', 'the Python environment is not ready — run "Show logs"');
     return;
   }
   tree?.setHealth(name, 'testing');
   const password = await readPassword(context.secrets, name);
-  const verdict = await testConnection(entry.profile, password, checkSpawn(venvPython));
+  const verdict = await testConnection(entry.profile, password, checkSpawn(serverPython));
   tree?.setHealth(name, verdict.ok ? 'ok' : 'failed', verdict.detail);
   output?.appendLine(`${name}: ${verdict.ok ? 'ok' : 'failed'} — ${verdict.detail}`);
 }
