@@ -208,7 +208,22 @@ CLAUSES = ClauseModel(
             after_operand=_CONTINUES_PREDICATE,
             followed_by=('AND', 'OR', *_onwards('WINDOW')),
         ),
-        Clause(name='WINDOW', statements=_QUERY, suggests=COLUMN_EXPRESSION, followed_by=_onwards('UNION')),
+        # `suggests=()` because what belongs at `WINDOW ⌶` is a name being
+        # invented, and the engine has nothing to invent it from. It used to
+        # offer columns, which is not a missing answer but one that writes a
+        # statement the server refuses. `opens_a_group` carries the definition's
+        # own words, the way WITH's body words are carried.
+        Clause(
+            name='WINDOW',
+            statements=_QUERY,
+            suggests=(),
+            aliases_with='AS',
+            opens_a_group=('PARTITION BY', 'ORDER BY'),
+            # `AS` is in the list because `aliases_with` names it: a clause that
+            # aliases with a word it does not offer is a contradiction, and
+            # `DialectConformance` reports it. WITH declares the pair the same way.
+            followed_by=('AS', *_onwards('UNION')),
+        ),
         Clause(
             name='ORDER BY',
             statements=_QUERY,

@@ -197,8 +197,6 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT al⌶',
         cite='SELECT [ ALL | DISTINCT [ ON ( expression [, ...] ) ] ]',
         offers=('ALL',),
-        pending=True,
-        note='ALL is absent from SELECT.before_the_item; DISTINCT is there and answers',
     ),
     GrammarCase(
         sql='SELECT id, ⌶',
@@ -373,36 +371,26 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users GROUP BY al⌶',
         cite='[ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]',
         offers=('ALL',),
-        pending=True,
-        note='before_the_item never fired here at all until at_the_clause_start was fixed',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY dis⌶',
         cite='[ GROUP BY [ ALL | DISTINCT ] grouping_element [, ...] ]',
         offers=('DISTINCT',),
-        pending=True,
-        note='as ALL',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY rol⌶',
         cite='ROLLUP ( { expression | ( expression [, ...] ) } [, ...] )',
         offers=('ROLLUP',),
-        pending=True,
-        note='as ALL',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY cu⌶',
         cite='CUBE ( { expression | ( expression [, ...] ) } [, ...] )',
         offers=('CUBE',),
-        pending=True,
-        note='as ALL',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY grouping⌶',
         cite='GROUPING SETS ( grouping_element [, ...] )',
         offers=('GROUPING SETS',),
-        pending=True,
-        note='as ALL',
     ),
     GrammarCase(
         sql='SELECT * FROM users GROUP BY (⌶',
@@ -437,15 +425,11 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users WINDOW ⌶',
         cite='[ WINDOW window_name AS ( window_definition ) [, ...] ]',
         refuses=('users.id', 'users.email'),
-        pending=True,
-        note='a window name is being defined here; offering a column writes SQL the server refuses',
     ),
     GrammarCase(
         sql='SELECT * FROM users WINDOW w AS (⌶',
         cite='[ WINDOW window_name AS ( window_definition ) [, ...] ]',
         offers=('PARTITION BY', 'ORDER BY'),
-        pending=True,
-        note='offers columns; PARTITION BY exists as a clause and is not reachable from here',
     ),
     # --- set operations ---------------------------------------------------
     GrammarCase(
@@ -488,8 +472,6 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users ORDER BY id ⌶',
         cite=_ORDER_BY,
         offers=('ASC', 'DESC', 'NULLS FIRST', 'NULLS LAST', 'USING'),
-        pending=True,
-        note='everything but USING; an explicit ordering operator has no entry',
     ),
     GrammarCase(
         sql='SELECT * FROM users ORDER BY id USING ⌶',
@@ -497,7 +479,11 @@ CASES: tuple[GrammarCase, ...] = (
         offers=('<', '>'),
         refuses=('users.id',),
         pending=True,
-        note='offers columns where an operator belongs',
+        refused=(
+            'USING takes an operator, and operators reach a caret only through Clause.operators, '
+            'which marks a predicate clause; ORDER BY is not one and making it one would offer '
+            '= after every ordering column'
+        ),
     ),
     GrammarCase(
         sql='SELECT * FROM users ORDER BY id ASC ⌶',
@@ -521,8 +507,6 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users LIMIT al⌶',
         cite='[ LIMIT { count | ALL } ]',
         offers=('ALL',),
-        pending=True,
-        note='LIMIT ALL is the spelling that takes a word; before_the_item is where it goes',
     ),
     GrammarCase(
         sql='SELECT * FROM users OFFSET 10 ⌶',

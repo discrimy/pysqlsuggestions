@@ -17,6 +17,26 @@ from pysqlsuggestions.dialects.base import (
 )
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
 
+
+def _ansi(name: str) -> Clause:
+    """
+    The clause ANSI declares under `name`, for a dialect that refines one field of it.
+
+    `ClauseModel.extend` replaces a clause of the same name whole rather than
+    merging into it, so refining one field otherwise means hand-copying the
+    rest — which is how a restated `followed_by` falls behind the canonical
+    clause order it was copied from. Paired with `dataclasses.replace`, the copy
+    is never made.
+
+    Raises rather than returning None: a name that is not in ANSI is a typo, and
+    a silently absent clause would drop the refinement without a word.
+    """
+    clause = ANSI.clauses.get(name)
+    if clause is None:  # pragma: no cover - a typo in this module, caught at import
+        raise KeyError(f'ANSI has no clause named {name!r}')
+    return clause
+
+
 _PROKIND = {'f': 'function', 'a': 'aggregate', 'w': 'window', 'p': 'procedure'}
 
 _RELKIND = {
@@ -300,6 +320,39 @@ POSTGRES = replace(
         'DROP INDEX',
     ),
     clauses=ANSI.clauses.extend(
+        # Four clauses refined rather than restated. `extend` replaces a clause
+        # of the same name whole, so a dialect adding one field to a shared
+        # clause would otherwise hand-copy every other field — including the
+        # slice of the canonical clause order that `_ORDER`'s docstring exists
+        # to stop being hand-copied. `replace` on the record ANSI already built
+        # keeps the copy honest by never making one.
+        #
+        # All four use `before_the_item`, which `request.py` gates behind a
+        # non-empty prefix: a column belongs at `SELECT ⌶` and `GROUP BY ⌶`, and
+        # a row count at `LIMIT ⌶`, so a rarely-wanted modifier is reached by
+        # typing rather than ranked above every column in the schema.
+        replace(_ansi('SELECT'), before_the_item=('DISTINCT', 'ALL')),
+        # ClickHouse spells its grouping sets `GROUP BY … WITH ROLLUP`, so this
+        # list is Postgres's rather than the baseline's. Trino agrees with
+        # Postgres and could have them too; that is a change with its own
+        # evidence to gather.
+        replace(_ansi('GROUP BY'), before_the_item=('ALL', 'DISTINCT', 'ROLLUP', 'CUBE', 'GROUPING SETS')),
+        # No kind, still: ansi.py records that giving LIMIT one made `LIMIT ⌶`
+        # offer OFFSET, which goes after the number rather than instead of it.
+        replace(_ansi('LIMIT'), before_the_item=('ALL',)),
+        # `USING operator` is Postgres's alone — an explicit ordering operator,
+        # where the standard has only ASC and DESC. The operator itself is not
+        # offered: operators reach a caret through `Clause.operators`, which
+        # marks a predicate clause, and ORDER BY is not one.
+        replace(
+            _ansi('ORDER BY'),
+            followed_by=(
+                'ASC',
+                'DESC',
+                'USING',
+                *(word for word in _ansi('ORDER BY').followed_by if word not in {'ASC', 'DESC'}),
+            ),
+        ),
         Clause(
             name='LATERAL',
             follows=frozenset({'FROM', 'JOIN'}),
