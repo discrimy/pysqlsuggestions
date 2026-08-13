@@ -6,6 +6,32 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Nothing changes at a caret
+
+A conformance suite for the official PostgreSQL `SELECT` grammar, in
+`tests/grammar/`. The synopsis is stored verbatim and every case cites the line
+it comes from, so the suite can be checked against the document rather than
+against memory of it; a test asserts that no line goes uncited.
+
+Twenty-two of fifty-nine positions are answered. The gaps it records are mostly
+missing — the whole `FETCH … {ONLY | WITH TIES}` tail is silent, along with
+`LIMIT ALL`, `OFFSET … ROWS`, `RIGHT JOIN` and `FULL JOIN`, `GROUP BY` with
+`ROLLUP`, `CUBE` or `GROUPING SETS`, `ORDER BY … USING`, `DISTINCT` after a set
+operator, and the bare `TABLE` form.
+
+Fourteen are wrong rather than missing, which is the more expensive kind.
+`SELECT * FROM users FOR ⌶` offers `users`, because `FOR` is not a clause and
+the caret is still read as inside `FROM`; accepting writes
+`SELECT * FROM users FOR users`. `WINDOW ⌶` offers a column where a name is
+being defined. `TABLESAMPLE ⌶`, `ROWS FROM(⌶` and the column-definition lists
+all answer as though an ordinary relation position.
+
+The test summary also stopped lying about the ported report_service suite. That
+line counted passes under `tests/reference/`, which is not a path here, against
+*every* xfail in the run — so it read `0/37 passing` the moment another suite
+had pending cases. Both halves are scoped to `tests/queries/` now, and it reads
+`158/158 passing, 0 known gaps`.
+
 ## 0.4.1
 
 A packaging fix. Nothing about what the engine offers at a caret changed.
