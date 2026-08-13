@@ -267,3 +267,43 @@ def test_secure_is_withheld_from_a_driver_that_never_heard_of_it() -> None:
 
     _connect(Profile(dialect='postgres', host='h', secure=True), opener=fake_connect)
     assert 'secure' not in seen
+
+
+def test_verify_defaults_on_and_only_an_explicit_false_turns_it_off() -> None:
+    """
+    Every other field fails towards absence; this one fails towards the safe answer.
+
+    A `"no"` typed into settings.json is not False, and reading it as one would
+    silently disable certificate checking on a connection whose owner believed
+    they had asked for something else.
+    """
+    assert Profile(dialect='trino', host='h').verify is True
+    for value, expected in ((False, False), (True, True), ('no', True), (0, True), (None, True)):
+        profile = Profile.from_options({'dialect': 'trino', 'host': 'h', 'verify': value})
+        assert profile is not None
+        assert profile.verify is expected, value
+
+
+def test_verify_reaches_a_reader() -> None:
+    """A verification flag that is parsed and not passed verifies nothing."""
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='trino', host='h', secure=True, verify=False), opener=fake_connect)
+    assert seen['verify'] is False
+    assert seen['secure'] is True
+
+
+def test_verify_is_withheld_from_a_driver_that_never_heard_of_it() -> None:
+    """Same rule as `secure`: pg8000 takes an ssl_context and would raise on either name."""
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='postgres', host='h', secure=True, verify=False), opener=fake_connect)
+    assert 'verify' not in seen

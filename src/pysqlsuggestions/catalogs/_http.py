@@ -56,6 +56,35 @@ Transport = Callable[..., Response]
 """What both readers call, and what a test substitutes wholesale."""
 
 
+def tls_context(url: str, *, verify: bool) -> ssl.SSLContext | None:
+    """
+    The TLS context for `url`, or None when it is not an HTTPS one.
+
+    Verifying is the default and stays the default. `verify=False` is for the
+    case it exists to serve — an internal ClickHouse or Trino behind a
+    self-signed certificate, which is common enough that refusing to support it
+    would mean users reaching for a worse workaround. It disables hostname
+    checking too, because a self-signed certificate rarely names the host it is
+    reached by and half-checking would fail on exactly those endpoints while
+    reading as though something were still being verified.
+
+    What it does not do is apply per-request or by default. It is a property of
+    one configured connection, chosen deliberately, and the setting that carries
+    it says what it costs.
+
+    `check_hostname` is cleared before `verify_mode`: setting CERT_NONE while
+    hostname checking is on raises ValueError, and the order is easy to get
+    backwards.
+    """
+    if not url.startswith('https://'):
+        return None
+    context = ssl.create_default_context()
+    if not verify:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def request(
     url: str,
     *,
@@ -63,18 +92,11 @@ def request(
     data: bytes | None = None,
     headers: Mapping[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    verify: bool = True,
 ) -> Response:
-    """
-    One HTTP round trip.
-
-    TLS uses `ssl.create_default_context()` — the platform trust store, with
-    hostname checking and certificate verification on. There is deliberately no
-    option to turn either off: wanting completions is not a reason to teach this
-    codebase how to skip certificate verification, and a user who needs a private
-    CA can install it where every other tool on their machine already looks.
-    """
+    """One HTTP round trip. See `tls_context` for what `verify` governs."""
     built = urllib.request.Request(url, data=data, headers=dict(headers or {}), method=method)  # noqa: S310
-    context = ssl.create_default_context() if url.startswith('https://') else None
+    context = tls_context(url, verify=verify)
     try:
         with urllib.request.urlopen(built, timeout=timeout, context=context) as answer:  # noqa: S310
             return Response(status=int(answer.status), body=answer.read())

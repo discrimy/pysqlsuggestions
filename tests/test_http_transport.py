@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import ssl
 import urllib.error
 import urllib.request
 from typing import Any
@@ -83,3 +84,44 @@ def test_the_request_carries_method_body_and_headers(monkeypatch: pytest.MonkeyP
         headers={'X-ClickHouse-User': 'report'},
     )
     assert seen == {'method': 'POST', 'data': b'SELECT 1', 'user': 'report'}
+
+
+def test_a_verifying_context_is_the_default() -> None:
+    """The platform trust store, hostname checking on. Nothing is opted into."""
+    context = _http.tls_context('https://db.internal:8443/', verify=True)
+    assert context is not None
+    assert context.check_hostname is True
+    assert context.verify_mode is ssl.CERT_REQUIRED
+
+
+def test_turning_verification_off_also_turns_off_the_hostname_check() -> None:
+    """
+    Half-checking is worse than not checking, and reads as though it were safe.
+
+    A self-signed certificate rarely names the host it is reached by, so leaving
+    `check_hostname` on would fail on exactly the endpoints this flag exists for
+    while looking like something was still being verified.
+    """
+    context = _http.tls_context('https://db.internal:8443/', verify=False)
+    assert context is not None
+    assert context.check_hostname is False
+    assert context.verify_mode is ssl.CERT_NONE
+
+
+def test_a_plaintext_url_has_no_context_either_way() -> None:
+    """There is no TLS to configure, and building a context would imply there was."""
+    assert _http.tls_context('http://localhost:8123/', verify=True) is None
+    assert _http.tls_context('http://localhost:8123/', verify=False) is None
+
+
+def test_the_context_reaches_urlopen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A context built and not passed is a verification setting that does nothing."""
+    seen: dict[str, Any] = {}
+
+    def capture(_: urllib.request.Request, **options: Any) -> _Answer:
+        seen['context'] = options.get('context')
+        return _Answer(200, b'{}')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', capture)
+    _http.request('https://db.internal:8443/', verify=False)
+    assert seen['context'].verify_mode is ssl.CERT_NONE

@@ -94,6 +94,7 @@ class Connection:
         headers: Mapping[str, str],
         timeout: float,
         deadline: float,
+        verify: bool,
         transport: _http.Transport,
         clock: Callable[[], float],
         sleep: Callable[[float], None],
@@ -102,6 +103,7 @@ class Connection:
         self._headers = dict(headers)
         self._timeout = timeout
         self._deadline = deadline
+        self._verify = verify
         self._transport = transport
         self._clock = clock
         self._sleep = sleep
@@ -156,6 +158,7 @@ class Connection:
                 data=data,
                 headers=headers,
                 timeout=min(self._timeout, remaining),
+                verify=self._verify,
             )
             if answer.status not in RETRY_STATUSES:
                 break
@@ -208,6 +211,7 @@ def connect(
     user: str | None = None,
     password: str | None = None,
     secure: bool = False,
+    verify: bool = True,
     timeout: float = _http.DEFAULT_TIMEOUT,
     deadline: float = DEFAULT_DEADLINE,
     transport: _http.Transport = _http.request,
@@ -225,6 +229,11 @@ def connect(
     A password without TLS is refused rather than sent. Trino rejects password
     authentication over plaintext itself, so sending it would leak a credential
     to buy an error — the opposite trade from ClickHouse, which accepts one.
+
+    `verify=False` accepts any certificate — see `_http.tls_context`. It does not
+    relax the rule above: a password still requires `secure`, because that rule
+    is about whether the credential is encrypted at all, not about who signed
+    the certificate.
 
     `clock` and `sleep` are injected so the deadline is testable without waiting.
     """
@@ -253,6 +262,7 @@ def connect(
         headers=headers,
         timeout=timeout,
         deadline=deadline,
+        verify=verify,
         transport=transport,
         clock=clock,
         sleep=sleep,

@@ -52,6 +52,16 @@ class Profile:
     password: str | None = field(default=None, repr=False)
     """Kept out of `repr` — this object reaches logs and crash reports."""
 
+    verify: bool = True
+    """
+    Whether to check the server's certificate. Only meaningful with `secure`.
+
+    Default true, and a malformed value keeps it true — `from_options` reads it
+    as `is not False`, so a `"no"` typed into settings.json leaves verification
+    on. Every other field there fails towards absence; this one fails towards
+    the safe answer, because absence and False are not the same thing here.
+    """
+
     secure: bool = False
     """
     Whether to speak TLS.
@@ -93,6 +103,9 @@ class Profile:
             # `is True` rather than `bool(...)`: this field is type-checked like
             # every other, and a `"yes"` from hand-edited settings is not True.
             secure=options.get('secure') is True,
+            # `is not False`: only an explicit false turns verification off, so
+            # a missing key and a mistyped one both leave it on.
+            verify=options.get('verify') is not False,
         )
 
 
@@ -118,6 +131,7 @@ def _connect(profile: Profile, opener: Callable[..., Any] | None = None) -> Any:
     # so the user sees fewer suggestions and no reason for it.
     if module.startswith('pysqlsuggestions.'):
         arguments['secure'] = profile.secure
+        arguments['verify'] = profile.verify
     for name, value in (
         ('port', profile.port),
         ('database', profile.database),

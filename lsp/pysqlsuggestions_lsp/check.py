@@ -66,6 +66,7 @@ def _timed_connect(profile: Profile) -> Any:
     # rule as `connections._connect`, and for the same reason.
     if module.startswith('pysqlsuggestions.'):
         arguments['secure'] = profile.secure
+        arguments['verify'] = profile.verify
     for name, value in (
         ('port', profile.port),
         ('database', profile.database),

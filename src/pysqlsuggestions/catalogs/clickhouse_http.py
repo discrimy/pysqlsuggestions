@@ -91,12 +91,14 @@ class Connection:
         database: str | None,
         headers: Mapping[str, str],
         timeout: float,
+        verify: bool,
         transport: _http.Transport,
     ) -> None:
         self._base = base
         self._database = database
         self._headers = dict(headers)
         self._timeout = timeout
+        self._verify = verify
         self._transport = transport
 
     def cursor(self) -> Cursor:
@@ -126,6 +128,7 @@ class Connection:
             data=_typed(operation).encode('utf-8'),
             headers=self._headers,
             timeout=self._timeout,
+            verify=self._verify,
         )
         if answer.status != 200:
             raise ClickHouseError(answer.text())
@@ -152,6 +155,7 @@ def connect(
     user: str | None = None,
     password: str | None = None,
     secure: bool = False,
+    verify: bool = True,
     timeout: float = _http.DEFAULT_TIMEOUT,
     transport: _http.Transport = _http.request,
 ) -> Connection:
@@ -169,6 +173,11 @@ def connect(
     Unlike Trino, a password over plaintext is permitted here: ClickHouse itself
     accepts one, the docker fixture uses one, and refusing would break a local
     setup to protect a remote one the user has not described to us.
+
+    `verify=False` accepts any certificate — see `_http.tls_context`. It means
+    nothing without `secure`, and is not rejected in that pairing: a user who
+    sets it while turning TLS off has expressed no contradiction, only a
+    setting that does not apply yet.
     """
     scheme = 'https' if secure else 'http'
     resolved = port if port is not None else (SECURE_PORT if secure else DEFAULT_PORT)
@@ -182,5 +191,6 @@ def connect(
         database=database,
         headers=headers,
         timeout=timeout,
+        verify=verify,
         transport=transport,
     )
