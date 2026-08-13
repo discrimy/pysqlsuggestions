@@ -5,10 +5,13 @@ The dialect comes from the entry-point registry rather than a hard-coded map, so
 a third-party dialect works here without this file knowing it exists. The driver
 does not, because a driver is a module to import and a paramstyle to declare.
 
-Both bundled drivers are pure Python. That is not an accident: it is what lets
-one VSIX serve every platform instead of one per platform and architecture. A
-dialect the library serves may therefore be unserved here — ClickHouse is — and
-`open_catalog` says so by returning None rather than by failing.
+Nothing in `DRIVERS` needs a compiled wheel. Postgres uses pg8000, which is pure;
+Trino and ClickHouse use the library's own HTTP readers, because both clients
+hard-require compression codecs that ship compiled. That is not incidental — it
+is what lets the same wheel set install on every platform — and it is why every
+dialect the library serves is now served here too. `open_catalog` still returns
+None rather than failing for a dialect nothing here can reach, which is what a
+third-party dialect with no driver gets.
 """
 
 from __future__ import annotations
@@ -26,9 +29,15 @@ Connect = Callable[['Profile'], Any]
 
 DRIVERS: dict[str, tuple[str, str]] = {
     'postgres': ('pg8000.dbapi', 'format'),
-    'trino': ('trino.dbapi', 'qmark'),
+    'trino': ('pysqlsuggestions.catalogs.trino_http', 'qmark'),
+    'clickhouse': ('pysqlsuggestions.catalogs.clickhouse_http', 'named'),
 }
-"""Dialect name to (driver module, paramstyle). Pure-Python drivers only."""
+"""
+Dialect name to (module, paramstyle). Nothing here is compiled.
+
+Named by module rather than imported so this file pulls in no transport at all,
+and so `check.py` can reach the same table without keeping a second list.
+"""
 
 
 @dataclass(frozen=True, slots=True)

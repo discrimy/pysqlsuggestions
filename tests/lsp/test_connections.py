@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
+from importlib import import_module
 from typing import Any
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
@@ -92,12 +93,14 @@ def test_an_unknown_dialect_gives_nothing() -> None:
 
 def test_a_registered_dialect_with_no_bundled_driver_gives_nothing() -> None:
     """
-    ClickHouse is a dialect this library serves and this server does not.
+    A dialect resolving is not enough — something has to be able to read it.
 
-    Its driver is not pure Python, so bundling it would mean one VSIX per
-    platform. The dialect resolving is not enough — a driver has to exist too.
+    `ansi` is the case now that ClickHouse and Trino have readers: it describes
+    a grammar and names no server, so there is nothing to connect to and no
+    driver to name. The same shape is what a third-party dialect registered
+    through the entry point gets.
     """
-    profile = Profile(dialect='clickhouse', host='db')
+    profile = Profile(dialect='ansi', host='db')
     assert open_catalog(profile, connect=lambda p: FakeConnection()) is None
 
 
@@ -174,3 +177,42 @@ def test_one_connection_is_opened_when_queries_arrive_together() -> None:
     for thread in threads:
         thread.join()
     assert len(opened) == 1
+
+
+def test_every_dialect_the_library_serves_has_a_catalog() -> None:
+    """
+    All three backends read a catalog now, and none of them needs a wheel.
+
+    This was three dialects and one driver: pg8000 is pure and the other two
+    clients were not, so ClickHouse and Trino resolved a dialect and no catalog.
+    The stdlib readers close that, and the assertion is written against the
+    whole set rather than the two additions so that a dialect added without a
+    reader is visible here rather than as silence at a caret.
+    """
+    assert set(DRIVERS) == {'postgres', 'clickhouse', 'trino'}
+
+
+def test_the_readers_are_reached_by_module_path_not_by_import() -> None:
+    """DRIVERS names modules so `connections` itself imports no transport."""
+    assert DRIVERS['clickhouse'] == ('pysqlsuggestions.catalogs.clickhouse_http', 'named')
+    assert DRIVERS['trino'] == ('pysqlsuggestions.catalogs.trino_http', 'qmark')
+
+
+def test_each_readers_paramstyle_matches_what_it_declares() -> None:
+    """
+    A paramstyle written twice is a paramstyle that can disagree with itself.
+
+    `DbapiCatalog` is told the value from DRIVERS while the reader rewrites
+    against the one it declares, and a mismatch produces valid-looking SQL with
+    unsubstituted markers in it — which surfaces as an empty completion list,
+    not as an error.
+    """
+    for dialect, (module, paramstyle) in DRIVERS.items():
+        if module.startswith('pysqlsuggestions.'):
+            assert import_module(module).paramstyle == paramstyle, dialect
+
+
+def test_a_clickhouse_profile_opens_a_catalog() -> None:
+    """Nothing is connected — this asserts the profile resolves to a catalog at all."""
+    profile = Profile(dialect='clickhouse', host='localhost')
+    assert open_catalog(profile, connect=lambda _: FakeConnection()) is not None
