@@ -16,6 +16,7 @@ from scripts.runtime import (
     PBS_RELEASE,
     PYTHON_VERSION,
     TARGETS,
+    UV_CANNOT_EXPRESS,
     Asset,
     download_url,
     python_platform,
@@ -125,3 +126,17 @@ def test_the_python_platform_is_one_uv_understands() -> None:
     """uv installs into an interpreter it cannot execute, and this is how it is told which."""
     assert python_platform('win32-x64') == 'x86_64-pc-windows-msvc'
     assert python_platform('alpine-arm64') == 'aarch64-unknown-linux-musl'
+
+
+def test_the_one_platform_uv_cannot_name_asks_for_nothing() -> None:
+    """
+    armv7 is not in uv's list, so the flag is dropped rather than approximated.
+
+    The nearest value uv offers is the generic `linux`, which resolves as
+    x86_64 — for a compiled wheel that would silently pick the wrong one, which
+    is worse than not asking at all. `verify()`'s none-any rule is what covers
+    this target instead.
+    """
+    assert python_platform('linux-armhf') is None
+    assert set(UV_CANNOT_EXPRESS) <= set(TARGETS)
+    assert all(python_platform(target) is not None for target in TARGETS if target not in UV_CANNOT_EXPRESS)

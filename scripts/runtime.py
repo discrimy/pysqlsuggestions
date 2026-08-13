@@ -148,11 +148,27 @@ def site_packages(root: Path, target: str) -> Path:
     return base / 'lib' / f'python{PYTHON_VERSION}' / 'site-packages'
 
 
-def python_platform(target: str) -> str:
-    """
-    The `--python-platform` value uv wants for `target`.
+UV_CANNOT_EXPRESS = frozenset({'linux-armhf'})
+"""
+Targets uv has no `--python-platform` value for.
 
-    uv's platform names are the same triples, which is why `TARGETS` holds
-    triples rather than something friendlier.
+`armv7-unknown-linux-gnueabihf` is not in uv's list — measured against uv itself,
+which rejects it outright rather than approximating. The nearest thing it offers
+is the generic `linux`, which resolves as x86_64: for a compiled wheel that
+would pick the *wrong* one silently, which is worse than not asking. So the flag
+is omitted for this target and `verify()`'s rejection of anything not `none-any`
+is what stands in its place — which is the guarantee the whole build already
+rests on, applied one step earlier.
+"""
+
+
+def python_platform(target: str) -> str | None:
     """
-    return TARGETS[target]
+    The `--python-platform` value uv wants for `target`, or None when it has none.
+
+    uv's platform names are the same triples for eight of the nine, which is why
+    `TARGETS` holds triples rather than something friendlier. See
+    `UV_CANNOT_EXPRESS` for the one that is different and why it is not
+    approximated.
+    """
+    return None if target in UV_CANNOT_EXPRESS else TARGETS[target]

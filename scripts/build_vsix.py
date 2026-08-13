@@ -167,25 +167,26 @@ def install_into(root: Path, target: str, wheels: Path) -> None:
 
     `--no-index` because a build that could reach PyPI could ship something this
     tree did not produce.
+
+    `--python-platform` is omitted for the one target uv cannot name; see
+    `runtime.UV_CANNOT_EXPRESS`.
     """
-    subprocess.run(
-        [
-            'uv',
-            'pip',
-            'install',
-            '--target',
-            str(runtime.site_packages(root, target)),
-            '--python-version',
-            runtime.PYTHON_VERSION,
-            '--python-platform',
-            runtime.python_platform(target),
-            '--no-index',
-            '--find-links',
-            str(wheels),
-            'pysqlsuggestions-lsp[pg8000]',
-        ],
-        check=True,
-    )
+    platform_name = runtime.python_platform(target)
+    command = [
+        'uv',
+        'pip',
+        'install',
+        '--target',
+        str(runtime.site_packages(root, target)),
+        '--python-version',
+        runtime.PYTHON_VERSION,
+        *(('--python-platform', platform_name) if platform_name else ()),
+        '--no-index',
+        '--find-links',
+        str(wheels),
+        'pysqlsuggestions-lsp[pg8000]',
+    ]
+    subprocess.run(command, check=True)
 
 
 def host_target() -> str | None:
