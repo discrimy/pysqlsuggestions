@@ -6,6 +6,41 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### ClickHouse and Trino answer from a catalog in the editor
+
+Both read one now, so `FROM ⌶`, `db.⌶` and `alias.⌶` offer real relations and
+columns against either backend instead of keywords alone. Neither declares
+foreign keys, so join proposals stay Postgres-only; Trino ships no
+relation-search query, so a bare prefix still finds nothing there. Both were
+already true for library users and are now reachable from the extension.
+
+The readers are the library's own, over each backend's HTTP interface —
+`catalogs/clickhouse_http.py` and `catalogs/trino_http.py`, stdlib only. Their
+official clients hard-require lz4, orjson, zstandard or a C extension, every one
+of them to compress a wire carrying seven introspection queries against a cache
+that is warm for the rest of a session. The clients remain supported: a caller
+holding a `trino` connection still passes its cursor to `DbapiCatalog`.
+
+A connection can now say `secure` to speak TLS. Trino refuses password
+authentication without it, and the reader says so at connect time rather than
+sending the password to find out.
+
+`verify` turns certificate checking off for one connection, for the case it
+exists to serve: a self-signed certificate on an internal server. It is off only
+when set to exactly `false` — a missing or malformed value leaves checking on,
+which is the opposite of how every other field in a profile behaves and is
+deliberate. Turning it off stops the hostname being checked too, because a
+self-signed certificate rarely names the host it is reached by and half-checking
+would fail on exactly those endpoints while reading as though something were
+still being verified.
+
+A ClickHouse query that fails part-way through a large result is no longer
+silently truncated. ClickHouse flushes headers before it knows a query will
+succeed, so such a failure arrives as HTTP 200 carrying the rows already sent
+plus an `exception`; the reader returned those rows as a complete answer. It now
+checks for the exception on every response, before the status, and reports the
+server's sentence rather than the JSON around it.
+
 ## 0.4.1
 
 A packaging fix. Nothing about what the engine offers at a caret changed.

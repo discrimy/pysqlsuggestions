@@ -254,9 +254,10 @@ neither. See `lsp/README.md`.
 Python environment from wheels shipped inside it — nothing is downloaded, and
 the project's own environment is untouched — and manages connections from a view
 in the Explorer, passwords in secret storage rather than settings. It needs
-Python 3.10+ on PATH, and reads a schema from PostgreSQL only: the other
-backends' drivers are not pure Python, so bundling them would mean a separate
-download per operating system. See `editors/vscode/README.md`.
+Python 3.10+ on PATH, and reads a schema from all three backends: Postgres
+through pg8000, ClickHouse and Trino through the library's own HTTP readers,
+which exist because both of those clients hard-require compression codecs that
+ship compiled. See `editors/vscode/README.md`.
 
 ## Design
 

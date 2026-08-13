@@ -5,10 +5,13 @@ The dialect comes from the entry-point registry rather than a hard-coded map, so
 a third-party dialect works here without this file knowing it exists. The driver
 does not, because a driver is a module to import and a paramstyle to declare.
 
-Both bundled drivers are pure Python. That is not an accident: it is what lets
-one VSIX serve every platform instead of one per platform and architecture. A
-dialect the library serves may therefore be unserved here — ClickHouse is — and
-`open_catalog` says so by returning None rather than by failing.
+Nothing in `DRIVERS` needs a compiled wheel. Postgres uses pg8000, which is pure;
+Trino and ClickHouse use the library's own HTTP readers, because both clients
+hard-require compression codecs that ship compiled. That is not incidental — it
+is what lets the same wheel set install on every platform — and it is why every
+dialect the library serves is now served here too. `open_catalog` still returns
+None rather than failing for a dialect nothing here can reach, which is what a
+third-party dialect with no driver gets.
 """
 
 from __future__ import annotations
@@ -26,9 +29,15 @@ Connect = Callable[['Profile'], Any]
 
 DRIVERS: dict[str, tuple[str, str]] = {
     'postgres': ('pg8000.dbapi', 'format'),
-    'trino': ('trino.dbapi', 'qmark'),
+    'trino': ('pysqlsuggestions.catalogs.trino_http', 'qmark'),
+    'clickhouse': ('pysqlsuggestions.catalogs.clickhouse_http', 'named'),
 }
-"""Dialect name to (driver module, paramstyle). Pure-Python drivers only."""
+"""
+Dialect name to (module, paramstyle). Nothing here is compiled.
+
+Named by module rather than imported so this file pulls in no transport at all,
+and so `check.py` can reach the same table without keeping a second list.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +51,27 @@ class Profile:
     user: str | None = None
     password: str | None = field(default=None, repr=False)
     """Kept out of `repr` — this object reaches logs and crash reports."""
+
+    verify: bool = True
+    """
+    Whether to check the server's certificate. Only meaningful with `secure`.
+
+    Default true, and a malformed value keeps it true — `from_options` reads it
+    as `is not False`, so a `"no"` typed into settings.json leaves verification
+    on. Every other field there fails towards absence; this one fails towards
+    the safe answer, because absence and False are not the same thing here.
+    """
+
+    secure: bool = False
+    """
+    Whether to speak TLS.
+
+    Default false because the docker fixtures and most local backends are
+    plaintext, and a default that breaks every local setup to protect a remote
+    one nobody described is a default people turn off rather than one that
+    protects anybody. Trino refuses password authentication without it and says
+    so at connect time, rather than sending the password to find out.
+    """
 
     @classmethod
     def from_options(cls, options: object) -> Profile | None:
@@ -70,6 +100,12 @@ class Profile:
             database=_text(options.get('database')),
             user=_text(options.get('user')),
             password=_text(options.get('password')),
+            # `is True` rather than `bool(...)`: this field is type-checked like
+            # every other, and a `"yes"` from hand-edited settings is not True.
+            secure=options.get('secure') is True,
+            # `is not False`: only an explicit false turns verification off, so
+            # a missing key and a mistyped one both leave it on.
+            verify=options.get('verify') is not False,
         )
 
 
@@ -78,11 +114,24 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _connect(profile: Profile) -> Any:
-    """Open a connection with the driver the dialect names."""
+def _connect(profile: Profile, opener: Callable[..., Any] | None = None) -> Any:
+    """
+    Open a connection with the driver the dialect names.
+
+    `opener` exists so a test can see what would be passed. Patching
+    `import_module` instead would assert against a mock rather than against the
+    arguments, which is the part that can be wrong.
+    """
     module, _ = DRIVERS[profile.dialect]
-    driver = import_module(module)
+    connect_to = opener or import_module(module).connect
     arguments: dict[str, Any] = {'host': profile.host}
+    # pg8000 takes `ssl_context`, not `secure`; only the readers understand this
+    # flag. Passing it to a driver that has never heard of it is a TypeError
+    # raised on the first catalog read, which degrades to a catalog-free list —
+    # so the user sees fewer suggestions and no reason for it.
+    if module.startswith('pysqlsuggestions.'):
+        arguments['secure'] = profile.secure
+        arguments['verify'] = profile.verify
     for name, value in (
         ('port', profile.port),
         ('database', profile.database),
@@ -91,7 +140,7 @@ def _connect(profile: Profile) -> Any:
     ):
         if value is not None:
             arguments[name] = value
-    return driver.connect(**arguments)
+    return connect_to(**arguments)
 
 
 def open_catalog(profile: Profile, connect: Connect | None = None) -> DbapiCatalog | None:

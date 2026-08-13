@@ -119,12 +119,12 @@ def test_a_refusal_is_not_retried_on_every_keystroke() -> None:
 
 def test_a_dialect_with_no_bundled_driver_still_completes() -> None:
     """
-    ClickHouse resolves as a dialect and has no driver here.
+    `ansi` resolves as a dialect and has no driver here, nor could it have one.
 
     The dialect must still be used — its keywords and quoting are right even
     when nothing can be read from the server.
     """
-    session = Session(profile=Profile(dialect='clickhouse', host='db'))
+    session = Session(profile=Profile(dialect='ansi', host='db'))
     assert session.catalog() is None
     assert 'recent' in labels(session, WITH_CTE)
 

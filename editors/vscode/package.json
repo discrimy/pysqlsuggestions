@@ -72,12 +72,14 @@
               "dialect": {
                 "type": "string",
                 "enum": ["postgres", "clickhouse", "trino", "ansi"],
-                "markdownDescription": "Only `postgres` reads a catalog in this release — the others need drivers that ship compiled, which would mean one build per platform. They still complete from the statement, with the right keywords and quoting."
+                "markdownDescription": "`postgres`, `clickhouse` and `trino` all read a catalog. `ansi` completes from the statement alone, with the right keywords and quoting."
               },
               "host": { "type": "string" },
               "port": { "type": "number" },
               "database": { "type": "string" },
-              "user": { "type": "string" }
+              "user": { "type": "string" },
+              "secure": { "type": "boolean", "default": false, "description": "Speak TLS. Trino requires it before it will accept a password." },
+              "verify": { "type": "boolean", "default": true, "markdownDescription": "Check the server's TLS certificate. Set `false` only for a self-signed certificate you already trust — it also stops the hostname being checked, so nothing about the endpoint's identity is verified." }
             },
             "additionalProperties": false
           }

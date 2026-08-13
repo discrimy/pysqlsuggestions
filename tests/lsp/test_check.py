@@ -57,14 +57,14 @@ def test_a_profile_without_a_dialect_is_rejected_before_connecting() -> None:
 
 def test_a_dialect_with_no_bundled_driver_says_what_still_works() -> None:
     """
-    ClickHouse resolves as a dialect and has no driver here.
+    `ansi` resolves as a dialect and has no driver here, nor could it have one.
 
     Keywords and quoting are still right, and a user told only "failed" would
     reasonably conclude the whole connection is useless.
     """
-    verdict = check({'dialect': 'clickhouse', 'host': 'localhost'})
+    verdict = check({'dialect': 'ansi', 'host': 'localhost'})
     assert verdict['ok'] is False
-    assert 'clickhouse' in verdict['detail']
+    assert 'ansi' in verdict['detail']
     assert 'keywords' in verdict['detail']
 
 
