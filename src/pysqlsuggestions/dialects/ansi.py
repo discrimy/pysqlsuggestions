@@ -202,8 +202,20 @@ CLAUSES = ClauseModel(
         # instead of it. UNION keeps its kind because `UNION ALL` really does
         # come next, which is why this is per-clause and not a rule.
         Clause(name='LIMIT', statements=_QUERY, followed_by=_onwards('OFFSET')),
-        Clause(name='OFFSET', statements=_QUERY, followed_by=_onwards('FETCH')),
-        Clause(name='FETCH', statements=_QUERY, suggests=(Kind.KEYWORD,)),
+        # `ROW` and `ROWS` are noise words the standard allows after the count,
+        # and all three backends take them — verified against the containers
+        # rather than argued from the standard.
+        Clause(name='OFFSET', statements=_QUERY, followed_by=('ROW', 'ROWS', *_onwards('FETCH'))),
+        # Every word of the tail in one list, with EXCLUSIVE doing the ordering.
+        # Naming them per position would need a clause per word, and the count
+        # in the middle is not a word at all. Without the EXCLUSIVE entry this
+        # list offers `ONLY` at `FETCH ⌶`, where it cannot go.
+        Clause(
+            name='FETCH',
+            statements=_QUERY,
+            suggests=(Kind.KEYWORD,),
+            followed_by=('FIRST', 'NEXT', 'ROW', 'ROWS', 'ONLY', 'WITH TIES'),
+        ),
         Clause(
             name='SET',
             follows=frozenset({'UPDATE'}),
@@ -214,6 +226,18 @@ CLAUSES = ClauseModel(
         ),
         Clause(name='VALUES', statements=frozenset({'INSERT INTO'}), suggests=COLUMN_EXPRESSION),
         # A set operator combines two result sets, so it needs one to its left.
+        #
+        # `DISTINCT` is deliberately *not* offered here, though all three
+        # backends accept `UNION DISTINCT`. `_half_written_clauses` builds its
+        # phrase set from every `followed_by` entry and then skips any head that
+        # is already a phrase — so naming DISTINCT here makes ('DISTINCT',) a
+        # phrase and `SELECT DISTINCT ⌶` stops offering `ON`. The same trap the
+        # `DROP` comment below records, reached from the other direction.
+        #
+        # Postgres's `DISTINCT ON` is a feature people write; `UNION DISTINCT`
+        # is the default spelled out. Trading the first for the second is a bad
+        # exchange, so the word stays out until a mechanism exists that can
+        # offer it without claiming the head.
         Clause(name='UNION', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='INTERSECT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),
         Clause(name='EXCEPT', statements=_QUERY, suggests=(Kind.KEYWORD,), followed_by=('ALL', 'SELECT')),

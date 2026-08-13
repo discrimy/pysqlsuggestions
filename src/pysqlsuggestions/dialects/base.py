@@ -342,6 +342,13 @@ EXCLUSIVE = (
     # Two spellings of the same limit. `LIMIT 10 FETCH FIRST 2 ROWS ONLY` names
     # a row count twice and no server takes it, so writing either settles both.
     (frozenset({'LIMIT', 'FETCH'}),),
+    # The FETCH tail names four carets and three choices, in the order SQL takes
+    # them. Its clause carries all six words in one `followed_by`, because
+    # naming them per position would need a clause per word and the count in the
+    # middle is not a word at all — so this is what keeps `ONLY` away from
+    # `FETCH ⌶`, where it cannot go, and `FIRST` away from the caret after
+    # `ROWS`, where it has already been spent.
+    (frozenset({'FIRST', 'NEXT'}), frozenset({'ROW', 'ROWS'}), frozenset({'ONLY', 'WITH TIES'})),
 )
 """
 Choices made once per list item, each sequence written in the order SQL takes it.

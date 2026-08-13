@@ -452,21 +452,30 @@ CASES: tuple[GrammarCase, ...] = (
         cite='[ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]',
         offers=('ALL', 'DISTINCT', 'SELECT'),
         pending=True,
-        note='ALL and SELECT are offered, DISTINCT is not',
+        refused=(
+            'offering DISTINCT here would make it a phrase in its own right, and SELECT DISTINCT '
+            'would stop completing to DISTINCT ON'
+        ),
     ),
     GrammarCase(
         sql='SELECT * FROM users INTERSECT ⌶',
         cite='[ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]',
         offers=('ALL', 'DISTINCT'),
         pending=True,
-        note='same omission as UNION',
+        refused=(
+            'offering DISTINCT here would make it a phrase in its own right, and SELECT DISTINCT '
+            'would stop completing to DISTINCT ON'
+        ),
     ),
     GrammarCase(
         sql='SELECT * FROM users EXCEPT ⌶',
         cite='[ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]',
         offers=('ALL', 'DISTINCT'),
         pending=True,
-        note='same omission as UNION',
+        refused=(
+            'offering DISTINCT here would make it a phrase in its own right, and SELECT DISTINCT '
+            'would stop completing to DISTINCT ON'
+        ),
     ),
     # --- ordering ---------------------------------------------------------
     GrammarCase(
@@ -518,29 +527,21 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users OFFSET 10 ⌶',
         cite='[ OFFSET start [ ROW | ROWS ] ]',
         offers=('ROW', 'ROWS', 'FETCH'),
-        pending=True,
-        note='FETCH is offered, the noise words are not',
     ),
     GrammarCase(
         sql='SELECT * FROM users FETCH ⌶',
         cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
         offers=('FIRST', 'NEXT'),
-        pending=True,
-        note='claims kinds=[keyword] and offers no keyword: the clause has no followed_by',
     ),
     GrammarCase(
         sql='SELECT * FROM users FETCH FIRST 10 ⌶',
         cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
         offers=('ROW', 'ROWS'),
-        pending=True,
-        note='silent',
     ),
     GrammarCase(
         sql='SELECT * FROM users FETCH FIRST 10 ROWS ⌶',
         cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
         offers=('ONLY', 'WITH TIES'),
-        pending=True,
-        note='silent, and this is the one place WITH TIES can go',
     ),
     # --- the locking clause -----------------------------------------------
     GrammarCase(
