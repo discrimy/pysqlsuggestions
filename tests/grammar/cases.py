@@ -44,6 +44,9 @@ _ROWS_FROM = (
 _JOIN = 'from_item join_type from_item { ON join_condition | USING ( join_column [, ...] ) [ AS join_using_alias ] }'
 """The join production, cited by four cases."""
 
+_ORDER_BY = '[ ORDER BY expression [ ASC | DESC | USING operator ] [ NULLS { FIRST | LAST } ] [, ...] ]'
+"""The ordering production, cited by four cases."""
+
 
 @dataclass(frozen=True)
 class GrammarCase:
@@ -390,5 +393,91 @@ CASES: tuple[GrammarCase, ...] = (
         offers=('PARTITION BY', 'ORDER BY'),
         pending=True,
         note='offers columns; PARTITION BY exists as a clause and is not reachable from here',
+    ),
+    # --- set operations ---------------------------------------------------
+    GrammarCase(
+        sql='SELECT * FROM users UNION ⌶',
+        cite='[ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]',
+        offers=('ALL', 'DISTINCT', 'SELECT'),
+        pending=True,
+        note='ALL and SELECT are offered, DISTINCT is not',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users INTERSECT ⌶',
+        cite='[ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]',
+        offers=('ALL', 'DISTINCT'),
+        pending=True,
+        note='same omission as UNION',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users EXCEPT ⌶',
+        cite='[ { UNION | INTERSECT | EXCEPT } [ ALL | DISTINCT ] select ]',
+        offers=('ALL', 'DISTINCT'),
+        pending=True,
+        note='same omission as UNION',
+    ),
+    # --- ordering ---------------------------------------------------------
+    GrammarCase(
+        sql='SELECT * FROM users ORDER BY ⌶',
+        cite=_ORDER_BY,
+        offers=('users.id',),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users ORDER BY id ⌶',
+        cite=_ORDER_BY,
+        offers=('ASC', 'DESC', 'NULLS FIRST', 'NULLS LAST', 'USING'),
+        pending=True,
+        note='everything but USING; an explicit ordering operator has no entry',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users ORDER BY id USING ⌶',
+        cite=_ORDER_BY,
+        offers=('<', '>'),
+        refuses=('users.id',),
+        pending=True,
+        note='offers columns where an operator belongs',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users ORDER BY id ASC ⌶',
+        cite=_ORDER_BY,
+        offers=('NULLS FIRST', 'NULLS LAST'),
+        refuses=('ASC', 'DESC'),
+        note='EXCLUSIVE in dialects/base.py settles the direction once, which is what this pins',
+    ),
+    # --- the row-count clauses --------------------------------------------
+    GrammarCase(
+        sql='SELECT * FROM users LIMIT ⌶',
+        cite='[ LIMIT { count | ALL } ]',
+        offers=('ALL',),
+        pending=True,
+        note='offers nothing; LIMIT ALL is the spelling that takes a word rather than a number',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users OFFSET 10 ⌶',
+        cite='[ OFFSET start [ ROW | ROWS ] ]',
+        offers=('ROW', 'ROWS', 'FETCH'),
+        pending=True,
+        note='FETCH is offered, the noise words are not',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users FETCH ⌶',
+        cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
+        offers=('FIRST', 'NEXT'),
+        pending=True,
+        note='claims kinds=[keyword] and offers no keyword: the clause has no followed_by',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users FETCH FIRST 10 ⌶',
+        cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
+        offers=('ROW', 'ROWS'),
+        pending=True,
+        note='silent',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users FETCH FIRST 10 ROWS ⌶',
+        cite='[ FETCH { FIRST | NEXT } [ count ] { ROW | ROWS } { ONLY | WITH TIES } ]',
+        offers=('ONLY', 'WITH TIES'),
+        pending=True,
+        note='silent, and this is the one place WITH TIES can go',
     ),
 )
