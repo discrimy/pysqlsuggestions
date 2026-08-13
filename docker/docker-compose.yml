@@ -70,3 +70,56 @@ services:
       interval: 5s
       timeout: 10s
       retries: 40
+
+  # A self-signed PKCS12 for `trino-secure`, made once into a named volume.
+  #
+  # keytool rather than openssl, and the Trino image rather than a new one: it
+  # can write a self-signed certificate straight into a keystore in a single
+  # command, so this needs no tool the fixture did not already pin a version of.
+  # The key never leaves the volume and is regenerated on `down -v`, which is
+  # why there is no certificate committed to this repository.
+  trino-tls-init:
+    image: trinodb/trino:468
+    user: root
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - >
+        test -f /tls/keystore.p12 ||
+        keytool -genkeypair -alias trino -keyalg RSA -keysize 2048 -validity 365
+        -storetype PKCS12 -keystore /tls/keystore.p12 -storepass trinotest
+        -dname CN=localhost -ext SAN=dns:localhost,ip:127.0.0.1
+        && chmod 644 /tls/keystore.p12
+    volumes:
+      - trino-tls:/tls
+
+  # Trino with TLS and password authentication, for the reader's auth tests.
+  #
+  # A second coordinator rather than a flag on the first: PASSWORD authentication
+  # makes Trino refuse plain HTTP, so one server cannot be both the
+  # unauthenticated fixture the catalog tests use and the authenticated one these
+  # need. It federates nothing — `tpch` only — so it waits on no other service.
+  trino-secure:
+    image: trinodb/trino:468
+    mem_limit: 4g
+    ports:
+      - '57443:8443'
+    volumes:
+      - ./trino/secure-catalog:/etc/trino/catalog:ro
+      - ./trino/secure/config.properties:/etc/trino/config.properties:ro
+      - ./trino/secure/password-authenticator.properties:/etc/trino/password-authenticator.properties:ro
+      - ./trino/secure/password.db:/etc/trino/password.db:ro
+      - trino-tls:/etc/trino/tls:ro
+    depends_on:
+      trino-tls-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # Unauthenticated on purpose: /v1/info answers without credentials, so this
+      # reports whether the coordinator is up without also asserting that
+      # authentication works — which is the tests' job, not the fixture's.
+      test: ['CMD', 'curl', '-fsk', 'https://localhost:8443/v1/info']
+      interval: 5s
+      timeout: 10s
+      retries: 40
+
+volumes:
+  trino-tls:

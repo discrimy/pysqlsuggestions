@@ -22,6 +22,15 @@ from pysqlsuggestions.dialects.trino import TRINO
 POSTGRES_DSN = 'postgresql://report:report@localhost:57432/report_service'
 CLICKHOUSE_HOST, CLICKHOUSE_PORT = 'localhost', 57123
 TRINO_HOST, TRINO_PORT = 'localhost', 57080
+TRINO_SECURE_PORT = 57443
+"""
+The `trino-secure` coordinator: TLS, and file-based password authentication.
+
+A second server rather than a flag on the first, because enabling PASSWORD
+authentication makes Trino refuse plain HTTP — so one coordinator cannot be both
+the unauthenticated fixture the catalog tests read from and the authenticated
+one the credential tests need.
+"""
 
 
 def _skip(backend: str, error: Exception) -> None:
