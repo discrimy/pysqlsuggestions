@@ -689,10 +689,20 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     ambiguous = _ambiguous_labels(relations)
     seen: set[tuple[str, ...]] = set()
     names: list[str] = []
+    omitted = 0
     for relation in relations:
         path = _qualifier_for(relation, ambiguous) if qualify else ()
         prefix = '.'.join(quote_if_needed(part, dialect) for part in path)
         for column in _columns_of(relation, reader, seen):
+            if column.availability is Availability.RESTRICTED:
+                # Dropped rather than listed, because this is the only candidate
+                # at this caret the server would accept. Over a partly-restricted
+                # relation `SELECT *` is refused outright — table SELECT implies
+                # every column, so withholding one means there is no table-level
+                # grant — and the expansion turns a statement that errors into
+                # one that runs.
+                omitted += 1
+                continue
             rendered = quote_if_needed(column.text, dialect)
             names.append(f'{prefix}.{rendered}' if prefix else rendered)
     if not names:
@@ -712,8 +722,21 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
             match_text='*',
             literal=True,
             span=request.star,
+            # Deliberately not RESTRICTED: accepting this works. `reason` says
+            # why the list is shorter than the relation, `availability` says
+            # whether accepting succeeds, and here it does — marking it
+            # restricted would sink the one suggestion the server accepts here
+            # underneath the columns it is assembled from.
+            reason=_omission(omitted),
         ),
     ]
+
+
+def _omission(omitted: int) -> str | None:
+    """How many columns the expansion left out, or None when it left out none."""
+    if not omitted:
+        return None
+    return f'{omitted} column{"" if omitted == 1 else "s"} omitted: {_NO_PRIVILEGE}'
 
 
 def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:

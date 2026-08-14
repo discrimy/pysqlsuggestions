@@ -51,3 +51,33 @@ def test_a_catalog_that_says_nothing_changes_nothing() -> None:
     assert [s.text for s in found] == ['id', 'email', 'password']
     assert all(s.availability is Availability.UNKNOWN for s in found)
     assert all(s.reason is None for s in found)
+
+
+def test_the_expansion_omits_what_the_role_cannot_read() -> None:
+    """`SELECT *` over a partly-restricted relation is refused outright, so the expansion is the fix."""
+    sql = 'SELECT * FROM users'
+    found = [s for s in complete(sql, 8, POSTGRES, _catalog()) if s.kind is Kind.EXPANSION]
+    assert [s.text for s in found] == ['id, email']
+    assert found[0].reason == '1 column omitted: no SELECT privilege'
+
+
+def test_the_expansion_stays_available_despite_the_reason() -> None:
+    """It is the one statement at that caret the server accepts; sinking it would bury the answer."""
+    sql = 'SELECT * FROM users'
+    found = [s for s in complete(sql, 8, POSTGRES, _catalog()) if s.kind is Kind.EXPANSION]
+    assert found[0].availability is Availability.AVAILABLE
+
+
+def test_an_unreadable_relation_expands_to_nothing() -> None:
+    """The existing guard covers it: an expansion to nothing would delete the star."""
+    catalog = MemoryCatalog({('public', 'secrets'): [('id', 'bigint')]}, restricted={('public', 'secrets'): None})
+    sql = 'SELECT * FROM secrets'
+    assert not [s for s in complete(sql, 8, POSTGRES, catalog) if s.kind is Kind.EXPANSION]
+
+
+def test_an_expansion_with_nothing_withheld_says_nothing() -> None:
+    """The reason appears only when something was actually dropped."""
+    sql = 'SELECT * FROM users'
+    found = [s for s in complete(sql, 8, POSTGRES, MemoryCatalog(USERS)) if s.kind is Kind.EXPANSION]
+    assert [s.text for s in found] == ['id, email, password']
+    assert found[0].reason is None
