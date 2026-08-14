@@ -89,13 +89,18 @@ def _onwards(name: str) -> tuple[str, ...]:
 
 _AFTER_RELATION = ('AS', *_JOINS, *_onwards('WHERE'))
 
-_QUERY = frozenset({'SELECT'})
+_QUERY = frozenset({'SELECT', 'TABLE'})
 """
-The statement form that has a result set to shape.
+The statement forms that have a result set to shape.
 
 GROUP BY, ORDER BY, LIMIT and the rest belong to a query and to nothing else.
 An UPDATE or a DELETE has no result to group or order, and every one of these
 offered after a finished one wrote SQL the server refuses.
+
+`TABLE t` is `SELECT * FROM t`, so it is one of them — `TABLE t ORDER BY id` and
+`TABLE t LIMIT 1` both run. Naming it here only *permits*: what is offered still
+comes from the clause's own `followed_by` and from clauses declaring `follows`,
+neither of which reaches GROUP BY from TABLE.
 """
 
 _COLUMN_CONSTRAINTS = ('NOT NULL', 'NULL', 'DEFAULT', 'PRIMARY KEY')
@@ -345,6 +350,34 @@ CLAUSES = ClauseModel(
             before_the_item=('IF NOT EXISTS',),
             defines_columns=_COLUMN_CONSTRAINTS,
         ),
+        # `TABLE t` is `SELECT * FROM t`. Modellable only now that CREATE TABLE
+        # exists: `clause_at` prefers the longer name at the same end offset, so
+        # the definition list is governed by that clause and not by this one.
+        # DROP TABLE and ALTER TABLE are protected by the same tiebreak.
+        #
+        # `followed_by` is Trino's own list, taken from the parser: refusing
+        # `TABLE t ONLY` it reported "Expecting: '.', 'EXCEPT', 'FETCH',
+        # 'INTERSECT', 'LIMIT', 'OFFSET', 'ORDER', 'UNION', <EOF>" — which is
+        # `_onwards('UNION')` exactly.
+        #
+        # `ONLY` is not here. Postgres takes `TABLE ONLY t` and Trino does not,
+        # so it is declared in postgres.py.
+        Clause(name='TABLE', suggests=RELATION_REFERENCE, followed_by=_onwards('UNION')),
+        # `TRUNCATE TABLE users` is the ANSI spelling of the clause above, and
+        # until `TABLE` was modelled it needed no entry: nothing matched the
+        # noise word, so `TRUNCATE` governed the whole statement.
+        #
+        # It needs one now. `clause_at` ranks by (end offset, word count), and
+        # one-word `TRUNCATE` ends *earlier* than the `TABLE` after it — so
+        # unlike DROP TABLE and ALTER TABLE, which win the tiebreak on word
+        # count at the same offset, this one simply lost. The caret after the
+        # relation stopped answering CASCADE and RESTRICT and answered nothing,
+        # because a query's continuations are what `TABLE` offers and a TRUNCATE
+        # is not a query.
+        #
+        # Not in `STATEMENT_START`: `TRUNCATE` is already there, and an empty
+        # editor offering both spellings of one statement is noise.
+        Clause(name='TRUNCATE TABLE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
         # No `followed_by`: a call ends the statement, and an empty continuation
         # list is how a clause says so — the same rule that stops RETURNING and
         # FETCH proposing a successor.
@@ -352,7 +385,18 @@ CLAUSES = ClauseModel(
     ),
 )
 
-STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'DROP VIEW', 'TRUNCATE', 'ALTER TABLE', 'CALL', 'CREATE TABLE')
+STATEMENT_START = (
+    *EXPLAINABLE,
+    'DROP TABLE',
+    'DROP VIEW',
+    # Ahead of `TABLE`, and not by accident: `statement_form` reads this tuple
+    # in order, and `TRUNCATE TABLE users` matches both.
+    'TRUNCATE',
+    'ALTER TABLE',
+    'CALL',
+    'CREATE TABLE',
+    'TABLE',
+)
 
 TYPES = (
     'varchar',

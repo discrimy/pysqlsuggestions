@@ -394,19 +394,17 @@ POSTGRES = replace(
             suggests=(),
             followed_by=('NOWAIT', 'SKIP LOCKED'),
         ),
-        # `TABLE t` is `SELECT * FROM t` and is deliberately *not* modelled.
+        # `ONLY` is Postgres's alone. Trino runs `TABLE t` and answers
+        # `TABLE ONLY t` with mismatched input, so the word cannot go in the
+        # baseline — and ClickHouse has no `TABLE` form at all.
         #
-        # It was, and the acceptance suite caught what that costs: a statement
-        # form is found by scanning for the first word that starts one, and
-        # `TABLE` is a word inside `CREATE TABLE`. So `CREATE TABLE t (id ⌶`
-        # began offering `users`, in a definition list where a relation cannot
-        # go — trading the silence an unmodelled form correctly gives for a
-        # wrong answer, in a statement written far more often than `TABLE t`.
-        #
-        # Modelling it needs `CREATE TABLE` modelled first, so that the longer
-        # form wins the match. That is gap 1 in docs/gaps.md and a project of
-        # its own.
-        #
+        # This clause was refused for three releases, and the comment that
+        # refused it named its own fix: a statement form is found by the first
+        # word that starts one, and `TABLE` is a word inside `CREATE TABLE`, so
+        # modelling it alone made `CREATE TABLE t (id ⌶` offer relations. With
+        # the longer clause modelled the tiebreak in `clause_at` settles it,
+        # exactly as predicted.
+        replace(_ansi('TABLE'), before_the_item=('ONLY',)),
         # These three exist to make a caret stop answering, not to make it
         # answer. Until a word is a clause the analyser reads the caret after it
         # as still inside the clause before — so `FROM t TABLESAMPLE ⌶` offered

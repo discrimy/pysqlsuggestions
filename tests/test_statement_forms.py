@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pysqlsuggestions.api import complete, derive_request
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 
 SNAPSHOT = {
@@ -154,6 +155,104 @@ def test_an_unmodelled_form_offers_nothing() -> None:
     assert offered('GRANT ') == []
     assert offered('VACUUM ') == []
     assert offered('REINDEX ') == []
+
+
+def test_the_table_form_offers_relations() -> None:
+    """
+    `TABLE users` is `SELECT * FROM users`, and it was silent.
+
+    Blocked until now on `CREATE TABLE`: a bare `TABLE` clause captured the
+    definition list, because nothing longer was there to win the match.
+    """
+    found = offered('TABLE ')
+    assert 'users' in found
+    assert 'orders' in found
+
+
+def test_the_table_form_takes_the_query_tail() -> None:
+    """
+    A result set to shape, so ORDER BY and LIMIT belong after it.
+
+    Both verified against Postgres, and Trino's parser enumerated the whole set
+    when it refused something else.
+    """
+    found = offered('TABLE users ')
+    assert 'ORDER BY' in found
+    assert 'LIMIT' in found
+    assert 'UNION' in found
+
+
+def test_the_table_form_puts_its_relation_in_scope() -> None:
+    """
+    Without this the tail offers the columns of every relation in the catalog.
+
+    A wrong answer created by modelling the form, which is why
+    `_RELATION_CLAUSES` had to grow with it rather than after it.
+
+    Asserted on the scope rather than on the offered text, because how a column
+    is *written* there — bare or qualified — is a separate decision that
+    `tests/test_ambiguous_relations.py` already pins.
+    """
+    scope = derive_request('TABLE users ORDER BY ', len('TABLE users ORDER BY '), POSTGRES).scope
+    assert scope is not None
+    assert [relation.label for relation in scope.relations] == ['users']
+    assert not any(text.startswith('orders') for text in offered('TABLE users ORDER BY '))
+
+
+def test_clickhouse_has_no_table_form_at_all() -> None:
+    """
+    It answers `TABLE report_executions` with a syntax error at position 1.
+
+    The `CALL` case exactly: inheriting a clause from the baseline would offer a
+    word whose statement the server rejects outright, so both the clause and the
+    statement start have to go.
+    """
+    assert CLICKHOUSE.clauses.get('TABLE') is None
+    assert 'TABLE' not in CLICKHOUSE.statement_start
+    assert CLICKHOUSE.clauses.get('CREATE TABLE') is not None
+
+
+def test_a_second_relation_does_not_follow_the_first() -> None:
+    """`TABLE users orders` parses as nothing."""
+    assert 'orders' not in offered('TABLE users ')
+
+
+def test_postgres_offers_only_before_the_relation() -> None:
+    """
+    `ONLY` is Postgres's: Trino answers `TABLE ONLY t` with mismatched input.
+
+    Behind a prefix, like every `before_the_item` word.
+    """
+    assert offered('TABLE on') == ['ONLY']
+    assert 'users' in offered('TABLE ONLY ')
+
+
+def test_truncate_table_keeps_its_own_continuations() -> None:
+    """
+    The one collision modelling `TABLE` creates, and it is a regression.
+
+    `DROP TABLE` and `ALTER TABLE` are two words, so they beat a bare `TABLE`
+    ending at the same token on `clause_at`'s word-count tiebreak. `TRUNCATE` is
+    one word and ends *earlier*, so it loses on end offset — and
+    `TRUNCATE TABLE users ⌶` stopped answering `CASCADE` and `RESTRICT`
+    altogether, because the clause governing it became `TABLE`, whose
+    continuations all declare themselves part of a query.
+
+    The fix is a two-word `TRUNCATE TABLE` clause, which is the shape
+    `DROP TABLE` has had all along.
+    """
+    found = offered('TRUNCATE TABLE users ')
+    assert 'CASCADE' in found
+    assert 'RESTRICT' in found
+
+
+def test_drop_table_still_beats_the_bare_form() -> None:
+    """
+    Two words to one at the same end offset, which is the tiebreak `clause_at`
+    applies. Without it `DROP TABLE ⌶` would lose its kind narrowing.
+    """
+    assert clause_at_end('DROP TABLE ') == 'DROP TABLE'
+    assert clause_at_end('ALTER TABLE ') == 'ALTER TABLE'
 
 
 def test_an_empty_editor_still_offers_the_statement_starts() -> None:

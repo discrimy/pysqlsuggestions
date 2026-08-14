@@ -16,7 +16,15 @@ from pysqlsuggestions.engine.lex import Token, TokenType
 from pysqlsuggestions.types import Projection, Relation, Scope
 
 _SKIP = (TokenType.WHITESPACE, TokenType.COMMENT)
-_RELATION_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO'})
+_RELATION_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO', 'TABLE'})
+"""
+Clauses whose items are relations, so a scope is built from them.
+
+`TABLE` is here for the same reason as `FROM`, and adding it is not optional:
+without it `TABLE users ORDER BY ⌶` offers the columns of every relation the
+catalog holds, which is a wrong answer that modelling the form would have
+created.
+"""
 _JOIN_QUALIFIERS = frozenset(
     """
     LEFT RIGHT FULL INNER OUTER CROSS NATURAL LATERAL ANTI SEMI ASOF GLOBAL ANY ALL

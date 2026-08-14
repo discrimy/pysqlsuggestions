@@ -128,13 +128,14 @@ CLICKHOUSE = replace(
         placeholders=(Placeholder(opens='{', body='any', closes='}'),),
     ),
     namespace=Namespace(levels=('database', 'table')),
-    # ClickHouse has no CALL. Its parser answers `CALL foo()` with a syntax
-    # error whose message lists every form it does accept, and none of them is
-    # this one. Both the clause and the statement start have to go: the
-    # conformance corpus reports a statement start whose clause is missing, so
-    # doing only one of the two fails the suite.
-    statement_start=tuple(phrase for phrase in ANSI.statement_start if phrase != 'CALL'),
-    clauses=ANSI.clauses.without('CALL').extend(
+    # ClickHouse has neither CALL nor the `TABLE t` query form. Its parser
+    # answers each with a syntax error whose message lists every form it does
+    # accept — `TABLE report_executions` fails at position 1 — and neither of
+    # them is among those. Both the clause and the statement start have to go in
+    # each case: the conformance corpus reports a statement start whose clause
+    # is missing, so doing only one of the two fails the suite.
+    statement_start=tuple(phrase for phrase in ANSI.statement_start if phrase not in {'CALL', 'TABLE'}),
+    clauses=ANSI.clauses.without('CALL', 'TABLE').extend(
         Clause(
             name='PREWHERE',
             follows=frozenset({'FROM', 'SAMPLE', 'FINAL'}),
