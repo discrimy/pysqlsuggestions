@@ -313,6 +313,28 @@ def test_a_constraint_may_follow_a_constraint() -> None:
     assert 'DEFAULT' in offered('CREATE TABLE t (id integer NOT NULL ')
 
 
+def test_a_written_constraint_is_not_offered_again() -> None:
+    """
+    `id integer NOT NULL NOT NULL` parses as nothing.
+
+    These words ride on `Request.continues`, and `engine/local.py` renders that
+    field verbatim — the `_unchosen` filter that keeps a clause from repeating
+    its own continuations lives in `resolve._keywords`, which `continues` skips
+    by design. Every earlier user of the field was a set of *alternatives at one
+    caret*, where a repeat is impossible; a constraint list is the first where
+    several may be written in sequence, so it is the first that needs the
+    filter.
+    """
+    found = offered('CREATE TABLE t (id integer NOT NULL ')
+    assert 'NOT NULL' not in found
+    assert 'NULL' not in found
+
+
+def test_a_constraint_written_in_another_item_still_counts_for_nothing() -> None:
+    """The filter is per item, so a comma brings the whole list back."""
+    assert 'NOT NULL' in offered('CREATE TABLE t (id integer NOT NULL, email text ')
+
+
 def test_a_type_is_not_offered_where_a_constraint_belongs() -> None:
     """`CREATE TABLE t (id integer text` parses as nothing."""
     assert 'text' not in offered('CREATE TABLE t (id integer ')
@@ -361,7 +383,7 @@ def test_a_definition_list_outside_the_clause_is_untouched() -> None:
 
 Run: `uv run pytest tests/test_create_table.py -q`
 
-Expected: the four that assert silence and `test_a_definition_list_outside_the_clause_is_untouched` PASS; the eight asserting a type or a constraint FAIL. Note that `test_the_definition_list_is_not_offered_the_clause_continuations` from Task 1 must still pass at every step after this — it is the guard that the new rule did not reintroduce the leak.
+Expected: **seven FAIL** — every test that asserts a word is offered. **Eight PASS** — the ones asserting silence or an exclusion, which are all vacuously true while the position answers nothing and become load-bearing at Step 5. `test_the_definition_list_is_not_offered_the_clause_continuations` from Task 1 must also still pass at every step after this: it is the guard that the new rule did not reintroduce the `AS` leak.
 
 - [ ] **Step 3: Add the field to `Clause`**
 
@@ -521,8 +543,18 @@ Then, in `derive_request`, directly after the `opens_a_name_list` block and befo
 ```python
     defines = defines_a_column(tokens, lo, hi, caret, clause, dialect.clauses)
     if defines is not None:
-        return _defining_a_column(defines, dialect.clauses.get(clause) if clause else None, clause, scope, prefix, span)
+        return _defining_a_column(
+            defines,
+            dialect.clauses.get(clause) if clause else None,
+            clause,
+            scope,
+            prefix,
+            span,
+            words_in_item(tokens, caret, dialect),
+        )
 ```
+
+`words_in_item` is already imported in this module and already called further down, for the ordinary path.
 
 And add the helper beside `_inside_a_literal`:
 
@@ -534,6 +566,7 @@ def _defining_a_column(
     scope: Scope | None,
     prefix: str,
     span: tuple[int, int],
+    held: frozenset[str],
 ) -> Request:
     """
     What a caret inside a parenthesised column definition admits.
@@ -543,6 +576,14 @@ def _defining_a_column(
     constraints ride on `continues` rather than on the clause's continuations,
     because that is what the field means — words finishing the construct under
     the caret, where a clause's own list would be talking about the statement.
+
+    `held` is what the item already contains, and filtering by it is not
+    optional: `engine/local.py` renders `continues` verbatim, and the
+    `_unchosen` pass that stops a clause repeating its own continuations lives
+    in `resolve._keywords`, which this field deliberately skips. Every earlier
+    user of `continues` was a set of alternatives at a single caret, where a
+    repeat could not arise. A constraint list is the first where several are
+    written in sequence, so it is the first that has to say so.
 
     An early return like `in_placeholder` above, rather than a narrowing of what
     follows: both halves of the answer have to go quiet in the name position,
@@ -558,16 +599,20 @@ def _defining_a_column(
             expecting='type',
         )
     if where == 'constraint' and governing is not None:
-        return Request(
-            kinds=(Kind.KEYWORD,),
-            prefix=prefix,
-            replace_span=span,
-            clause=clause,
-            scope=scope,
-            continues=governing.defines_columns,
-        )
+        unspent = tuple(word for word in governing.defines_columns if not set(word.split()) <= held)
+        if unspent:
+            return Request(
+                kinds=(Kind.KEYWORD,),
+                prefix=prefix,
+                replace_span=span,
+                clause=clause,
+                scope=scope,
+                continues=unspent,
+            )
     return Request(kinds=(), prefix=prefix, replace_span=span, clause=clause, scope=scope)
 ```
+
+The `if unspent` guard matters: `continues` and `Kind.KEYWORD` together mean "these words are the whole answer", so an empty tuple with the kind still set would reach `resolve._keywords` and fall through to a list that talks about the statement.
 
 - [ ] **Step 6: Declare the words, per dialect**
 
@@ -770,11 +815,31 @@ def test_postgres_offers_only_before_the_relation() -> None:
 
 def test_truncate_table_still_offers_relations() -> None:
     """
-    `TRUNCATE` is one word, so the new clause matches the `TABLE` after it and
-    wins on end offset. The answer is the same either way — both positions want
-    a relation — and this pins that it stayed the same.
+    `TRUNCATE` is one word, so a bare `TABLE` clause matches the word after it
+    and wins on end offset. The relation position survives that either way —
+    both clauses want a relation — which is exactly why it is not the test that
+    matters here. See the one below.
     """
     assert 'users' in offered('TRUNCATE TABLE ')
+
+
+def test_truncate_table_keeps_its_own_continuations() -> None:
+    """
+    The one collision modelling `TABLE` creates, and it is a regression.
+
+    `DROP TABLE` and `ALTER TABLE` are two words, so they beat a bare `TABLE`
+    ending at the same token on `clause_at`'s word-count tiebreak. `TRUNCATE` is
+    one word and ends *earlier*, so it loses on end offset — and
+    `TRUNCATE TABLE users ⌶` stopped answering `CASCADE` and `RESTRICT`
+    altogether, because the clause governing it became `TABLE`, whose
+    continuations all declare themselves part of a query.
+
+    The fix is a two-word `TRUNCATE TABLE` clause, which is the shape
+    `DROP TABLE` has had all along.
+    """
+    found = offered('TRUNCATE TABLE users ')
+    assert 'CASCADE' in found
+    assert 'RESTRICT' in found
 
 
 def test_drop_table_still_beats_the_bare_form() -> None:
@@ -790,12 +855,18 @@ def test_drop_table_still_beats_the_bare_form() -> None:
 
 Run: `uv run pytest tests/test_statement_forms.py -q`
 
-Expected: four FAIL — the ones asserting the form answers something
+Expected: **four FAIL** — the ones asserting the form answers something
 (`offers_relations`, `takes_the_query_tail`, `puts_its_relation_in_scope`,
-`postgres_offers_only`). Four PASS: the two guarding `TRUNCATE TABLE` and
-`DROP TABLE`, the ClickHouse case (which is already true and must stay true),
-and `a_second_relation_does_not_follow_the_first`, which passes vacuously while
-the position is silent and becomes load-bearing at Step 4.
+`postgres_offers_only`). **Five PASS**, all of them guards on behaviour that
+exists today and must survive: the two `TRUNCATE TABLE` cases, the two
+`DROP TABLE`/`ALTER TABLE` clause assertions, the ClickHouse case, and
+`a_second_relation_does_not_follow_the_first`, which is vacuous while the
+position is silent.
+
+`test_truncate_table_keeps_its_own_continuations` is the one to watch. It passes
+now, breaks the moment Step 4 lands the `TABLE` clause, and passes again once
+Step 4's second clause is in. If it is still red after Step 4, that is the
+regression it exists to catch and not a flaky ordering.
 
 - [ ] **Step 3: Widen `_QUERY`**
 
@@ -836,6 +907,25 @@ In `src/pysqlsuggestions/dialects/ansi.py`, after the `CREATE TABLE` clause:
         # so it is declared in postgres.py.
         Clause(name='TABLE', suggests=RELATION_REFERENCE, followed_by=_onwards('UNION')),
 ```
+
+Then add the clause that keeps `TRUNCATE` from colliding with it, directly after the existing one-word `TRUNCATE`:
+
+```python
+        # `TRUNCATE TABLE users` is the ANSI spelling of the clause above, and
+        # until `TABLE` was modelled it needed no entry: nothing matched the
+        # noise word, so `TRUNCATE` governed the whole statement.
+        #
+        # It needs one now. `clause_at` ranks by (end offset, word count), and
+        # one-word `TRUNCATE` ends *earlier* than the `TABLE` after it — so
+        # unlike DROP TABLE and ALTER TABLE, which win the tiebreak on word
+        # count at the same offset, this one simply lost. The caret after the
+        # relation stopped answering CASCADE and RESTRICT and answered nothing,
+        # because a query's continuations are what `TABLE` offers and a TRUNCATE
+        # is not a query.
+        Clause(name='TRUNCATE TABLE', suggests=RELATION_REFERENCE, followed_by=('CASCADE', 'RESTRICT')),
+```
+
+Not added to `STATEMENT_START`: `TRUNCATE` is already there, and an empty editor offering both spellings of one statement is noise. `DialectConformance` checks that every statement start names a clause, not the reverse.
 
 and:
 
