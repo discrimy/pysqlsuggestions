@@ -28,6 +28,7 @@ from pysqlsuggestions.ports import (
     SupportsRelationSearch,
 )
 from pysqlsuggestions.types import (
+    Availability,
     Candidate,
     Column,
     ColumnValue,
@@ -950,6 +951,27 @@ def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
     return path[-2], path[-1]
 
 
+_NO_PRIVILEGE = 'no SELECT privilege'
+"""
+Why a restricted candidate would fail, in the words the server uses.
+
+One string because there is one cause. A column withheld individually and a
+column inside a relation with no grant at all are the same refusal to whoever
+typed it, and Postgres reports both as `permission denied`.
+"""
+
+
+def _restriction(state: Availability) -> tuple[Availability, str | None]:
+    """
+    The availability and reason a candidate carries, given what the catalog said.
+
+    UNKNOWN travels through rather than becoming AVAILABLE. A suggestion drawn
+    from a backend that cannot answer does not know it is readable, and saying
+    so costs nothing: every consumer tests `is RESTRICTED`.
+    """
+    return state, _NO_PRIVILEGE if state is Availability.RESTRICTED else None
+
+
 def _column_candidate(
     column: Column,
     label: str | None = None,
@@ -957,6 +979,7 @@ def _column_candidate(
     relation: tuple[str, ...] = (),
     position: int | None = None,
 ) -> Candidate:
+    availability, reason = _restriction(column.availability)
     return Candidate(
         text=column.name,
         kind=Kind.COLUMN,
@@ -965,6 +988,8 @@ def _column_candidate(
         type=column.type,
         qualifier=qualify,
         relation=relation,
+        availability=availability,
+        reason=reason,
     )
 
 
@@ -979,12 +1004,15 @@ def _table_candidate(table: Table, qualify: tuple[str, ...] = (), kind: Kind = K
     perfect match in another schema would lose to a poor match in this one.
     """
     size = f' ~{_as_count(table.rows)} rows' if table.rows is not None else ''
+    availability, reason = _restriction(table.availability)
     return Candidate(
         text=table.name,
         kind=kind,
         detail=f'{table.schema}.{table.name} ({table.kind}){size}',
         qualifier=qualify,
         position=1 if qualify else 0,
+        availability=availability,
+        reason=reason,
     )
 
 
