@@ -20,6 +20,17 @@ from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
 
 POSTGRES_DSN = 'postgresql://report:report@localhost:57432/report_service'
+
+ANALYST_DSN = 'postgresql://analyst:analyst@localhost:57432/report_service'
+"""
+The restricted role from `docker/postgres/03-roles.sql`.
+
+A second connection rather than `SET ROLE` on the first, because
+`has_column_privilege` evaluates against the role the connection currently has:
+a fixture that must remember to reset it is one that will eventually leak one
+test's privileges into another's, and the symptom would be a privilege
+assertion passing for the wrong reason.
+"""
 CLICKHOUSE_HOST, CLICKHOUSE_PORT = 'localhost', 57123
 TRINO_HOST, TRINO_PORT = 'localhost', 57080
 TRINO_SECURE_PORT = 57443
@@ -43,6 +54,18 @@ def postgres_catalog() -> Iterator[DbapiCatalog]:
     psycopg2 = pytest.importorskip('psycopg2')
     try:
         connection = psycopg2.connect(POSTGRES_DSN)
+    except Exception as error:  # noqa: BLE001
+        _skip('postgres', error)
+    yield DbapiCatalog(connection.cursor, POSTGRES, paramstyle=psycopg2.paramstyle)
+    connection.close()
+
+
+@pytest.fixture(scope='session')
+def analyst_catalog() -> Iterator[DbapiCatalog]:
+    """The same database seen by a role that may not read all of it."""
+    psycopg2 = pytest.importorskip('psycopg2')
+    try:
+        connection = psycopg2.connect(ANALYST_DSN)
     except Exception as error:  # noqa: BLE001
         _skip('postgres', error)
     yield DbapiCatalog(connection.cursor, POSTGRES, paramstyle=psycopg2.paramstyle)
