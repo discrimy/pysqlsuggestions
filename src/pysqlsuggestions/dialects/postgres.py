@@ -15,7 +15,7 @@ from pysqlsuggestions.dialects.base import (
     Query,
     Syntax,
 )
-from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Kind, Table
+from pysqlsuggestions.types import Availability, Column, ColumnValue, ForeignKey, Function, Kind, Table
 
 
 def _ansi(name: str) -> Clause:
@@ -49,6 +49,48 @@ _RELKIND = {
     'i': 'index',
 }
 
+_GRANTABLE = frozenset({'r', 'p', 'v', 'm', 'f'})
+"""
+The relkinds where "may the role select this column" is the right question.
+
+A positive list here, unlike `_NOT_QUERYABLE` in `resolve`, because these are
+Postgres relkind letters rather than the storage engine names ClickHouse puts in
+the same field — this list is closed and the server defines it.
+"""
+
+
+def _column_state(flag: object) -> Availability:
+    """
+    What `has_column_privilege` said, or that it said nothing.
+
+    NULL is not false. The query returns NULL where the question does not apply,
+    and reading that as restricted would grey out every column of every index.
+    """
+    if flag is None:
+        return Availability.UNKNOWN
+    return Availability.AVAILABLE if flag else Availability.RESTRICTED
+
+
+def _relation_state(relkind: object, flag: object) -> Availability:
+    """
+    The same, for a relation, guarded by the relkinds the question does not fit.
+
+    `tables` fetches indexes and sequences too, because both are relations in
+    every sense `pg_class` knows. An index has no grantable columns and SELECT
+    on a sequence means something else entirely, so both report UNKNOWN rather
+    than whatever the server makes of the question — the failure mode here is a
+    wrong answer rather than an error, which this codebase treats as the worse
+    of the two.
+
+    Guarded twice, in the SQL and here. The `CASE` keeps the server from
+    evaluating a privilege that means nothing; this keeps the mapper honest for
+    a caller who runs the query themselves.
+    """
+    if str(relkind) not in _GRANTABLE:
+        return Availability.UNKNOWN
+    return _column_state(flag)
+
+
 # `$1 = '' AND visible OR nspname = $1` reads as `($1='' AND visible) OR (nspname=$1)`,
 # so an empty schema means "whatever is on the search path".
 QUERIES = CatalogQueries(
@@ -62,7 +104,15 @@ QUERIES = CatalogQueries(
     ),
     tables=Query(
         sql="""
-            SELECT n.nspname, c.relname, c.relkind, c.reltuples
+            SELECT n.nspname, c.relname, c.relkind, c.reltuples,
+                   -- Whether the role may read anything in it at all. The
+                   -- narrower question — whether `SELECT *` works — needs no
+                   -- column of its own: table-level SELECT implies every column,
+                   -- so losing it means some column was granted individually,
+                   -- which the column rows already say.
+                   CASE WHEN c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                        THEN pg_catalog.has_any_column_privilege(c.oid, 'SELECT')
+                   END
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             -- 'S' is a sequence. It is fetched here rather than by a query of
@@ -82,11 +132,15 @@ QUERIES = CatalogQueries(
             kind=_RELKIND.get(str(row[2]), 'table'),
             # -1 is "never analysed", which is not the same as empty.
             rows=int(row[3]) if row[3] is not None and float(row[3]) >= 0 else None,
+            availability=_relation_state(row[2], row[4]),
         ),
     ),
     columns=Query(
         sql="""
-            SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum
+            SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum,
+                   CASE WHEN c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                        THEN pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT')
+                   END
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -100,6 +154,7 @@ QUERIES = CatalogQueries(
             name=str(row[2]),
             type=str(row[3]),
             position=int(row[4]),
+            availability=_column_state(row[5]),
         ),
     ),
     # pg_proc holds ~3300 entries, most of them type I/O plumbing that cannot be
@@ -184,7 +239,8 @@ QUERIES = CatalogQueries(
     # inherits already pins, and the ordering puts a true prefix first anyway.
     column_search=Query(
         sql="""
-            SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum
+            SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum,
+                   pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT')
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -194,12 +250,15 @@ QUERIES = CatalogQueries(
             ORDER BY position(lower($1) in lower(a.attname)), length(a.attname), n.nspname, c.relname, a.attname
             LIMIT 500
         """,
+        # No relkind guard on the privilege here: this query already filters to
+        # the relkinds where the question applies.
         row=lambda row: Column(
             schema=str(row[0]),
             table=str(row[1]),
             name=str(row[2]),
             type=str(row[3]),
             position=int(row[4]),
+            availability=_column_state(row[5]),
         ),
     ),
     # No `pg_table_is_visible` here: reaching past the search path is the whole
@@ -208,7 +267,10 @@ QUERIES = CatalogQueries(
     # — the truncation happens before ranking sees the rows.
     relation_search=Query(
         sql="""
-            SELECT n.nspname, c.relname, c.relkind, c.reltuples
+            SELECT n.nspname, c.relname, c.relkind, c.reltuples,
+                   CASE WHEN c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                        THEN pg_catalog.has_any_column_privilege(c.oid, 'SELECT')
+                   END
             FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'i')
@@ -223,6 +285,7 @@ QUERIES = CatalogQueries(
             kind=_RELKIND.get(str(row[2]), 'table'),
             # -1 is "never analysed", which is not the same as empty.
             rows=int(row[3]) if row[3] is not None and float(row[3]) >= 0 else None,
+            availability=_relation_state(row[2], row[4]),
         ),
     ),
     foreign_keys=Query(

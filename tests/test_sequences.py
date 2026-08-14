@@ -71,7 +71,7 @@ def test_the_postgres_queries_now_fetch_sequences() -> None:
     assert search is not None
     assert "'S'" in tables.sql
     assert "'S'" in search.sql
-    found = tables.row(('public', 'auth_user_id_seq', 'S', 1))
+    found = tables.row(('public', 'auth_user_id_seq', 'S', 1, None))
     assert isinstance(found, Table)
     assert found.kind == 'sequence'
 

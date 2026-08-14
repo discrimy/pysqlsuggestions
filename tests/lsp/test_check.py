@@ -27,7 +27,7 @@ class FakeCursor:
 
     def fetchall(self) -> list[Any]:
         """`rows` rows shaped as the postgres tables query expects."""
-        return [('public', f't{index}', 'r', 0) for index in range(self.rows)]
+        return [('public', f't{index}', 'r', 0, True) for index in range(self.rows)]
 
 
 class FakeConnection:
