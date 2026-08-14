@@ -10,9 +10,9 @@ fallback so an unknown backend degrades instead of failing.
 ## Status
 
 The whole pipeline works end to end against real servers: lex, analyse, request,
-resolve, rank. Value hints, FK-derived joins, star expansion, bound parameters
-and cross-schema search landed since; still to come are physical layout ranking
-and history ranking, plus per-role availability and the syntax extensions.
+resolve, rank. Value hints, FK-derived joins, star expansion, bound parameters,
+cross-schema search and per-role availability landed since; still to come are
+physical layout ranking and history ranking, plus the syntax extensions.
 
 ## Usage
 
@@ -181,6 +181,62 @@ enough to matter, and a wrong join condition is valid SQL that silently returns
 the wrong rows. No parser catches that, and neither does the person reading the
 result. Observed joins mined from query history would be a real answer here; an
 inferred one is not.
+
+## What the role may not read
+
+A column can be visible as metadata and unreadable as data — `pg_attribute`
+lists every column to every role regardless of column grants. Such a column is
+still offered, but last, and it says why:
+
+```
+SELECT * FROM reports_database d WHERE d.⌶
+
+  id            reports_database.id :: bigint
+  title         reports_database.title :: character varying(200)
+  …
+  password      reports_database.password :: text   no SELECT privilege
+```
+
+Sunk rather than hidden, because a name that vanishes reads as the engine not
+knowing about it. A privilege error names its own cause, and asking for the
+grant is a move the user can make.
+
+Three things follow from it, and the second is the one that matters:
+
+```python
+complete('SELECT * FROM mattermost_mattermostchannel', 8, POSTGRES, catalog)
+# expand *  →  'id, name'   1 column omitted: no SELECT privilege
+```
+
+`SELECT *` over a partly-granted relation is refused by the server outright —
+table-level `SELECT` implies every column, so withholding one means there is no
+table-level grant. The expansion is therefore not a filtered convenience but the
+repair: it turns a statement that errors into one that runs, which is why it
+stays insertable and merely explains itself. Second, no value literal is ever
+drawn from a restricted column, from statistics or from a self-enumerating type.
+Third, a join proposal to a relation with no grant at all sinks and keeps its
+`fk:` annotation, since the constraint is real either way.
+
+**Postgres only, and by the same rule as joins.** `has_column_privilege` is
+evaluated by the server against the connected role, so it costs one column on
+queries that already run. ClickHouse has no equivalent — effective privileges
+through role inheritance would have to be reconstructed by hand — and Trino
+keeps access control outside SQL entirely, in the connector or a file rule set.
+Both report `UNKNOWN`, which renders exactly as an ordinary suggestion. A wrong
+grey is as bad as a wrong promise, and neither is worth guessing at.
+
+The engine reports; the server enforces. An editor that inserts a restricted
+suggestion produces a query that fails exactly as it would have anyway — the
+engine's job is to have said so first. Over LSP that means a `Deprecated` tag
+and the reason in `detail`; the protocol has no disabled state, and this does
+not fake one.
+
+**One hazard worth naming.** `has_column_privilege` evaluates against the
+*current connection's* role. A service account shared across end users reports
+the service account's privileges, so nothing looks restricted and column names
+may be shown to somebody whose own role could not see them. Carry end-user
+identity on the connection, and pass it as `identity=` so it leads the cache key
+— a cache shared across roles leaks one user's readable set into another's.
 
 ## Browser demo
 

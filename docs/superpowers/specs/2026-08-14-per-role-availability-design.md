@@ -1,7 +1,7 @@
 # Per-role availability — design
 
 Date: 2026-08-14
-Status: **proposed**. Nothing built yet.
+Status: **built**. Three departures from this document are marked in place, and `docs/gaps.md` records them.
 
 Implements `plan.md` §7, "Restricted objects", one of the four features
 `README.md` names as still to come. `plan.md` is the product vision through
@@ -120,10 +120,14 @@ and the engine's job is to have said so first.
 
 ```python
 class Availability(Enum):
-    AVAILABLE = auto()    # the role may read it
-    RESTRICTED = auto()   # it exists, the role may not read it
-    UNKNOWN = auto()      # the backend cannot tell us
+    AVAILABLE = 'available'      # the role may read it
+    RESTRICTED = 'restricted'    # it exists, the role may not read it
+    UNKNOWN = 'unknown'          # the backend cannot tell us
 ```
+
+Explicit strings rather than §7's `auto()`, following `Kind` in the same file:
+consumers serialise these straight into an editor payload, where an integer
+would mean nothing.
 
 | record | fields | default |
 | --- | --- | --- |
@@ -244,12 +248,15 @@ the star and leave `SELECT  FROM t`.
 
 ### 6.2 Value hints
 
-`_Reader.common_values` returns `()` when the column is `RESTRICTED`, consulting
-its own already-cached `columns()`.
+`_values` returns `[]` when the compared column is `RESTRICTED`.
 
-The lookup is free: a value position has necessarily fetched that relation's
-columns already, because rendering a literal requires knowing the column's type
-well enough to decide on quotes.
+**Moved during implementation**, from `_Reader.common_values` where this
+document first put it. `_values` already holds the `Column` — it fetched it to
+learn the type — so the check costs no lookup at all, and it covers a path the
+capability wrapper cannot see: `datatypes.literals`, where a boolean's or an
+enum's values come from the type rather than from statistics. Those leak no
+rows, but a literal compared against a column the role cannot reference is a
+statement the server refuses either way, so the position is better silent.
 
 The check lives in the resolver rather than in each adapter, per §7, and on
 Postgres it is defence in depth — `pg_stats` is role-filtered by the server, so
@@ -259,10 +266,23 @@ cannot live in the adapters.
 
 ### 6.3 Join proposals
 
-A proposal whose condition touches a restricted column on either side keeps its
-`note`, gains a `reason`, and sinks. It does not disappear: the join is real,
-the constraint is declared, and the user's next move may well be to ask for the
-grant.
+A proposal to a relation the role may read nothing in keeps its `note`, gains a
+`reason`, and sinks. It does not disappear: the join is real, the constraint is
+declared, and the user's next move may well be to ask for the grant.
+
+**Narrowed during implementation.** This document first said "whose condition
+touches a restricted column on either side", which is column level. At `JOIN ⌶`
+the target's columns have not been fetched and fetching them would be one read
+per proposal — the cost this design refuses everywhere else. The relation-level
+rule is free, because `reader.tables()` already answers the TABLE candidates at
+that same caret. It is also the case that occurs: an FK column is a key column
+and key columns are granted, while the columns withheld individually — a
+password, a phone number — are not the ones constraints are declared on.
+
+`relation_joins` therefore takes `restricted: frozenset[tuple[str, str]]`, which
+`resolve` builds from rows it has in hand. `_Reader` gains a per-request memo so
+that asking for the relation list twice in one completion costs one read even
+when the caller supplied no cache.
 
 ### 6.4 Restricted relations
 
@@ -374,12 +394,17 @@ over `mattermost_mattermostchannel` omitting the ungranted columns; the
 unreadable relation sunk in a `FROM` list; and sequences and indexes reporting
 `UNKNOWN` per §5.
 
-### 10.4 Conformance
+### 10.4 The row mappers
 
-`DialectConformance` asserts that a dialect whose queries omit the privilege
-column produces `UNKNOWN` rather than raising or guessing — the same shape as
-its existing checks on absent capabilities. Third-party dialects that never heard
-of this feature must stay conformant, which they do by construction.
+**Relocated during implementation.** This document assigned the check to
+`DialectConformance`, which cannot host it: that suite runs completion cases
+against a `MemoryCatalog` and never sees a row mapper. It lives in
+`tests/test_dialect_records.py` instead, which already exercises mappers with
+fabricated rows — including the assertion that ClickHouse's and Trino's produce
+`UNKNOWN`, which they do without a line changing.
+
+Third-party dialects that never heard of this feature stay conformant by
+construction, for the same reason.
 
 ## 11. Documentation
 

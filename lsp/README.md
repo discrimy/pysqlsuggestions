@@ -45,6 +45,21 @@ Every item carries a `textEdit` with an explicit range rather than an
 `insertText`, because re-deriving a word boundary is what drops a qualifier —
 `where u.crea` accepting `created_at` must give `where u.created_at`.
 
+**A restricted suggestion is as honest as the protocol allows, and no more.** A
+column the connected role may not read carries `tags: [Deprecated]`, which
+renders as strikethrough, and its reason in `detail` beside whatever else that
+field is carrying. It having sunk to the bottom of the list needs nothing here:
+`sortText` already carries the engine's order and the engine has already put it
+last.
+
+What cannot be done is stop the client inserting it. LSP has no disabled state,
+and the obvious workaround — an empty `textEdit` plus a command — is refused: it
+produces an item that silently does nothing, which reads as a bug in this server
+rather than as a grant the user lacks. A front end that controls its own accept
+handler, as prompt_toolkit and Monaco do, can block insertion outright; this one
+tells the truth and lets the server refuse the query, which it would have done
+regardless.
+
 ## Scope and statements
 
 A `.sql` file holds many statements and the engine builds scope from the whole

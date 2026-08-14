@@ -4,6 +4,45 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## Unreleased
+
+### Positions that now say what the role may not read
+
+`WHERE d.⌶` still offers every column, but one the connected role cannot select
+arrives last rather than among its readable neighbours, carrying `no SELECT
+privilege`. It is offered at all because a name that vanishes reads as the
+engine not knowing about it, where one that arrives annotated says what is true.
+The same holds for a relation with no grant at all in a `FROM` list, and for a
+join proposal to one — which keeps its `fk:` annotation, the constraint being
+real whether or not the role may use it.
+
+Postgres only. ClickHouse has no `has_column_privilege` equivalent and Trino
+keeps access control outside SQL, so both go on answering exactly as before.
+
+### Answers that were wrong and are now right
+
+`SELECT *⌶` over a relation with one column withheld expanded to every column,
+and accepting it wrote a statement the server refuses — table-level `SELECT`
+implies every column, so withholding one means there is no table-level grant.
+The expansion now names the columns that work and says how many it left out.
+
+`WHERE d.password = ⌶` offered value literals for a column the role cannot read.
+It offers nothing there now, from either source: the planner statistics that
+would have leaked actual data, and the self-enumerating types — a boolean, an
+enum — that leak none but whose comparison is refused all the same.
+
+### For callers
+
+`Suggestion` gains `availability` and `reason`. `MemoryCatalog` gains
+`restricted=`, taking a list of columns per relation or `None` for a relation
+with no grant at all. Over LSP a restricted item carries the `Deprecated` tag
+and its reason in `detail`; the protocol has no disabled state and this does not
+fake one, so a client will still insert what it is given.
+
+`identity=` now does something. It has led the documented cache key since 0.1,
+and this is the feature that gives it meaning: a cache shared between roles
+without it serves one user's readable set to another.
+
 ## 0.5.0
 
 ### Wrong answers that are now right

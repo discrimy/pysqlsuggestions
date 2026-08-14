@@ -321,6 +321,22 @@ advertising something the real backends cannot do.
 """
 
 
+POSTGRES_RESTRICTED = {('public', 'passenger'): ['email']}
+"""
+What the demo's connected role may not read.
+
+One column, on the relation where withholding one is most plausible: a
+passenger's contact address is the field a reporting role is told to leave
+alone. It makes three things visible on the page at once — the column arrives
+last carrying `no SELECT privilege`, `SELECT *⌶` over `passenger` expands to the
+other five, and `WHERE p.email = ⌶` offers no literals at all.
+
+Only Postgres. ClickHouse and Trino report UNKNOWN there as they do everywhere,
+and a demo that greyed a ClickHouse column would be advertising a capability
+that backend does not have.
+"""
+
+
 def postgres() -> MemoryCatalog:
     """The flight-booking schema as Postgres would report it."""
     return MemoryCatalog(
@@ -330,6 +346,7 @@ def postgres() -> MemoryCatalog:
         table_rows=POSTGRES_ROWS,
         values=POSTGRES_VALUES,
         foreign_keys=POSTGRES_FOREIGN_KEYS,
+        restricted=POSTGRES_RESTRICTED,
     )
 
 
