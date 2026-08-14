@@ -170,12 +170,21 @@ def install_into(root: Path, target: str, wheels: Path) -> None:
 
     `--python-platform` is omitted for the one target uv cannot name; see
     `runtime.UV_CANNOT_EXPRESS`.
+
+    `--no-cache` is not a precaution, it is a correction. uv's cache is keyed on
+    distribution name and version, and both wheels built from this tree keep the
+    same version between releases — so a rebuild produces different bytes under
+    an identical identity and the cache serves the previous unpack. It did: a
+    VSIX shipped a library three weeks older than the tree that built it, with
+    no symptom but a completion list quietly missing whole clauses. Nothing is
+    lost by disabling it, since every wheel is local and pure already.
     """
     platform_name = runtime.python_platform(target)
     command = [
         'uv',
         'pip',
         'install',
+        '--no-cache',
         '--target',
         str(runtime.site_packages(root, target)),
         '--python-version',
@@ -220,6 +229,44 @@ transitive dependencies are `verify()`'s job, and repeating them here would be a
 second list to keep in step with the first."""
 
 
+SOURCES = (
+    (ROOT / 'src' / 'pysqlsuggestions', 'pysqlsuggestions'),
+    (ROOT / 'lsp' / 'pysqlsuggestions_lsp', 'pysqlsuggestions_lsp'),
+)
+"""The two packages built from this tree, and the names they install under."""
+
+
+def assert_installed_is_this_tree(target: str, staging: Path) -> None:
+    """
+    Every module installed must be byte-identical to the one in this checkout.
+
+    A version number cannot answer this. Both distributions keep theirs between
+    releases, so a rebuilt wheel is a different package under an identical
+    identity — which is how a stale copy reached a VSIX through uv's cache once
+    already. Comparing content is the only check that would have caught it, and
+    it costs a few hundred file reads on a build that spends minutes on
+    compression.
+
+    Structural, so it holds for all nine targets rather than the one that can
+    execute.
+    """
+    packages = runtime.site_packages(staging, target)
+    for source, name in SOURCES:
+        for module in sorted(source.rglob('*.py')):
+            if '__pycache__' in module.parts:
+                continue
+            installed = packages / name / module.relative_to(source)
+            if not installed.exists():
+                message = f'{target}: {installed.relative_to(packages)} was not installed'
+                raise SystemExit(message)
+            if installed.read_bytes() != module.read_bytes():
+                message = (
+                    f'{target}: {installed.relative_to(packages)} is not the file in this tree — '
+                    'a stale build was installed, which is what --no-cache exists to prevent'
+                )
+                raise SystemExit(message)
+
+
 def smoke_test(target: str, staging: Path) -> None:
     """
     Prove the packed runtime holds what it claims, and run it where we can.
@@ -245,6 +292,7 @@ def smoke_test(target: str, staging: Path) -> None:
         if not any(packages.glob(f'{expected}-*.dist-info')):
             message = f'{target}: {expected} is not installed in {packages}'
             raise SystemExit(message)
+    assert_installed_is_this_tree(target, staging)
 
     if target != HOST_TARGET:
         return
