@@ -12,6 +12,7 @@ from pysqlsuggestions.ports import (
     SupportsKeywords,
 )
 from pysqlsuggestions.types import (
+    Availability,
     Candidate,
     Column,
     ColumnValue,
@@ -30,6 +31,7 @@ from pysqlsuggestions.types import (
 __version__ = '0.5.0'
 
 __all__ = [
+    'Availability',
     'Cache',
     'Candidate',
     'Catalog',
