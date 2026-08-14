@@ -309,6 +309,31 @@ CLAUSES = ClauseModel(
         # `DROP COLUMN` and `ALTER COLUMN` are the casualties, and they are the
         # DDL-authoring territory this dialect deliberately stops short of.
         Clause(name='ALTER TABLE', suggests=RELATION_REFERENCE, followed_by=('ADD COLUMN', 'RENAME TO')),
+        # Modelled before `TABLE` and that order is the whole point: `clause_at`
+        # ranks matches by (end offset, word count), so this two-word name beats
+        # the bare form ending at the same token — the same rule that answers
+        # `DELETE FROM ⌶` with DELETE FROM rather than with the FROM inside it.
+        # Without this clause, modelling `TABLE` made `CREATE TABLE t (id ⌶`
+        # offer relations, in a definition list where a relation cannot go.
+        #
+        # `suggests=()` because the relation is being *invented*. Kind.TABLE
+        # would offer every relation in the catalog at the one caret where
+        # naming an existing one is the single thing that cannot work; WINDOW
+        # carries the same empty tuple for the same reason.
+        #
+        # No `followed_by`, and that is measured rather than forgotten. A
+        # clause's continuations reach the caret wherever the clause governs,
+        # and parentheses do not change which clause governs — so
+        # `followed_by=('AS',)` put `AS` *inside* the definition list, where
+        # `CREATE TABLE t (id AS` parses as nothing. What it costs is
+        # `CREATE TABLE t AS SELECT …`: `after_as` reads the caret past AS as an
+        # alias being invented, so offering the word would lead somewhere that
+        # answers nothing. A missing answer, chosen over a wrong one.
+        Clause(
+            name='CREATE TABLE',
+            suggests=(),
+            before_the_item=('IF NOT EXISTS',),
+        ),
         # No `followed_by`: a call ends the statement, and an empty continuation
         # list is how a clause says so — the same rule that stops RETURNING and
         # FETCH proposing a successor.
@@ -316,7 +341,7 @@ CLAUSES = ClauseModel(
     ),
 )
 
-STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'DROP VIEW', 'TRUNCATE', 'ALTER TABLE', 'CALL')
+STATEMENT_START = (*EXPLAINABLE, 'DROP TABLE', 'DROP VIEW', 'TRUNCATE', 'ALTER TABLE', 'CALL', 'CREATE TABLE')
 
 TYPES = (
     'varchar',
