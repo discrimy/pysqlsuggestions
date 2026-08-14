@@ -81,3 +81,36 @@ def test_an_expansion_with_nothing_withheld_says_nothing() -> None:
     found = [s for s in complete(sql, 8, POSTGRES, MemoryCatalog(USERS)) if s.kind is Kind.EXPANSION]
     assert [s.text for s in found] == ['id, email, password']
     assert found[0].reason is None
+
+
+def test_no_literal_is_drawn_from_a_column_the_role_cannot_read() -> None:
+    """The one knock-on where the old behaviour leaked data rather than wasting a keystroke."""
+    catalog = MemoryCatalog(
+        {('public', 'users'): [('id', 'bigint'), ('password', 'text')]},
+        restricted={('public', 'users'): ['password']},
+        values={('public', 'users', 'password'): ['hunter2', 'letmein']},
+    )
+    sql = 'SELECT * FROM users u WHERE u.password = '
+    assert not [s for s in complete(sql, len(sql), POSTGRES, catalog) if s.kind is Kind.VALUE]
+
+
+def test_a_self_enumerating_type_is_refused_too() -> None:
+    """A boolean's values come from the type rather than the rows — but the comparison still fails."""
+    catalog = MemoryCatalog(
+        {('public', 'users'): [('id', 'bigint'), ('is_admin', 'boolean')]},
+        restricted={('public', 'users'): ['is_admin']},
+    )
+    sql = 'SELECT * FROM users u WHERE u.is_admin = '
+    assert not [s for s in complete(sql, len(sql), POSTGRES, catalog) if s.kind is Kind.VALUE]
+
+
+def test_an_unrestricted_column_still_offers_its_values() -> None:
+    """The rule must not cost the feature it guards."""
+    catalog = MemoryCatalog(
+        {('public', 'users'): [('state', 'text')]},
+        restricted={('public', 'users'): ['nothing_by_this_name']},
+        values={('public', 'users', 'state'): ['active']},
+    )
+    sql = 'SELECT * FROM users u WHERE u.state = '
+    found = [s.text for s in complete(sql, len(sql), POSTGRES, catalog) if s.kind is Kind.VALUE]
+    assert found == ["'active'"]

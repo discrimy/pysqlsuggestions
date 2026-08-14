@@ -818,6 +818,19 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
         column = next((c for c in reader.columns(schema, table) if c.name == path[-1]), None)
         if column is None:
             continue
+        if column.availability is Availability.RESTRICTED:
+            # The check sits here rather than in `_Reader.common_values` for two
+            # reasons. The Column is already in hand, so it costs no lookup —
+            # and this also covers `datatypes.literals`, whose values come from
+            # the type rather than from statistics. Those leak nothing, but a
+            # literal compared against a column the role cannot reference is a
+            # statement the server refuses either way.
+            #
+            # In the resolver rather than in each adapter, because Postgres is
+            # the only backend whose statistics the server already filters by
+            # role: it is every *other* adapter that needs this rule, which is
+            # exactly why it cannot live in them.
+            return []
         # The type first: where it enumerates itself the answer is exhaustive,
         # and statistics could only narrow it to the frequent ones.
         listed = datatypes.literals(column.type)
