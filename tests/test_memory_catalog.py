@@ -14,7 +14,7 @@ from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
-from pysqlsuggestions.types import ForeignKey
+from pysqlsuggestions.types import Availability, ForeignKey
 from tests.corpus.cases import split_caret
 
 SNAPSHOT = {
@@ -156,3 +156,31 @@ def test_search_relations_orders_before_truncating() -> None:
     snapshot = {('s', f'orders_variant_{n}'): [('id', 'bigint')] for n in range(20)}
     snapshot[('s', 'orders')] = [('id', 'bigint')]
     assert MemoryCatalog(snapshot).search_relations('orders', 1)[0].name == 'orders'
+
+
+def test_restricted_columns_come_back_restricted() -> None:
+    """The fixture says what a privilege query would; everything else in a named relation is AVAILABLE."""
+    catalog = MemoryCatalog(
+        {('public', 'users'): [('id', 'bigint'), ('password', 'text')]},
+        restricted={('public', 'users'): ['password']},
+    )
+    found = {column.name: column.availability for column in catalog.columns('public', 'users')}
+    assert found == {'id': Availability.AVAILABLE, 'password': Availability.RESTRICTED}
+
+
+def test_a_wholly_unreadable_relation_restricts_itself_and_its_columns() -> None:
+    """None means no grant at all, which is what has_any_column_privilege reports as false."""
+    catalog = MemoryCatalog(
+        {('public', 'users'): [('id', 'bigint')], ('public', 'secrets'): [('id', 'bigint'), ('body', 'text')]},
+        restricted={('public', 'secrets'): None},
+    )
+    tables = {table.name: table.availability for table in catalog.tables()}
+    assert tables == {'users': Availability.UNKNOWN, 'secrets': Availability.RESTRICTED}
+    assert all(column.availability is Availability.RESTRICTED for column in catalog.columns('public', 'secrets'))
+
+
+def test_a_snapshot_that_says_nothing_still_says_unknown() -> None:
+    """No `restricted` argument must leave every existing fixture exactly as it was."""
+    catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint')]})
+    assert catalog.columns('public', 'users')[0].availability is Availability.UNKNOWN
+    assert catalog.tables()[0].availability is Availability.UNKNOWN
