@@ -10,6 +10,8 @@ position fell through.
 
 from __future__ import annotations
 
+import pytest
+
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
@@ -131,3 +133,35 @@ def test_clickhouse_keeps_the_conservative_body() -> None:
     found = [s.text for s in complete(sql, len(sql), CLICKHOUSE, MemoryCatalog(SNAPSHOT))]
     assert 'SELECT' in found
     assert 'INSERT INTO' not in found
+
+
+@pytest.mark.parametrize(
+    'statement',
+    [
+        'SELECT ',
+        'SELECT id, ',
+        'SELECT * FROM ',
+        'SELECT * FROM auth_user ',
+        'SELECT * FROM auth_user WHERE ',
+        'SELECT * FROM auth_user WHERE id = ',
+        'SELECT * FROM auth_user GROUP BY ',
+        'SELECT * FROM auth_user ORDER BY ',
+        'SELECT * FROM auth_user u WHERE u.',
+    ],
+)
+def test_a_cte_body_answers_as_the_statement_it_is(statement: str) -> None:
+    """
+    Wrapping a statement in `WITH a AS (...)` changes its scope, never its positions.
+
+    An invariant rather than a list of cases, and it earns that by having been
+    broken: `opens_a_name_list` asked what introduced the paren the caret sits
+    in, which at `WITH a AS (SELECT * FROM ⌶` is the CTE's own `AS` — so the
+    whole body went quiet. The paren the caret sits in only means anything
+    relative to the clause governing the caret, and there that clause is FROM,
+    inside a paren belonging to WITH.
+
+    Sampling instances would have caught that too; stating the rule says why it
+    was wrong. The alias position is included because the CTE name occupies a
+    name and the generator could reasonably have differed there — it does not.
+    """
+    assert offered(f'WITH a AS ({statement}') == offered(statement)

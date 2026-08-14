@@ -6,6 +6,112 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Wrong answers that are now right
+
+`SELECT * FROM users FOR ⌶` offered `users`, and accepting wrote
+`SELECT * FROM users FOR users`. `FOR` was not a clause, so the caret after it
+was still read as inside `FROM`. The four locking forms are clauses now, and
+that caret offers `UPDATE`, `NO KEY UPDATE`, `SHARE` and `KEY SHARE`.
+
+`WINDOW ⌶` offered a column where a window name is being defined. It suggests
+nothing now, and `WINDOW w AS (⌶` offers `PARTITION BY` and `ORDER BY`.
+
+`FROM t TABLESAMPLE ⌶` offered `JOIN` and `WHERE`, `TABLESAMPLE … REPEATABLE (⌶`
+offered relations, `WITH … CYCLE ⌶` offered `SELECT` and `INSERT INTO`, and
+`FROM LATERAL (⌶` offered relations where a subquery belongs. All four are quiet
+or correct now, three of them because the word became a clause at all.
+
+A parenthesis that opens a list of names being defined offered relations or the
+CTE body words. `WITH x (⌶` proposed `SELECT` and `VALUES` inside a column list,
+`FROM t AS u (⌶` and `FROM f(1) AS t (⌶` proposed table names where a column is
+being named, and `FROM ROWS FROM(⌶` read the construct as an ordinary `FROM`.
+
+The first four are quiet now. They are told apart from the bodies and calls that
+must go on answering — a CTE body, a function's arguments, `INSERT`'s column
+list, `IN`'s values — by the word that introduced the paren, read from the
+dialect's own `aliases_with` rather than matched against `AS`. `ROWS FROM(⌶`
+offers a function, which is what the grammar puts there.
+
+### Positions that had no answer
+
+The `FETCH { FIRST | NEXT } … { ONLY | WITH TIES }` tail, at all four of its
+carets. `OFFSET n ⌶` takes `ROW` and `ROWS`. `ORDER BY id ⌶` offers `USING`.
+`RIGHT JOIN` and `FULL JOIN` join the join list, everywhere a join is offered.
+`FROM t ⌶` offers `TABLESAMPLE`, and `WITH … SEARCH ⌶` offers `BREADTH` and
+`DEPTH`.
+
+Behind a prefix, where the engine puts words that would otherwise crowd out a
+column: `SELECT al⌶` → `ALL`; `GROUP BY rol⌶` → `ROLLUP`, with `CUBE`,
+`GROUPING SETS`, `ALL` and `DISTINCT`; `LIMIT al⌶` → `ALL`.
+
+### A bug that had hidden all of those
+
+`before_the_item` — the mechanism that puts a word behind a prefix — did nothing
+for any clause that was not the first in its statement. `at_the_clause_start`
+compared the whole run of words before the caret to the clause name, and that
+run does not stop at a clause boundary, so `GROUP BY rol` compared
+`('USERS', 'GROUP', 'BY')` and failed. `DISTINCT` worked, and only because
+`SELECT` comes first, which is why nothing had noticed.
+
+A dialect that declared `before_the_item` on any other clause was silently
+getting nothing.
+
+### Four things tried and withdrawn
+
+Each is a position the grammar names, reachable, and refused because reaching it
+cost more elsewhere. All four keep a case in `tests/grammar/` recording the
+reason.
+
+- **`UNION DISTINCT`.** `_half_written_clauses` treats every `followed_by` entry
+  as a phrase and skips a head that is already one, so naming `DISTINCT` there
+  made `SELECT DISTINCT ⌶` stop offering `ON`. `DISTINCT ON` is a feature people
+  write; `UNION DISTINCT` is a default spelled out.
+- **`TABLE t`.** A statement form is found by the first word that starts one,
+  and `TABLE` is a word inside `CREATE TABLE` — so modelling it made
+  `CREATE TABLE t (id ⌶` offer relations in a column definition list. It waits
+  on `CREATE TABLE`.
+- **`USING (…) AS join_using_alias`.** Both spellings are dropped by the
+  alias-spending machinery before the caret renders.
+- **`WITH ORDINALITY`.** It applies to a function item, and `followed_by` is per
+  clause rather than per item kind, so offering it after `generate_series(…) ⌶`
+  would also offer it after `FROM users ⌶`, where the server refuses it.
+
+### Nothing changes at a caret
+
+A conformance suite for the official PostgreSQL `SELECT` grammar, in
+`tests/grammar/`. The synopsis is stored verbatim and every case cites the line
+it comes from, so the suite can be checked against the document rather than
+against memory of it; a test asserts that no line goes uncited.
+
+Fifty-seven of sixty-nine positions are answered, and none of the twelve it still
+records is a wrong answer — every one of them is a caret that stays silent. They
+are listed in that file with a reason each: four withdrawn deliberately and
+described above, three waiting on `CREATE TABLE` so the longer form wins the
+match, and five needing a capability that does not exist — a `Kind` meaning "a
+relation this statement already has", an operator outside a predicate clause,
+`MATERIALIZED`, and the item-openers `resolve.py` filters out on purpose.
+
+The conformance suite runs on more than Postgres. Thirty-eight of its cases
+describe behaviour ClickHouse and Trino share, and a `dialects` field on each
+case says so — the `FETCH` tail, `OFFSET`'s noise words, `RIGHT` and `FULL
+JOIN`, `WINDOW`'s definition body, and the rule that a parenthesis naming
+columns answers nothing.
+
+All five of those were added to the shared baseline in this release and reached
+those two backends with nothing asserting them there. The marking is measured
+rather than assumed: every case naming a dialect was run against it first.
+
+Three cases name Trino and not ClickHouse, which declares no `TABLESAMPLE`, and
+eighteen name Postgres alone because the productions are Postgres's — `LATERAL`,
+`ROWS FROM`, the `FOR UPDATE` family, the grouping words, `DISTINCT ON`,
+`LIMIT ALL`, `SEARCH` and `CYCLE`, `ORDER BY … USING`.
+
+The test summary also stopped lying about the ported report_service suite. That
+line counted passes under `tests/reference/`, which is not a path here, against
+*every* xfail in the run — so it read `0/37 passing` the moment another suite
+had pending cases. Both halves are scoped to `tests/queries/` now, and it reads
+`158/158 passing, 0 known gaps`.
+
 ### The extension carries its own Python
 
 There is no interpreter to install and no setting pointing at one. Each build

@@ -5,7 +5,15 @@ from __future__ import annotations
 import pytest
 
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.engine.analyse import depth_at, in_literal, qualifier_and_prefix, statement_at
+from pysqlsuggestions.engine.analyse import (
+    at_the_clause_start,
+    clause_at,
+    depth_at,
+    in_literal,
+    opens_a_name_list,
+    qualifier_and_prefix,
+    statement_at,
+)
 from pysqlsuggestions.engine.lex import lex
 from tests.corpus.cases import split_caret
 
@@ -131,3 +139,105 @@ def test_a_doubled_quote_is_unescaped_in_the_prefix() -> None:
 def test_an_unfinished_quoted_name_still_ends_at_the_caret() -> None:
     """With no closing quote there is nothing to strand, and the text right of the caret is not ours."""
     assert at('SELECT * FROM "auth_u⌶') == ((), 'auth_u', (14, 21))
+
+
+def _at_start(marked: str, clause: str) -> bool:
+    """Run at_the_clause_start on ⌶-marked SQL, for the postgres dialect."""
+    sql, caret = split_caret(marked)
+    tokens = lex(sql, POSTGRES.syntax)
+    return at_the_clause_start(tokens, caret, clause)
+
+
+def test_a_clause_that_does_not_begin_the_statement_still_has_a_start() -> None:
+    """
+    `_words_before` walks back through consecutive identifiers without stopping.
+
+    So the run before `GROUP BY rol` was ('USERS', 'GROUP', 'BY'), which equals
+    no clause name, and `before_the_item` was dead for every clause but the
+    leading one. DISTINCT worked only because SELECT comes first.
+    """
+    assert _at_start('SELECT * FROM users GROUP BY rol⌶', 'GROUP BY')
+    assert _at_start('SELECT * FROM users LIMIT al⌶', 'LIMIT')
+
+
+def test_a_written_item_still_ends_the_clause_start() -> None:
+    """The guard the equality check was providing, which the suffix check must keep."""
+    assert not _at_start('SELECT id, dis⌶', 'SELECT')
+    assert not _at_start('SELECT * FROM users GROUP BY id, rol⌶', 'GROUP BY')
+
+
+def test_the_leading_clause_is_unchanged() -> None:
+    """`SELECT dis` was the one case that worked, and it must go on working."""
+    assert _at_start('SELECT dis⌶', 'SELECT')
+    assert not _at_start('SELECT * FROM users ⌶', 'FROM')
+
+
+def _name_list(marked: str) -> bool:
+    """Run opens_a_name_list on ⌶-marked SQL, for the postgres dialect."""
+    sql, caret = split_caret(marked)
+    tokens = lex(sql, POSTGRES.syntax)
+    lo, hi = statement_at(tokens, caret)
+    clause = clause_at(tokens, lo, hi, caret, POSTGRES.clauses)
+    return opens_a_name_list(tokens, caret, clause, POSTGRES.clauses)
+
+
+@pytest.mark.parametrize(
+    'marked',
+    [
+        'WITH x (⌶',
+        'SELECT * FROM users AS u (⌶',
+        'SELECT * FROM generate_series(1, 2) AS t (⌶',
+        'SELECT * FROM generate_series(1, 2) AS (⌶',
+    ],
+)
+def test_a_paren_that_opens_a_list_of_names(marked: str) -> None:
+    """
+    Four shapes where the author is inventing names and the catalog has nothing to say.
+
+    Every one of them offered relations or the CTE body words before this
+    existed, which is SQL the server refuses rather than a suggestion missing.
+    """
+    assert _name_list(marked)
+
+
+@pytest.mark.parametrize(
+    'marked',
+    [
+        # A group the clause itself declares — the alias word introduces it.
+        'WITH x AS (⌶',
+        'SELECT * FROM users WINDOW w AS (⌶',
+        # Calls. `FROM f(` has an identifier left of the paren too, which is why
+        # the rule is keyed on the clause and not on that shape alone.
+        'SELECT * FROM generate_series(⌶',
+        'SELECT count(⌶',
+        'SELECT * FROM users TABLESAMPLE BERNOULLI (⌶',
+        # Positions that answer well today and a broader rule would silence.
+        'INSERT INTO users (⌶',
+        'SELECT * FROM users u JOIN orders o USING (⌶',
+        'SELECT * FROM users WHERE id IN (⌶',
+        'SELECT * FROM users GROUP BY ROLLUP (⌶',
+        'SELECT DISTINCT ON (⌶',
+        # A clause written *inside* the group. `_group_start` returns the CTE
+        # body for all of these, so without the check that the governing clause
+        # lies outside the paren, the introducing `AS` silenced whole bodies.
+        'WITH a AS (SELECT * FROM ⌶',
+        'WITH a AS (SELECT ⌶',
+        'WITH a AS (SELECT id FROM t WHERE ⌶',
+        'SELECT * FROM users AS u (a, b) ⌶',
+        # Ordinary grouping and subqueries.
+        'SELECT * FROM (⌶',
+        'SELECT * FROM users WHERE (⌶',
+        'SELECT * FROM users GROUP BY (⌶',
+        'SELECT (⌶',
+        'SELECT * FROM users WHERE id = (⌶',
+    ],
+)
+def test_every_other_paren_still_answers(marked: str) -> None:
+    """
+    The fifteen negatives, which carry more weight than the four positives.
+
+    Four of these answer usefully today — INSERT's column list, a function's
+    arguments, USING's join columns, IN's values — so a rule wide enough to
+    catch the positives by shape alone would cost more than it gives.
+    """
+    assert not _name_list(marked)

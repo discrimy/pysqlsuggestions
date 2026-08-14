@@ -93,6 +93,22 @@ def test_extending_did_not_disturb_ansi() -> None:
         'ALTER SEQUENCE',
         'DROP MATERIALIZED VIEW',
         'DROP INDEX',
+        # Row locking. Four two-word names rather than one `FOR`, because a bare
+        # head that is already a phrase is skipped by `_half_written_clauses`.
+        'FOR UPDATE',
+        'FOR NO KEY UPDATE',
+        'FOR SHARE',
+        'FOR KEY SHARE',
+        'OF',
+        # Declared to make a caret stop answering rather than to make it answer:
+        # until each was a clause, the position after it stayed governed by the
+        # clause before and offered relations or the CTE body words.
+        'TABLESAMPLE',
+        'SEARCH',
+        'CYCLE',
+        # A multi-function FROM item. Modelled rather than silenced, because the
+        # grammar puts a function call inside it and a catalog has those.
+        'ROWS FROM',
     }
     assert {clause.name for clause in ANSI.clauses.clauses} == base
 
@@ -109,3 +125,47 @@ def test_settings_suggests_keywords_only() -> None:
     settings = CLICKHOUSE.clauses.get('SETTINGS')
     assert settings is not None
     assert settings.suggests == (Kind.KEYWORD,)
+
+
+@pytest.mark.parametrize('dialect', [ANSI, POSTGRES, CLICKHOUSE, TRINO])
+def test_the_fetch_tail_reaches_every_dialect(dialect: Dialect) -> None:
+    """
+    Promoted to ANSI, so ClickHouse and Trino inherit it and no grammar case covers them.
+
+    All three backends accept `SELECT 1 ORDER BY 1 FETCH FIRST 1 ROWS ONLY`,
+    verified against the containers rather than argued from the standard.
+    ClickHouse refuses the tail without an ORDER BY — a constraint on the shape
+    of the statement, not on the vocabulary this offers.
+    """
+    fetch = dialect.clauses.get('FETCH')
+    assert fetch is not None
+    assert {'FIRST', 'NEXT', 'ROW', 'ROWS', 'ONLY', 'WITH TIES'} <= set(fetch.followed_by)
+
+
+@pytest.mark.parametrize('name', ['UNION', 'INTERSECT', 'EXCEPT'])
+def test_a_set_operator_does_not_claim_the_word_DISTINCT(name: str) -> None:
+    """
+    All three backends take `UNION DISTINCT`, and offering it costs more than it gives.
+
+    `_half_written_clauses` treats every `followed_by` entry as a phrase and
+    skips a head that is already one, so naming DISTINCT here makes
+    ('DISTINCT',) a phrase and `SELECT DISTINCT ⌶` stops completing to
+    `DISTINCT ON`. This test is the guard on that trade, not on the vocabulary.
+    """
+    clause = ANSI.clauses.get(name)
+    assert clause is not None
+    assert 'DISTINCT' not in clause.followed_by
+
+
+@pytest.mark.parametrize('name', ['LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'FULL JOIN', 'CROSS JOIN'])
+def test_every_join_spelling_is_offered_after_a_relation(name: str) -> None:
+    """
+    Promoted to ANSI, so the two dialects the grammar suite does not cover inherit them.
+
+    Asserted through FROM's continuations rather than through `clauses.get`,
+    because none of these is a clause of its own — `clause_at` matches `JOIN`
+    and the modifier rides along, which is why widening the list was the whole
+    change.
+    """
+    for dialect in (ANSI, POSTGRES, CLICKHOUSE, TRINO):
+        assert name in dialect.clauses.continuations('FROM'), f'{dialect.name} does not offer {name}'
