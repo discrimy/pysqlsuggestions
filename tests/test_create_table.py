@@ -1,9 +1,10 @@
 """
 The parenthesised definition list, and the clause that opens it.
 
-`CREATE TABLE t (id ⌶` had nothing to say, which is gap 1 in `docs/gaps.md`.
-Every caret here was silent before this suite, so nothing in it can regress from
-a right answer to a wrong one — only from silence to an answer.
+`CREATE TABLE t (id ⌶` had nothing to say — gap 1 in `docs/gaps.md` until this
+suite existed, and recorded there among the closed entries now. Every caret here
+was silent beforehand, so nothing in it can regress from a right answer to a
+wrong one — only from silence to an answer.
 """
 
 from __future__ import annotations

@@ -18,26 +18,7 @@ restates the other.
 
 ---
 
-## 1. CREATE TABLE
-
-`CREATE TABLE t (id ⌶` has nothing to say. `DROP TABLE`, `TRUNCATE`,
-`ALTER TABLE` and `EXPLAIN` are modelled now, and every other unrecognised form
-answers with nothing rather than with the words a statement may begin with.
-DBeaver added semantic analysis for `CREATE`, `ALTER` and `DROP` in 24.2.
-
-What is missing is a clause model for a parenthesised definition list: where a
-type belongs rather than a name, and the words that may follow one. The
-candidates already exist — `dialect.types` ships them for cast positions — so
-this is the clause model and nothing else.
-
-Worth being deliberate about how far this goes. DDL completion shades into DDL
-authoring, and a completion engine that knows `ALTER TABLE … ADD CONSTRAINT`
-well enough to be useful is a different size of thing than one that knows
-`SELECT`. `ALTER TABLE` stops at `ADD COLUMN` and `RENAME TO` here for exactly
-that reason — and because a bare `DROP` among its continuations would make
-`DROP ⌶` stop answering `TABLE`, the way `ON ⌶` does not answer `CONFLICT`.
-
-## 2. History ranking
+## 1. History ranking
 
 Named in the v0.1 design as out of scope and still the honest answer to the
 problem `engine/joins.py` refuses to solve by inference. A join mined from
@@ -60,6 +41,29 @@ first in its key, and for the same reason.
 
 Kept rather than deleted, because a list whose entries only ever disappear tells
 a later reader nothing about what was decided.
+
+- **CREATE TABLE.** `CREATE TABLE t (id ⌶` offers types, then the constraints
+  that may follow one, and `TABLE t` is a statement form at last.
+
+  This entry called it "the clause model and nothing else". It was not: a
+  definition list has no opening word, so `opens_a_group` could not carry it and
+  the alternation of name-then-type needed a position rule in `engine/`. What
+  the entry did get right is that the candidates already existed —
+  `dialect.types` answers the type position with no new plumbing at all.
+
+  It also predicted why `TABLE` was blocked and what would unblock it, and both
+  held: `clause_at` ranks by (end offset, word count), so modelling
+  `CREATE TABLE` first is what stops the bare form capturing the definition
+  list. `DROP TABLE` and `ALTER TABLE` were already relying on that same
+  tiebreak — but `TRUNCATE` was not, because one word ends *earlier* than the
+  `TABLE` after it rather than tying with it, so `TRUNCATE TABLE users ⌶` lost
+  its `CASCADE` and `RESTRICT` until it got a two-word clause of its own.
+
+  Which words each backend takes was measured, not read off the standard.
+  ClickHouse rejects `TABLE t` outright and Trino rejects `ONLY`; of the column
+  constraints only `NOT NULL` is common to all three, and Trino takes nothing
+  else. The advice about being deliberate stands, and is why `CREATE VIEW`,
+  `CREATE INDEX` and `CREATE TABLE … AS SELECT` are still not here.
 
 - **Relation kinds finer than one notch.** `DROP VIEW ⌶`, `DROP INDEX ⌶` and
   `DROP MATERIALIZED VIEW ⌶` offer what they mean, and `DROP TABLE ⌶` stopped
@@ -174,7 +178,7 @@ not mistake them for oversights:
   and Combined next to Semantic because it could not retire the first. That is
   a migration artefact, not a feature.
 - **Join conditions inferred from column names.** Argued at length in
-  `engine/joins.py` and `ports.py`; the answer is gap 2, not a heuristic.
+  `engine/joins.py` and `ports.py`; the answer is gap 1, not a heuristic.
 - **AI anything.** Query execution, formatting, linting and full validation
   remain non-goals, and generating SQL from prose is further outside them than
   any of those.

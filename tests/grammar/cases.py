@@ -148,10 +148,14 @@ here going red means a dialect lost behaviour no other test covers.
 
 _POSTGRES_AND_TRINO = ('postgres', 'trino')
 """
-Trino declares `TABLESAMPLE` and ClickHouse does not, which is the whole of it.
+Two things ClickHouse does not have, and the cases that divide on them.
 
-Three cases divide here, and they are the reason `dialects` is a tuple rather
-than a boolean: `shared` would have had to mean "all of them" and these are not.
+Trino declares `TABLESAMPLE` and ClickHouse does not — three cases. And
+ClickHouse answers `TABLE users` with a syntax error at position 1, where
+Postgres and Trino both run it — one more.
+
+They are the reason `dialects` is a tuple rather than a boolean: `shared` would
+have had to mean "all of them", and these are not.
 """
 
 CASES: tuple[GrammarCase, ...] = (
@@ -637,33 +641,23 @@ CASES: tuple[GrammarCase, ...] = (
         sql='TABLE ⌶',
         cite='TABLE [ ONLY ] table_name [ * ]',
         offers=('users',),
-        pending=True,
-        refused=(
-            'a statement form is found by the first word that starts one, and TABLE is a word inside '
-            'CREATE TABLE — modelling it made `CREATE TABLE t (id ⌶` offer relations, so it waits on '
-            'CREATE TABLE being modelled first'
-        ),
+        dialects=_POSTGRES_AND_TRINO,
+        note='waited on CREATE TABLE being modelled, so the longer clause name wins the match',
     ),
     GrammarCase(
         sql='TABLE on⌶',
         cite='TABLE [ ONLY ] table_name [ * ]',
         offers=('ONLY',),
-        pending=True,
-        refused=(
-            'a statement form is found by the first word that starts one, and TABLE is a word inside '
-            'CREATE TABLE — modelling it made `CREATE TABLE t (id ⌶` offer relations, so it waits on '
-            'CREATE TABLE being modelled first'
-        ),
+        note="ONLY is Postgres's: Trino answers `TABLE ONLY t` with mismatched input",
     ),
     GrammarCase(
         sql='TABLE ONLY ⌶',
         cite='TABLE [ ONLY ] table_name [ * ]',
         offers=('users',),
-        pending=True,
-        refused=(
-            'a statement form is found by the first word that starts one, and TABLE is a word inside '
-            'CREATE TABLE — modelling it made `CREATE TABLE t (id ⌶` offer relations, so it waits on '
-            'CREATE TABLE being modelled first'
+        note=(
+            'passes on Trino too, and is deliberately not marked for it: ONLY is skipped there as an '
+            'unrecognised token and TABLE carries the position, so the green is an accident inside a '
+            'statement Trino rejects outright. A marking is a claim about the production'
         ),
     ),
 )

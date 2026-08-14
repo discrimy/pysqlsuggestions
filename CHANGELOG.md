@@ -34,6 +34,24 @@ offers a function, which is what the grammar puts there.
 
 ### Positions that had no answer
 
+`CREATE TABLE t (id ⌶` offers types, and the caret past one offers the
+constraints that may follow it — `NOT NULL`, `DEFAULT`, `PRIMARY KEY` and, on
+Postgres, `UNIQUE`, `REFERENCES` and `CHECK`. A constraint already written in
+that column is not offered again. A column name being invented still answers
+nothing, as does every nested paren: a type's parameters, a `CHECK`, a foreign
+key's column list.
+
+`CREATE ⌶` answers `TABLE`, and `CREATE TABLE if⌶` answers `IF NOT EXISTS`.
+
+`TABLE users ⌶` is a statement form at last: the relation, then the query tail
+it shares with a `SELECT`, then that relation's own columns after `ORDER BY`.
+`TABLE ONLY ⌶` on Postgres, the only backend that takes the word. ClickHouse has
+no such form and is not offered one.
+
+`CREATE TABLE t AS SELECT …` is still not offered. The clause carries no
+continuations at all, because a clause's own reach into its parentheses put `AS`
+where `CREATE TABLE t (id AS` parses as nothing.
+
 The `FETCH { FIRST | NEXT } … { ONLY | WITH TIES }` tail, at all four of its
 carets. `OFFSET n ⌶` takes `ROW` and `ROWS`. `ORDER BY id ⌶` offers `USING`.
 `RIGHT JOIN` and `FULL JOIN` join the join list, everywhere a join is offered.
