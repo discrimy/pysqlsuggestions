@@ -155,3 +155,43 @@ def test_one_request_reads_the_relation_list_once() -> None:
     sql = 'SELECT * FROM orders o JOIN '
     complete(sql, len(sql), POSTGRES, catalog)
     assert len([call for call in catalog.calls if call[0] == 'tables']) == 1
+
+
+def _permissive() -> MemoryCatalog:
+    """A role that may read the password column. The mapping names the relation, so nothing is UNKNOWN."""
+    return MemoryCatalog(USERS, restricted={('public', 'users'): []})
+
+
+def _restrictive() -> MemoryCatalog:
+    """The same database, a role that may not."""
+    return MemoryCatalog(USERS, restricted={('public', 'users'): ['password']})
+
+
+def test_one_cache_two_roles_do_not_leak() -> None:
+    """
+    `role` has led the documented cache key since v0.1 on an argument alone.
+
+    This is the first feature that gives it meaning, and the failure it prevents
+    is silent: user A's readable set served to user B reads as a database
+    privilege bug rather than a caching one, which is why it belongs in CI
+    rather than in a paragraph.
+    """
+    shared: dict[object, object] = {}
+    sql = 'SELECT * FROM users u WHERE u.'
+    for catalog, identity, expected in (
+        (_permissive(), 'alice', Availability.AVAILABLE),
+        (_restrictive(), 'bob', Availability.RESTRICTED),
+        (_permissive(), 'alice', Availability.AVAILABLE),
+    ):
+        found = complete(sql, len(sql), POSTGRES, catalog, cache=shared, identity=identity)
+        password = next(s for s in found if s.text == 'password')
+        assert password.availability is expected, f'{identity} saw the wrong readable set'
+
+
+def test_an_unnamed_role_still_gets_its_own_line_in_the_key() -> None:
+    """identity=None is a role like any other, not a wildcard matching every entry."""
+    shared: dict[object, object] = {}
+    sql = 'SELECT * FROM users u WHERE u.'
+    complete(sql, len(sql), POSTGRES, _permissive(), cache=shared)
+    found = complete(sql, len(sql), POSTGRES, _restrictive(), cache=shared, identity='bob')
+    assert next(s for s in found if s.text == 'password').availability is Availability.RESTRICTED
