@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.engine.local import alias_forms
 from pysqlsuggestions.engine.rank import quote_if_needed
-from pysqlsuggestions.types import Candidate, ForeignKey, Kind, Relation, Scope
+from pysqlsuggestions.types import Availability, Candidate, ForeignKey, Kind, Relation, Scope
 
 _FORWARD = 0
 """Many-to-one: the relation in scope holds the FK column. Ranked first — it cannot multiply rows."""
@@ -31,8 +31,24 @@ _MIN_JOINABLE = 2
 _Link = tuple[str, str, str, tuple[tuple[str, str], ...], int]
 """(source schema, target schema, target table, (source column, target column) pairs, direction)."""
 
+_NO_PRIVILEGE = 'no SELECT privilege'
+"""
+Why a proposal to an unreadable relation would fail, in the words the server uses.
 
-def relation_joins(scope: Scope | None, edges: Sequence[ForeignKey], dialect: Dialect) -> list[Candidate]:
+Spelled here rather than imported from `resolve`, which has the same constant:
+`engine/` may not import `resolve`, and `tests/test_purity.py` fails the build
+over it. Two module constants with one value is what that rule costs. Moving the
+string into `types.py` to share it would put a resolver's wording in the value
+types, which is a worse trade.
+"""
+
+
+def relation_joins(
+    scope: Scope | None,
+    edges: Sequence[ForeignKey],
+    dialect: Dialect,
+    restricted: frozenset[tuple[str, str]] = frozenset(),
+) -> list[Candidate]:
     """
     Whole `JOIN` clauses for `JOIN <caret>`: relation, alias and condition together.
 
@@ -40,6 +56,15 @@ def relation_joins(scope: Scope | None, edges: Sequence[ForeignKey], dialect: Di
     constraint is not, and a query starting from a relation that holds no FK
     columns — `auth_user` is referenced by seven tables in the docker fixture and
     references none — would otherwise be offered nothing at all.
+
+    `restricted` names relations the role may read nothing in, as (schema, name)
+    pairs. A proposal to one sinks rather than disappearing: the constraint is
+    declared, the join is real, and asking for the grant is a reasonable next
+    move. Relations rather than columns, and the narrowing is deliberate — at
+    this caret the target's columns have not been fetched and fetching them
+    would be one read per proposal. An FK column is a key column and key columns
+    are granted; the columns withheld individually are not the ones constraints
+    are declared on.
     """
     if scope is None:
         return []
@@ -51,7 +76,7 @@ def relation_joins(scope: Scope | None, edges: Sequence[ForeignKey], dialect: Di
     for relation in _catalog_relations(scope):
         source = _split(relation.path)
         for link in _links(source, edges):
-            candidates.append(_clause_candidate(relation, source, link, taken, dialect))
+            candidates.append(_clause_candidate(relation, source, link, taken, dialect, restricted))
     return candidates
 
 
@@ -154,6 +179,7 @@ def _clause_candidate(
     link: _Link,
     taken: set[str],
     dialect: Dialect,
+    restricted: frozenset[tuple[str, str]] = frozenset(),
 ) -> Candidate:
     """One whole `JOIN` clause, with an alias that collides with nothing already in scope."""
     source_schema, target_schema, target_table, pairs, direction = link
@@ -161,6 +187,7 @@ def _clause_candidate(
     reference = _reference(source[0], source_schema, target_schema, target_table, dialect)
     condition = _condition(relation.label, alias, pairs, dialect)
     snippet = f'{reference} {alias} ON {condition}'
+    withheld = (target_schema, target_table) in restricted
     return Candidate(
         text=snippet,
         kind=Kind.JOIN,
@@ -168,7 +195,12 @@ def _clause_candidate(
         position=direction,
         snippet=snippet,
         match_text=target_table,
+        # Both annotations, which is why `reason` is a field of its own: `note`
+        # says why this outranks a bare relation name, and it goes on being true
+        # of a join the role cannot run.
         note=_note(link),
+        availability=Availability.RESTRICTED if withheld else Availability.AVAILABLE,
+        reason=_NO_PRIVILEGE if withheld else None,
     )
 
 

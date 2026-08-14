@@ -12,7 +12,7 @@ from __future__ import annotations
 from pysqlsuggestions import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.types import Availability, Kind
+from pysqlsuggestions.types import Availability, ForeignKey, Kind
 
 USERS = {('public', 'users'): [('id', 'bigint'), ('email', 'text'), ('password', 'text')]}
 
@@ -114,3 +114,44 @@ def test_an_unrestricted_column_still_offers_its_values() -> None:
     sql = 'SELECT * FROM users u WHERE u.state = '
     found = [s.text for s in complete(sql, len(sql), POSTGRES, catalog) if s.kind is Kind.VALUE]
     assert found == ["'active'"]
+
+
+JOINED = {
+    ('public', 'orders'): [('id', 'bigint'), ('user_id', 'bigint')],
+    ('public', 'users'): [('id', 'bigint')],
+    ('public', 'secrets'): [('id', 'bigint'), ('order_id', 'bigint')],
+}
+
+EDGES = [
+    ForeignKey('public', 'orders', ('user_id',), 'public', 'users', ('id',)),
+    ForeignKey('public', 'secrets', ('order_id',), 'public', 'orders', ('id',)),
+]
+
+
+def test_a_join_to_an_unreadable_relation_sinks_but_stays() -> None:
+    """The constraint is real and the user's next move may be to ask for the grant."""
+    catalog = MemoryCatalog(JOINED, restricted={('public', 'secrets'): None}, foreign_keys=EDGES)
+    sql = 'SELECT * FROM orders o JOIN '
+    found = [s for s in complete(sql, len(sql), POSTGRES, catalog) if s.kind is Kind.JOIN]
+    assert 'users' in found[0].text
+    assert 'secrets' in found[-1].text
+    assert found[-1].availability is Availability.RESTRICTED
+    assert found[-1].reason == 'no SELECT privilege'
+    assert found[-1].note is not None, 'the fk annotation must survive alongside the reason'
+
+
+def test_a_join_to_a_readable_relation_is_untouched() -> None:
+    """The degradation again: no `restricted` means join proposals behave exactly as before."""
+    catalog = MemoryCatalog(JOINED, foreign_keys=EDGES)
+    sql = 'SELECT * FROM orders o JOIN '
+    found = [s for s in complete(sql, len(sql), POSTGRES, catalog) if s.kind is Kind.JOIN]
+    assert all(s.availability is Availability.AVAILABLE for s in found)
+    assert all(s.reason is None for s in found)
+
+
+def test_one_request_reads_the_relation_list_once() -> None:
+    """Availability must not cost a second round trip on a caller with no cache."""
+    catalog = MemoryCatalog(JOINED, foreign_keys=EDGES)
+    sql = 'SELECT * FROM orders o JOIN '
+    complete(sql, len(sql), POSTGRES, catalog)
+    assert len([call for call in catalog.calls if call[0] == 'tables']) == 1

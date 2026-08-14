@@ -13,7 +13,7 @@ implements what its backend actually supports.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
@@ -185,12 +185,30 @@ class _Reader:
         self._dialect = dialect
         self._cache = cache
         self._identity = identity
+        self._memo: dict[tuple[str | None, ...], Any] = {}
+        """
+        Answers already given during this request.
+
+        Distinct from `cache`, which belongs to the caller and may be absent. A
+        single completion can ask the same question twice — the relation list
+        serves both the TABLE candidates and the join proposals' availability —
+        and with no cache supplied that would be two round trips for one answer.
+        """
 
     def _key(self, *parts: str) -> tuple[str | None, ...]:
         """The documented cache key: (role, dialect, schema, table)."""
         return (self._identity, self._dialect.name, *parts)
 
     def _read(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
+        if key in self._memo:
+            remembered: _T = self._memo[key]
+            return remembered
+        value = self._read_through(key, produce)
+        self._memo[key] = value
+        return value
+
+    def _read_through(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
+        """The caller's cache, when there is one."""
         if self._cache is None:
             return produce()
         cached = self._cache.get(key)
@@ -212,6 +230,17 @@ class _Reader:
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
         return self._read(self._key(schema or '', table), lambda: self._catalog.columns(schema, table))
+
+    def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
+        """
+        Relations in `schema` the role may read nothing in, as (schema, name) pairs.
+
+        Free at a JOIN caret: the same relation list already answers the TABLE
+        candidates there, and `_read` remembers it within the request.
+        """
+        return frozenset(
+            (table.schema, table.name) for table in self.tables(schema) if table.availability is Availability.RESTRICTED
+        )
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
         """Functions in `schema`, or everywhere."""
@@ -416,7 +445,12 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     scope = request.scope
 
     if request.clause == 'JOIN' and Kind.TABLE in request.kinds:
-        candidates += joins.relation_joins(scope, _edges(scope, reader), dialect)
+        candidates += joins.relation_joins(
+            scope,
+            _edges(scope, reader),
+            dialect,
+            restricted=reader.unreadable_relations(),
+        )
     elif request.clause == 'ON' and Kind.COLUMN in request.kinds:
         candidates += joins.join_conditions(scope, _edges(scope, reader), dialect)
 
