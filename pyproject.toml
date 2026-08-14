@@ -19,6 +19,14 @@ classifiers = [
     'Typing :: Typed',
 ]
 
+# `Homepage` rather than `GitHub`: PyPI recognises the label, renders it with an
+# icon and sorts it first. `Demo` is shown as written, which is what it should
+# say — and the URL is the one `.github/workflows/pages.yml` already deploys to,
+# so the two cannot drift without the demo itself moving.
+[project.urls]
+Homepage = 'https://github.com/discrimy/pysqlsuggestions'
+Demo = 'https://discrimy.github.io/pysqlsuggestions/'
+
 # Extras are named after the driver they install, not the backend: more than one
 # driver can serve the same backend, so a future psycopg3 extra sits alongside
 # psycopg2 rather than silently changing what `postgres` means.
