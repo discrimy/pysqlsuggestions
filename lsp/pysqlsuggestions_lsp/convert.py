@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from lsprotocol.types import (
     CompletionItem,
     CompletionItemKind,
+    CompletionItemTag,
     InsertTextFormat,
     Position,
     Range,
@@ -29,7 +30,7 @@ from lsprotocol.types import (
 
 from pysqlsuggestions import plan_insertion
 from pysqlsuggestions.dialects.base import Dialect
-from pysqlsuggestions.types import Edit, Kind, Suggestion
+from pysqlsuggestions.types import Availability, Edit, Kind, Suggestion
 from pysqlsuggestions_lsp.documents import to_position
 
 ITEM_KINDS: dict[Kind, CompletionItemKind] = {
@@ -106,13 +107,14 @@ def _snippet(text: str, stops: Sequence[int]) -> str:
 
 def _detail(suggestion: Suggestion) -> str | None:
     """
-    What the thing is, and why it outranks its neighbours.
+    What the thing is, why it outranks its neighbours, and why it would fail.
 
-    `detail` says what it is; `note` says why it won — `fk: flight.id`. They are
-    separate on the Suggestion and a client has one field, so they are joined
-    rather than one being dropped.
+    `detail` says what it is; `note` says why it won — `fk: flight.id`; `reason`
+    says why accepting it will not work. They are separate on the Suggestion and
+    a client has one field, so they are joined rather than any being dropped.
+    A restricted join proposal carries all three.
     """
-    parts = [part for part in (suggestion.detail, suggestion.note) if part]
+    parts = [part for part in (suggestion.detail, suggestion.note, suggestion.reason) if part]
     return '  '.join(parts) if parts else None
 
 
@@ -143,6 +145,16 @@ def to_item(
     `index` is its place in the engine's ranking and becomes `sort_text`,
     zero-padded so that string order and numeric order agree — unpadded, '10'
     sorts before '9' and the tail of every list quietly reverses.
+
+    A suggestion the connected role may not read is tagged `Deprecated`, which
+    renders as strikethrough and is the closest the protocol comes to a disabled
+    state. It having sunk in the list needs no work here: `sort_text` already
+    carries the engine's order, and the engine has already put it last.
+
+    That tag does not stop a client inserting the item, and nothing here
+    pretends otherwise. An empty `text_edit` plus a command would produce an
+    item that silently does nothing, which reads as a bug in this server rather
+    than as a grant the user lacks.
     """
     plan = plan_insertion(statement, suggestion, dialect=dialect)
     primary, extra = _split_edits(plan.edits, suggestion.replace_span)
@@ -151,6 +163,7 @@ def to_item(
         label=suggestion.label or suggestion.text,
         kind=ITEM_KINDS.get(suggestion.kind, CompletionItemKind.Text),
         detail=_detail(suggestion),
+        tags=[CompletionItemTag.Deprecated] if suggestion.availability is Availability.RESTRICTED else None,
         sort_text=f'{index:04d}',
         filter_text=match_term(suggestion),
         text_edit=TextEdit(range=_range(base, starts, primary.span), new_text=text),
