@@ -1,0 +1,113 @@
+name: publish
+
+# Publishes the library to PyPI when a GitHub Release is published.
+#
+# A release rather than a tag push, which is what `pages.yml` uses for the demo.
+# The two acts differ in cost: republishing the demo from a mistaken tag is
+# free, and a mistaken upload spends a version number permanently — PyPI lets a
+# file be yanked, never replaced. A release is a second deliberate step, and a
+# draft can sit unfinished without shipping anything.
+#
+# Only `pysqlsuggestions` is published here. `pysqlsuggestions-lsp` declares no
+# license and no readme, which is a decision of its own; the VSIX goes to the
+# VS Code marketplace, a different registry with a different credential.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # The check `pages.yml` already makes, for the reason recorded there: a
+      # wheel takes its version from pyproject.toml and never from the tag, so a
+      # release named v0.7.0 cut from a tree still reading 0.6.0 publishes one
+      # version under another's name. `tests/test_purity.py` pins the version
+      # across six files; the release tag is a seventh place it can disagree,
+      # and the only one no test in the repository can see.
+      #
+      # The tag arrives through `env` rather than `${{ }}`, which is the one
+      # place this differs from pages.yml, and deliberately. That workflow reads
+      # GITHUB_REF_NAME, which git constrains. A release name is a string
+      # somebody typed, and interpolating it into a `run:` block splices it into
+      # the script before bash ever sees it. Nobody who can publish a release
+      # here is untrusted, so this is a habit rather than a hole.
+      - name: The release and the package agree on the version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(grep -m1 "^version = " pyproject.toml | cut -d"'" -f2)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::release $TAG but pyproject.toml says $version"
+            exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # ci.yml already ran on this commit, so this is not about finding new
+      # bugs. It is for the release cut from a commit whose CI never finished,
+      # or went red and was not read. Integration tests are excluded: they need
+      # three containers, and what they cover is unrelated to whether this
+      # artefact is fit to publish.
+      - name: The suite still passes
+        run: |
+          uv sync
+          uv run pytest -m 'not integration' -q
+
+      - name: Build the sdist and the wheel
+        run: uv build
+
+      # Stronger than ci.yml's `no-extras` job, which installs from source: a
+      # package missing from [tool.hatch.build.targets.wheel] is present in the
+      # tree either way, so that job cannot see it. This installs the artefact
+      # that is about to be uploaded, with no extras, and asks it its version —
+      # which closes the loop, since what reaches PyPI is then what was
+      # verified rather than merely what was built beside it.
+      - name: The wheel installs and imports on its own
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+          built=$(/tmp/smoke/bin/python -c 'import pysqlsuggestions; print(pysqlsuggestions.__version__)')
+          if [ "$TAG" != "v$built" ]; then
+            echo "::error::the wheel reports $built, the release is $TAG"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # A job of its own, and the split is the whole point. This one holds an OIDC
+  # token PyPI will accept as proof of identity, and it runs none of this
+  # repository's code: it receives files and transfers them. That is what makes
+  # minting an upload credential safe at all, and it is why this is not two more
+  # steps on the job above.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # No `password` input: Trusted Publishing exchanges the OIDC token for a
+      # short-lived credential, matched against the publisher registered on PyPI
+      # for this repository, this workflow filename and this environment name.
+      # Change any of those three strings and the exchange stops matching.
+      #
+      # PEP 740 attestations are on by default and stay on.
+      - uses: pypa/gh-action-pypi-publish@release/v1
