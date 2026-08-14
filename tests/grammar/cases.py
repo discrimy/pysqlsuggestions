@@ -541,6 +541,16 @@ CASES: tuple[GrammarCase, ...] = (
         offers=('ASC', 'DESC', 'NULLS FIRST', 'NULLS LAST', 'USING'),
     ),
     GrammarCase(
+        sql='SELECT * FROM users u JOIN orders o USING (id) ORDER BY u.id ⌶',
+        cite=_ORDER_BY,
+        offers=('ASC', 'DESC', 'USING'),
+        note=(
+            "a join's USING is not the ordering one. `words_in_item` stops at the clause, so the "
+            'sort direction is still unspent here — without that bound the run reaches back across '
+            'the whole statement whenever no comma intervenes'
+        ),
+    ),
+    GrammarCase(
         sql='SELECT * FROM users ORDER BY id USING ⌶',
         cite=_ORDER_BY,
         offers=('<', '>'),
@@ -556,9 +566,13 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users ORDER BY id ASC ⌶',
         cite=_ORDER_BY,
         offers=('NULLS FIRST', 'NULLS LAST'),
-        refuses=('ASC', 'DESC'),
+        refuses=('ASC', 'DESC', 'USING'),
         dialects=_EVERY_DIALECT,
-        note='EXCLUSIVE in dialects/base.py settles the direction once, which is what this pins',
+        note=(
+            'EXCLUSIVE in dialects/base.py settles the direction once, which is what this pins. '
+            'USING belongs to that same choice — `ORDER BY id ASC USING >` is refused by the '
+            'server — and was offered here until the acceptance sweep caught it'
+        ),
     ),
     # --- the row-count clauses --------------------------------------------
     GrammarCase(
@@ -631,6 +645,39 @@ CASES: tuple[GrammarCase, ...] = (
         sql='SELECT * FROM users u FOR UPDATE OF u ⌶',
         cite=_FOR,
         offers=('NOWAIT', 'SKIP LOCKED'),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users JOIN orders ⌶',
+        cite=_FOR,
+        refuses=('FOR UPDATE', 'FOR NO KEY UPDATE', 'FOR SHARE', 'FOR KEY SHARE'),
+        note=(
+            'a join is not a place a statement can end — `JOIN orders FOR UPDATE` names no join '
+            'condition and the server refuses it. The locking clauses followed JOIN until the '
+            'acceptance sweep caught this'
+        ),
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u JOIN orders o ON u.id = o.user_id ⌶',
+        cite=_FOR,
+        offers=('FOR UPDATE', 'FOR NO KEY UPDATE', 'FOR SHARE', 'FOR KEY SHARE'),
+        note='the position the locking clauses were missing entirely while they followed JOIN instead',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users u JOIN orders o USING (id) ⌶',
+        cite=_JOIN,
+        offers=('FOR UPDATE',),
+        note='the other way a join becomes complete, and the other clause the locking words follow',
+    ),
+    GrammarCase(
+        sql='SELECT * FROM users CROSS JOIN orders ⌶',
+        cite=_FOR,
+        offers=('FOR UPDATE',),
+        pending=True,
+        refused=(
+            'every join spelling resolves through the one JOIN clause, so there is no name that '
+            'admits the conditionless joins without also admitting the ones that need a condition'
+        ),
+        note='valid SQL, given up deliberately: a suggestion the server refuses costs more than one never made',
     ),
     # --- the TABLE form ---------------------------------------------------
     GrammarCase(

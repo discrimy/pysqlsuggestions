@@ -366,7 +366,21 @@ POSTGRES = replace(
         *(
             Clause(
                 name=name,
-                follows=frozenset({'FROM', 'JOIN', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET'}),
+                # `ON` and `USING`, not `JOIN`. A join is not a place a statement
+                # can end: `FROM orders o JOIN auth_user FOR UPDATE` names no
+                # join condition and the server refuses it, which is what the
+                # acceptance sweep found. The condition clauses are where the
+                # join becomes a complete FROM, and `FROM a JOIN b ON … FOR
+                # UPDATE` is the position that was missing entirely.
+                #
+                # `CROSS JOIN b FOR UPDATE` is valid and is given up here.
+                # Every join spelling resolves through the one `JOIN` clause —
+                # see `_JOINS` — so there is no name to admit it by, and a
+                # suggestion the server refuses costs more than one it never
+                # makes.
+                follows=frozenset(
+                    {'FROM', 'ON', 'USING', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET'}
+                ),
                 statements=frozenset({'SELECT'}),
                 suggests=(Kind.KEYWORD,),
                 followed_by=('OF', 'NOWAIT', 'SKIP LOCKED'),

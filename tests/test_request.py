@@ -307,3 +307,35 @@ def test_a_caret_outside_the_text_is_pulled_back_into_it() -> None:
     for caret in (-1, -1000, len(sql) + 5):
         span = derive_request(sql, caret, POSTGRES).replace_span
         assert 0 <= span[0] <= span[1] <= len(sql), f'caret={caret} gave {span}'
+
+
+def test_item_words_stop_at_the_clause_that_owns_the_item() -> None:
+    """
+    An item belongs to one clause, so a previous clause's words are not in it.
+
+    Without the bound the run reached back across the whole statement whenever
+    no comma intervened, and `item_words` is what `EXCLUSIVE` reads to decide
+    whether a once-per-item choice has been made. A join's `USING` therefore
+    settled the sort direction, and `ORDER BY x ` stopped offering `ASC`.
+    """
+    result = request('SELECT * FROM users u JOIN orders o USING (id) ORDER BY u.id ⌶')
+    assert 'USING' not in result.item_words
+    assert 'JOIN' not in result.item_words
+
+
+def test_item_words_keep_the_name_of_their_own_clause() -> None:
+    """
+    A clause can itself be half of a choice, so its name has to stay in the set.
+
+    `LIMIT` and `FETCH` are two spellings of one row count: writing either
+    settles both. `LIMIT` is the only evidence the clause was written, so
+    bounding the scan without including it would make `LIMIT 10 ` offer `FETCH`.
+    """
+    assert 'LIMIT' in request('SELECT * FROM users LIMIT 10 ⌶').item_words
+    assert 'ORDER' in request('SELECT * FROM users ORDER BY id ⌶').item_words
+
+
+def test_a_comma_still_starts_a_new_item() -> None:
+    """The older bound, unchanged: a new list item gets every choice back."""
+    result = request('SELECT * FROM users ORDER BY id ASC, name ⌶')
+    assert 'ASC' not in result.item_words
