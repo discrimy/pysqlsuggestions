@@ -4,7 +4,7 @@
 -- pg_attribute still lists that column for this role, which is the whole point:
 -- it exists as metadata and must be shown greyed rather than silently omitted.
 --
---   psql "postgresql://analyst:analyst@localhost:55432/report_service"
+--   psql "postgresql://analyst:analyst@localhost:57432/report_service"
 
 CREATE ROLE analyst LOGIN PASSWORD 'analyst';
 
@@ -27,5 +27,11 @@ GRANT SELECT (
 -- is false, so `SELECT *` errors while naming columns explicitly works.
 REVOKE SELECT ON mattermost_mattermostchannel FROM analyst;
 GRANT SELECT (id, name) ON mattermost_mattermostchannel TO analyst;
+
+-- No grant at all, so has_any_column_privilege is false and the relation half of
+-- Availability has something real to detect. Personal data an analyst has no
+-- business reading, which is the shape this case takes in practice: not a column
+-- withheld from a table they use, but a table they may not open.
+REVOKE SELECT ON reports_phonenumber FROM analyst;
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA public, billing GRANT SELECT ON TABLES TO analyst;

@@ -83,6 +83,13 @@
   /* Quieter than .det and to the left of it: the note says why this row is
      ranked where it is, which is worth reading second rather than first. */
   .item .note { color: var(--join); font-size: 10.5px; white-space: nowrap; opacity: .85; }
+  /* Why the row will not work, as opposed to why it ranks where it does. Warm
+     rather than red: the suggestion is correct about the schema, and the server
+     is what refuses it. */
+  .item .why { color: #b8863b; font-size: 10.5px; white-space: nowrap; }
+  /* The name stays legible — it is the answer to "what is this column called",
+     which is still a real question. Only the claim that you can select it goes. */
+  .item.restricted .txt { text-decoration: line-through; opacity: .75; }
   .k { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700; min-width: 58px; }
   .k-column { color: var(--column); } .k-table { color: var(--table); }
   .k-schema { color: var(--schema); } .k-function { color: var(--function); }
@@ -330,10 +337,12 @@ function paintRequest(d) {
 function paintPopup() {
   if (!items.length) { pop.hidden = true; return; }
   pop.innerHTML = items.map((s, i) => `
-    <div class="item" role="option" data-i="${i}" aria-selected="${i === active}">
+    <div class="item${s.availability === 'restricted' ? ' restricted' : ''}"
+         role="option" data-i="${i}" aria-selected="${i === active}">
       <span class="k k-${s.kind}">${esc(word(s.kind))}</span>
       <span class="txt">${esc(s.label || s.text)}</span>
       <span class="note">${esc(s.note || '')}</span>
+      <span class="why">${esc(s.reason || '')}</span>
       <span class="det">${esc(s.detail || '')}</span>
     </div>`).join('');
   pop.hidden = false;

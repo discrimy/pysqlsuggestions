@@ -17,7 +17,7 @@ from collections.abc import Iterable, Sequence
 from functools import cache
 
 from pysqlsuggestions.dialects.base import Dialect, Syntax
-from pysqlsuggestions.types import Candidate, Kind, Request, Suggestion
+from pysqlsuggestions.types import Availability, Candidate, Kind, Request, Suggestion
 
 _EXACT_PREFIX = 100.0
 _FOLDED_PREFIX = 70.0
@@ -71,7 +71,7 @@ def rank(
 ) -> list[Suggestion]:
     """Score, sort and render `candidates` for `request`."""
     kind_rank = {kind: index for index, kind in enumerate(request.kinds)}
-    scored: list[tuple[float, int, str, Suggestion]] = []
+    scored: list[tuple[int, float, int, str, Suggestion]] = []
 
     for candidate in candidates:
         # What is hunted for is not always what is shown, and neither is always
@@ -94,6 +94,7 @@ def rank(
         text, stops = _render(candidate, request, dialect)
         scored.append(
             (
+                1 if candidate.availability is Availability.RESTRICTED else 0,
                 -score,
                 len(candidate.text),
                 text.lower(),
@@ -110,6 +111,8 @@ def rank(
                     label=candidate.label,
                     relation=candidate.relation,
                     note=candidate.note,
+                    availability=candidate.availability,
+                    reason=candidate.reason,
                 ),
             ),
         )
@@ -117,7 +120,16 @@ def rank(
     # Among equal-strength matches, the shorter name is the closer one: the same
     # prefix covers more of it. `no` should reach `now` before `normalize`, and
     # alphabetical order alone would not.
-    scored.sort(key=lambda row: (row[0], row[1], row[2]))
+    #
+    # Availability leads, so a restricted candidate is last whatever it matched.
+    # Not "bottom of its kind group", which is what the feature was first
+    # specified as and which no constant expresses: `_KIND_STEP` is 5.0 against
+    # match strengths spanning 25 to 100, so any penalty small enough to keep an
+    # item inside its kind leaves a restricted exact-prefix match above an
+    # available substring one — which is not sunk. It also settles the dedupe
+    # below in the readable candidate's favour, where two relations in scope
+    # share a column name and only one of them can be read.
+    scored.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
 
     # Two relations in scope often share a column name. Offering `id` twice is
     # noise: the text inserted would be identical either way, so the

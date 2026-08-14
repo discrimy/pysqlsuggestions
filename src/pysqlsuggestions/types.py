@@ -65,6 +65,34 @@ class Kind(Enum):
     """
 
 
+class Availability(Enum):
+    """
+    Whether the connected role may actually read a thing, as far as anyone can tell.
+
+    Values are explicit strings for the reason `Kind`'s are: they are serialised
+    straight into an editor payload.
+
+    Three states rather than two, and the third is the load-bearing one. The
+    catalog records default to `UNKNOWN` because `AVAILABLE` would be a *claim*:
+    a snapshot fixture, a ClickHouse column and every third-party adapter's rows
+    would all assert that the connected role may read them, on no evidence at
+    all. The engine records default to `AVAILABLE` because a keyword, an
+    operator or a generated alias has no privilege question — it is insertable
+    by construction, and defaulting those to `UNKNOWN` would make the ordinary
+    case the uncertain one.
+
+    Every decision downstream tests `is RESTRICTED`, so `UNKNOWN` and
+    `AVAILABLE` behave identically today. That is intended. `UNKNOWN` earns its
+    place as the honest default rather than as a behaviour, and it is the state
+    a policy source for a backend that keeps its grants outside SQL — Trino —
+    would later replace.
+    """
+
+    AVAILABLE = 'available'
+    RESTRICTED = 'restricted'
+    UNKNOWN = 'unknown'
+
+
 @dataclass(frozen=True, slots=True)
 class Column:
     """A column as the catalog reports it."""
@@ -75,6 +103,8 @@ class Column:
     type: str
     position: int = 0
     """attnum / ordinal_position. Declaration order outranks alphabetical when ranking."""
+    availability: Availability = Availability.UNKNOWN
+    """Whether the connected role may select this column. See `Availability`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +124,15 @@ class Table:
     last ANALYZE. Approximate on purpose: knowing a relation has millions of
     rows rather than dozens is what changes which one you pick, and an exact
     count would mean counting them.
+    """
+    availability: Availability = Availability.UNKNOWN
+    """
+    Whether the connected role may read anything in this relation at all.
+
+    Its own field despite being implied by the columns, and the reason is cost
+    rather than logic: `FROM <caret>` lists every relation in the namespace, and
+    finding out by fetching each one's columns is the read a completion engine
+    must not make.
     """
 
 
@@ -426,6 +465,21 @@ class Candidate:
     is inserted beside it. `Request.replace_span` belongs to the position, and
     one span cannot serve both — accepting `FROM` would delete the star.
     """
+    availability: Availability = Availability.AVAILABLE
+    """Whether accepting this produces a statement the role may run. See `Availability`."""
+    reason: str | None = None
+    """
+    Why it would not: `no SELECT privilege`.
+
+    Separate from `note` rather than reusing it, because the two point in
+    opposite directions and one candidate can carry both. A join proposal to a
+    restricted relation has `note='fk: users.id'`, which says why it ranks high,
+    and `reason`, which says why it will fail; one field would silently
+    overwrite the other.
+
+    Set without `availability` changing in exactly one place: a star expansion
+    that omitted columns still runs, so it explains itself without sinking.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,4 +574,14 @@ class Suggestion:
 
     Distinct from `detail`, which says what the thing *is*. A front end may render
     it differently — the annotation is the teaching part of a ranked list.
+    """
+    availability: Availability = Availability.AVAILABLE
+    """Whether accepting this produces a statement the role may run. See `Availability`."""
+    reason: str | None = None
+    """
+    Why it would not: `no SELECT privilege`.
+
+    Separate from `note` rather than reusing it, because the two point in
+    opposite directions and one suggestion can carry both. A front end with a
+    single annotation field joins them rather than dropping either.
     """

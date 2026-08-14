@@ -11,12 +11,38 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 from pysqlsuggestions.engine import rank
-from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
+from pysqlsuggestions.types import Availability, Column, ColumnValue, ForeignKey, Function, Table
 
 ColumnSpec = tuple[str, str] | tuple[str, str, int]
 Snapshot = Mapping[tuple[str, str], Iterable[ColumnSpec]]
 
 _MAX_ENUMERABLE_COLUMNS = 5_000
+
+
+def _declared_state(
+    relation: tuple[str, str],
+    column: str,
+    withheld: Mapping[tuple[str, str], Sequence[str] | None],
+    unreadable: set[tuple[str, str]],
+) -> Availability:
+    """
+    What a privilege query would say about one column of this snapshot.
+
+    UNKNOWN unless the fixture mentioned the relation at all. A snapshot that
+    says nothing about privileges knows nothing about them, and claiming
+    AVAILABLE for every column of every existing fixture would be the one
+    assertion `Availability` exists to avoid.
+
+    Hence the asymmetry: naming a relation promotes its *other* columns to
+    AVAILABLE, because the fixture has now spoken about that relation. A
+    relation the mapping never names stays UNKNOWN throughout.
+    """
+    if relation in unreadable:
+        return Availability.RESTRICTED
+    named = withheld.get(relation)
+    if named is None:
+        return Availability.UNKNOWN
+    return Availability.RESTRICTED if column in named else Availability.AVAILABLE
 
 
 class MemoryCatalog:
@@ -44,8 +70,15 @@ class MemoryCatalog:
         catalogs: Mapping[str, Sequence[str]] | None = None,
         search_path: Sequence[str] | None = None,
         foreign_keys: Iterable[ForeignKey] = (),
+        restricted: Mapping[tuple[str, str], Sequence[str] | None] | None = None,
         oversized: bool = False,
     ) -> None:
+        # A relation mapped to None has no grant at all, which is what
+        # has_any_column_privilege reports as false: the relation is restricted
+        # and so is every column in it. A list names the columns individually,
+        # which is what a column-level GRANT produces.
+        withheld = restricted or {}
+        unreadable = {key for key, columns in withheld.items() if columns is None}
         self._columns: dict[tuple[str, str], tuple[Column, ...]] = {}
         kinds = table_kinds or {}
         for (schema, table), specs in snapshot.items():
@@ -56,6 +89,7 @@ class MemoryCatalog:
                     name=spec[0],
                     type=spec[1],
                     position=spec[2] if len(spec) > 2 else index,  # noqa: PLR2004
+                    availability=_declared_state((schema, table), spec[0], withheld, unreadable),
                 )
                 for index, spec in enumerate(specs)
             )
@@ -66,6 +100,7 @@ class MemoryCatalog:
                 name=table,
                 kind=kinds.get((schema, table), 'table'),
                 rows=sizes.get((schema, table)),
+                availability=(Availability.RESTRICTED if (schema, table) in unreadable else Availability.UNKNOWN),
             )
             for schema, table in self._columns
         )

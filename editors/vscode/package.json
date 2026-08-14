@@ -2,17 +2,26 @@
   "name": "pysqlsuggestions",
   "displayName": "pysqlsuggestions",
   "description": "Schema-aware SQL completion: joins from foreign keys, values from statistics",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "publisher": "pysqlsuggestions",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:sql"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:sql"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "views": {
       "explorer": [
-        { "id": "pysqlsuggestions.connections", "name": "SQL Connections" }
+        {
+          "id": "pysqlsuggestions.connections",
+          "name": "SQL Connections"
+        }
       ]
     },
     "viewsWelcome": [
@@ -22,39 +31,129 @@
       }
     ],
     "commands": [
-      { "command": "pysqlsuggestions.addConnection", "title": "pysqlsuggestions: Add connection", "icon": "$(add)" },
-      { "command": "pysqlsuggestions.selectConnection", "title": "pysqlsuggestions: Select connection for this workspace" },
-      { "command": "pysqlsuggestions.restartServer", "title": "pysqlsuggestions: Restart server" },
-      { "command": "pysqlsuggestions.showLogs", "title": "pysqlsuggestions: Show logs" },
-      { "command": "pysqlsuggestions.refreshConnections", "title": "Refresh", "icon": "$(refresh)" },
-      { "command": "pysqlsuggestions.editConnection", "title": "Edit…", "icon": "$(edit)" },
-      { "command": "pysqlsuggestions.removeConnection", "title": "Remove", "icon": "$(trash)" },
-      { "command": "pysqlsuggestions.setPassword", "title": "Set password…" },
-      { "command": "pysqlsuggestions.clearPassword", "title": "Clear password" },
-      { "command": "pysqlsuggestions.testConnection", "title": "Test connection" },
-      { "command": "pysqlsuggestions.useConnection", "title": "Use this connection" }
+      {
+        "command": "pysqlsuggestions.addConnection",
+        "title": "pysqlsuggestions: Add connection",
+        "icon": "$(add)"
+      },
+      {
+        "command": "pysqlsuggestions.selectConnection",
+        "title": "pysqlsuggestions: Select connection for this workspace"
+      },
+      {
+        "command": "pysqlsuggestions.restartServer",
+        "title": "pysqlsuggestions: Restart server"
+      },
+      {
+        "command": "pysqlsuggestions.showLogs",
+        "title": "pysqlsuggestions: Show logs"
+      },
+      {
+        "command": "pysqlsuggestions.refreshConnections",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pysqlsuggestions.editConnection",
+        "title": "Edit…",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "pysqlsuggestions.removeConnection",
+        "title": "Remove",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pysqlsuggestions.setPassword",
+        "title": "Set password…"
+      },
+      {
+        "command": "pysqlsuggestions.clearPassword",
+        "title": "Clear password"
+      },
+      {
+        "command": "pysqlsuggestions.testConnection",
+        "title": "Test connection"
+      },
+      {
+        "command": "pysqlsuggestions.useConnection",
+        "title": "Use this connection"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "pysqlsuggestions.addConnection", "when": "view == pysqlsuggestions.connections", "group": "navigation@1" },
-        { "command": "pysqlsuggestions.refreshConnections", "when": "view == pysqlsuggestions.connections", "group": "navigation@2" }
+        {
+          "command": "pysqlsuggestions.addConnection",
+          "when": "view == pysqlsuggestions.connections",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pysqlsuggestions.refreshConnections",
+          "when": "view == pysqlsuggestions.connections",
+          "group": "navigation@2"
+        }
       ],
       "view/item/context": [
-        { "command": "pysqlsuggestions.editConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "inline@1" },
-        { "command": "pysqlsuggestions.removeConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "inline@2" },
-        { "command": "pysqlsuggestions.useConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "1_use@1" },
-        { "command": "pysqlsuggestions.testConnection", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "1_use@2" },
-        { "command": "pysqlsuggestions.setPassword", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "2_auth@1" },
-        { "command": "pysqlsuggestions.clearPassword", "when": "view == pysqlsuggestions.connections && viewItem == connection", "group": "2_auth@2" }
+        {
+          "command": "pysqlsuggestions.editConnection",
+          "when": "view == pysqlsuggestions.connections && viewItem == connection",
+          "group": "inline@1"
+        },
+        {
+          "command": "pysqlsuggestions.removeConnection",
+          "when": "view == pysqlsuggestions.connections && viewItem == connection",
+          "group": "inline@2"
+        },
+        {
+          "command": "pysqlsuggestions.useConnection",
+          "when": "view == pysqlsuggestions.connections && viewItem == connection",
+          "group": "1_use@1"
+        },
+        {
+          "command": "pysqlsuggestions.testConnection",
+          "when": "view == pysqlsuggestions.connections && viewItem == connection",
+          "group": "1_use@2"
+        },
+        {
+          "command": "pysqlsuggestions.setPassword",
+          "when": "view == pysqlsuggestions.connections && viewItem == connection",
+          "group": "2_auth@1"
+        },
+        {
+          "command": "pysqlsuggestions.clearPassword",
+          "when": "view == pysqlsuggestions.connections && viewItem == connection",
+          "group": "2_auth@2"
+        }
       ],
       "commandPalette": [
-        { "command": "pysqlsuggestions.refreshConnections", "when": "false" },
-        { "command": "pysqlsuggestions.editConnection", "when": "false" },
-        { "command": "pysqlsuggestions.removeConnection", "when": "false" },
-        { "command": "pysqlsuggestions.setPassword", "when": "false" },
-        { "command": "pysqlsuggestions.clearPassword", "when": "false" },
-        { "command": "pysqlsuggestions.testConnection", "when": "false" },
-        { "command": "pysqlsuggestions.useConnection", "when": "false" }
+        {
+          "command": "pysqlsuggestions.refreshConnections",
+          "when": "false"
+        },
+        {
+          "command": "pysqlsuggestions.editConnection",
+          "when": "false"
+        },
+        {
+          "command": "pysqlsuggestions.removeConnection",
+          "when": "false"
+        },
+        {
+          "command": "pysqlsuggestions.setPassword",
+          "when": "false"
+        },
+        {
+          "command": "pysqlsuggestions.clearPassword",
+          "when": "false"
+        },
+        {
+          "command": "pysqlsuggestions.testConnection",
+          "when": "false"
+        },
+        {
+          "command": "pysqlsuggestions.useConnection",
+          "when": "false"
+        }
       ]
     },
     "configuration": {
@@ -66,31 +165,59 @@
           "markdownDescription": "Named database connections. Passwords are **not** stored here — they are prompted for once and kept in the editor's secret storage.",
           "items": {
             "type": "object",
-            "required": ["name", "dialect", "host"],
+            "required": [
+              "name",
+              "dialect",
+              "host"
+            ],
             "properties": {
-              "name": { "type": "string", "description": "What this connection is called." },
+              "name": {
+                "type": "string",
+                "description": "What this connection is called."
+              },
               "dialect": {
                 "type": "string",
-                "enum": ["postgres", "clickhouse", "trino", "ansi"],
-                "markdownDescription": "Only `postgres` reads a catalog in this release — the others need drivers that ship compiled, which would mean one build per platform. They still complete from the statement, with the right keywords and quoting."
+                "enum": [
+                  "postgres",
+                  "clickhouse",
+                  "trino",
+                  "ansi"
+                ],
+                "markdownDescription": "`postgres`, `clickhouse` and `trino` all read a catalog. `ansi` completes from the statement alone, with the right keywords and quoting."
               },
-              "host": { "type": "string" },
-              "port": { "type": "number" },
-              "database": { "type": "string" },
-              "user": { "type": "string" }
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "number"
+              },
+              "database": {
+                "type": "string"
+              },
+              "user": {
+                "type": "string"
+              },
+              "secure": {
+                "type": "boolean",
+                "default": false,
+                "description": "Speak TLS. Trino requires it before it will accept a password."
+              },
+              "verify": {
+                "type": "boolean",
+                "default": true,
+                "markdownDescription": "Check the server's TLS certificate. Set `false` only for a self-signed certificate you already trust — it also stops the hostname being checked, so nothing about the endpoint's identity is verified."
+              }
             },
             "additionalProperties": false
           }
         },
         "pysqlsuggestions.defaultConnection": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "default": null,
           "description": "Which named connection to use when nothing else says otherwise."
-        },
-        "pysqlsuggestions.pythonPath": {
-          "type": ["string", "null"],
-          "default": null,
-          "description": "Interpreter used to build the extension's private environment. Leave unset to search PATH. This is not the interpreter your project runs on — the extension never touches that one."
         }
       }
     }

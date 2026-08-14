@@ -115,3 +115,41 @@ test('a profile the user already declined is not asked again', () => {
 test('no profile wants nothing', () => {
   assert.equal(needsPassword(undefined, undefined, new Set()), false);
 });
+
+test('secure is read when it is a boolean and dropped when it is not', () => {
+  const profiles = readProfiles([
+    { name: 'a', dialect: 'trino', host: 'h', secure: true },
+    { name: 'b', dialect: 'trino', host: 'h', secure: 'yes' },
+    { name: 'c', dialect: 'trino', host: 'h' },
+  ]);
+  assert.deepStrictEqual(
+    profiles.map((profile) => profile.secure),
+    [true, undefined, undefined],
+  );
+});
+
+test('verify is carried only when it is a boolean', () => {
+  const profiles = readProfiles([
+    { name: 'a', dialect: 'trino', host: 'h', secure: true, verify: false },
+    { name: 'b', dialect: 'trino', host: 'h', secure: true, verify: 'no' },
+  ]);
+  assert.deepStrictEqual(
+    profiles.map((profile) => profile.verify),
+    [false, undefined],
+  );
+});
+
+test('an omitted verify sends no key, so the server keeps its safe default', () => {
+  // Sending `verify: undefined` would serialise as a present key on some paths.
+  // The server reads `is not False`, so only a real false may ever reach it.
+  const options = initializationOptions({ name: 'a', dialect: 'trino', host: 'h', secure: true }, undefined);
+  assert.equal('verify' in (options ?? {}), false);
+});
+
+test('an explicit verify false does reach the server', () => {
+  const options = initializationOptions(
+    { name: 'a', dialect: 'trino', host: 'h', secure: true, verify: false },
+    undefined,
+  );
+  assert.equal(options?.verify, false);
+});

@@ -6,6 +6,74 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Positions that had no answer
+
+`CREATE TABLE t (id ⌶` offers types, and the caret past one offers the
+constraints that may follow it — `NOT NULL`, `DEFAULT`, `PRIMARY KEY` and, on
+Postgres, `UNIQUE`, `REFERENCES` and `CHECK`. A constraint already written in
+that column is not offered again. A column name being invented still answers
+nothing, as does every nested paren: a type's parameters, a `CHECK`, a foreign
+key's column list.
+
+`CREATE ⌶` answers `TABLE`, and `CREATE TABLE if⌶` answers `IF NOT EXISTS`.
+
+`TABLE users ⌶` is a statement form at last: the relation, then the query tail
+it shares with a `SELECT`, then that relation's own columns after `ORDER BY`.
+`TABLE ONLY ⌶` on Postgres, the only backend that takes the word. ClickHouse has
+no such form and is not offered one.
+
+`CREATE TABLE t AS SELECT …` is still not offered. The clause carries no
+continuations at all, because a clause's own reach into its parentheses put `AS`
+where `CREATE TABLE t (id AS` parses as nothing.
+
+### Nothing changes at a caret
+
+`TRUNCATE TABLE` is a clause in its own right. It reads the same as it always
+did — the two-word entry exists so that it goes on doing so now that `TABLE` is
+modelled, since one-word `TRUNCATE` ends before the `TABLE` after it and lost
+the match outright.
+
+## 0.6.0
+
+### Positions that now say what the role may not read
+
+`WHERE d.⌶` still offers every column, but one the connected role cannot select
+arrives last rather than among its readable neighbours, carrying `no SELECT
+privilege`. It is offered at all because a name that vanishes reads as the
+engine not knowing about it, where one that arrives annotated says what is true.
+The same holds for a relation with no grant at all in a `FROM` list, and for a
+join proposal to one — which keeps its `fk:` annotation, the constraint being
+real whether or not the role may use it.
+
+Postgres only. ClickHouse has no `has_column_privilege` equivalent and Trino
+keeps access control outside SQL, so both go on answering exactly as before.
+
+### Answers that were wrong and are now right
+
+`SELECT *⌶` over a relation with one column withheld expanded to every column,
+and accepting it wrote a statement the server refuses — table-level `SELECT`
+implies every column, so withholding one means there is no table-level grant.
+The expansion now names the columns that work and says how many it left out.
+
+`WHERE d.password = ⌶` offered value literals for a column the role cannot read.
+It offers nothing there now, from either source: the planner statistics that
+would have leaked actual data, and the self-enumerating types — a boolean, an
+enum — that leak none but whose comparison is refused all the same.
+
+### For callers
+
+`Suggestion` gains `availability` and `reason`. `MemoryCatalog` gains
+`restricted=`, taking a list of columns per relation or `None` for a relation
+with no grant at all. Over LSP a restricted item carries the `Deprecated` tag
+and its reason in `detail`; the protocol has no disabled state and this does not
+fake one, so a client will still insert what it is given.
+
+`identity=` now does something. It has led the documented cache key since 0.1,
+and this is the feature that gives it meaning: a cache shared between roles
+without it serves one user's readable set to another.
+
+## 0.5.0
+
 ### Wrong answers that are now right
 
 `SELECT * FROM users FOR ⌶` offered `users`, and accepting wrote
@@ -33,24 +101,6 @@ dialect's own `aliases_with` rather than matched against `AS`. `ROWS FROM(⌶`
 offers a function, which is what the grammar puts there.
 
 ### Positions that had no answer
-
-`CREATE TABLE t (id ⌶` offers types, and the caret past one offers the
-constraints that may follow it — `NOT NULL`, `DEFAULT`, `PRIMARY KEY` and, on
-Postgres, `UNIQUE`, `REFERENCES` and `CHECK`. A constraint already written in
-that column is not offered again. A column name being invented still answers
-nothing, as does every nested paren: a type's parameters, a `CHECK`, a foreign
-key's column list.
-
-`CREATE ⌶` answers `TABLE`, and `CREATE TABLE if⌶` answers `IF NOT EXISTS`.
-
-`TABLE users ⌶` is a statement form at last: the relation, then the query tail
-it shares with a `SELECT`, then that relation's own columns after `ORDER BY`.
-`TABLE ONLY ⌶` on Postgres, the only backend that takes the word. ClickHouse has
-no such form and is not offered one.
-
-`CREATE TABLE t AS SELECT …` is still not offered. The clause carries no
-continuations at all, because a clause's own reach into its parentheses put `AS`
-where `CREATE TABLE t (id AS` parses as nothing.
 
 The `FETCH { FIRST | NEXT } … { ONLY | WITH TIES }` tail, at all four of its
 carets. `OFFSET n ⌶` takes `ROW` and `ROWS`. `ORDER BY id ⌶` offers `USING`.
@@ -129,6 +179,65 @@ line counted passes under `tests/reference/`, which is not a path here, against
 *every* xfail in the run — so it read `0/37 passing` the moment another suite
 had pending cases. Both halves are scoped to `tests/queries/` now, and it reads
 `158/158 passing, 0 known gaps`.
+
+### The extension carries its own Python
+
+There is no interpreter to install and no setting pointing at one. Each build
+ships a stripped CPython 3.13 with the language server already inside it,
+unpacked once into the extension's storage the first time a `.sql` file is
+opened.
+
+This closes a failure that had no graceful answer before: an interpreter that is
+present, new enough, and still unable to build a virtual environment. Debian
+unbundles `ensurepip` from `python3.13`, so `python3 -m venv` fails there with a
+message about `apt install python3.13-venv` — and PEP 668, the Windows Store
+stub and a shadowing conda environment each fail differently in the same place.
+The extension no longer asks.
+
+`pysqlsuggestions.pythonPath` is **removed**. Keeping it would mean keeping
+interpreter discovery, virtual-environment creation and the whole matrix of
+environment failures alive on the machines that set it — and almost nobody
+would, so that code would go untested until it broke for someone.
+
+The download is now per platform: nine builds rather than one, between 17 MB
+(win32-arm64) and 34 MB (linux-x64). The marketplace picks the right one;
+installing a `.vsix` by hand means picking the one matching your OS and
+architecture.
+
+### ClickHouse and Trino answer from a catalog in the editor
+
+Both read one now, so `FROM ⌶`, `db.⌶` and `alias.⌶` offer real relations and
+columns against either backend instead of keywords alone. Neither declares
+foreign keys, so join proposals stay Postgres-only; Trino ships no
+relation-search query, so a bare prefix still finds nothing there. Both were
+already true for library users and are now reachable from the extension.
+
+The readers are the library's own, over each backend's HTTP interface —
+`catalogs/clickhouse_http.py` and `catalogs/trino_http.py`, stdlib only. Their
+official clients hard-require lz4, orjson, zstandard or a C extension, every one
+of them to compress a wire carrying seven introspection queries against a cache
+that is warm for the rest of a session. The clients remain supported: a caller
+holding a `trino` connection still passes its cursor to `DbapiCatalog`.
+
+A connection can now say `secure` to speak TLS. Trino refuses password
+authentication without it, and the reader says so at connect time rather than
+sending the password to find out.
+
+`verify` turns certificate checking off for one connection, for the case it
+exists to serve: a self-signed certificate on an internal server. It is off only
+when set to exactly `false` — a missing or malformed value leaves checking on,
+which is the opposite of how every other field in a profile behaves and is
+deliberate. Turning it off stops the hostname being checked too, because a
+self-signed certificate rarely names the host it is reached by and half-checking
+would fail on exactly those endpoints while reading as though something were
+still being verified.
+
+A ClickHouse query that fails part-way through a large result is no longer
+silently truncated. ClickHouse flushes headers before it knows a query will
+succeed, so such a failure arrives as HTTP 200 carrying the rows already sent
+plus an `exception`; the reader returned those rows as a complete answer. It now
+checks for the exception on every response, before the status, and reports the
+server's sentence rather than the JSON around it.
 
 ## 0.4.1
 

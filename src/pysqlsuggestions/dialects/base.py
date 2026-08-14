@@ -352,7 +352,15 @@ class ClauseModel:
 
 
 EXCLUSIVE = (
-    (frozenset({'ASC', 'DESC'}), frozenset({'NULLS FIRST', 'NULLS LAST'})),
+    # `USING` belongs with ASC and DESC rather than beside them: Postgres takes
+    # `ORDER BY x USING >` as the explicit-operator spelling of the same choice,
+    # and refuses `ORDER BY x ASC USING >`. Left out, `ORDER BY total ASC ` went
+    # on offering `USING`, which the acceptance sweep against the server caught.
+    #
+    # Safe despite `USING` also naming a join clause, because `_unchosen` reads
+    # `item_words` rather than `written`: a join's USING is in another clause
+    # entirely, so `JOIN b USING (x) ORDER BY c ` still offers both directions.
+    (frozenset({'ASC', 'DESC', 'USING'}), frozenset({'NULLS FIRST', 'NULLS LAST'})),
     (frozenset({'DISTINCT', 'ALL'}),),
     # Two spellings of the same limit. `LIMIT 10 FETCH FIRST 2 ROWS ONLY` names
     # a row count twice and no server takes it, so writing either settles both.

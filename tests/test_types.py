@@ -8,7 +8,7 @@ import pytest
 
 from pysqlsuggestions.dialects.base import CatalogQueries
 from pysqlsuggestions.ports import SupportsRelationSearch
-from pysqlsuggestions.types import Kind, Projection, Relation, Request, Scope
+from pysqlsuggestions.types import Availability, Candidate, Column, Kind, Projection, Relation, Request, Scope, Table
 
 
 def test_kind_values_are_json_ready_strings() -> None:
@@ -85,3 +85,23 @@ def test_relation_search_is_detected_structurally() -> None:
 def test_a_dialect_may_ship_no_relation_search() -> None:
     """The slot is optional, which is how Trino and ANSI decline it."""
     assert CatalogQueries().relation_search is None
+
+
+def test_catalog_records_default_to_unknown_availability() -> None:
+    """A row nobody asked about claims nothing: AVAILABLE would be an assertion with no evidence."""
+    column = Column(schema='public', table='users', name='id', type='bigint')
+    table = Table(schema='public', name='users')
+    assert column.availability is Availability.UNKNOWN
+    assert table.availability is Availability.UNKNOWN
+
+
+def test_engine_records_default_to_available() -> None:
+    """A keyword or a generated alias has no privilege question — it is insertable by construction."""
+    candidate = Candidate(text='SELECT', kind=Kind.KEYWORD)
+    assert candidate.availability is Availability.AVAILABLE
+    assert candidate.reason is None
+
+
+def test_availability_values_are_strings_like_kind() -> None:
+    """Same reason as Kind: consumers serialise these straight into an editor payload."""
+    assert [state.value for state in Availability] == ['available', 'restricted', 'unknown']

@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI
-from pysqlsuggestions.dialects.base import Clause, ClauseModel, Namespace, Syntax
+from pysqlsuggestions.dialects.base import Clause, ClauseModel, Namespace, Query, Syntax
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
-from pysqlsuggestions.types import ForeignKey, Kind
+from pysqlsuggestions.types import Availability, Column, ForeignKey, Kind, Table
 
 
 def test_extend_appends_without_mutating() -> None:
@@ -103,3 +103,52 @@ def test_only_the_affordable_backends_search_relations() -> None:
     assert CLICKHOUSE.catalog_queries.relation_search is not None
     assert TRINO.catalog_queries.relation_search is None
     assert ANSI.catalog_queries.relation_search is None
+
+
+def _column(query: Query | None, row: tuple[object, ...]) -> Column:
+    """One mapped column. `Query.row` is typed `object`, so narrowing is the caller's job."""
+    assert query is not None
+    found = query.row(row)
+    assert isinstance(found, Column)
+    return found
+
+
+def _relation(query: Query | None, row: tuple[object, ...]) -> Table:
+    """One mapped relation, narrowed the same way."""
+    assert query is not None
+    found = query.row(row)
+    assert isinstance(found, Table)
+    return found
+
+
+def test_the_column_mapper_reads_the_privilege_flag() -> None:
+    """True, False and None are three different answers and none of them is a guess."""
+    query = POSTGRES.catalog_queries.columns
+    assert _column(query, ('public', 'users', 'id', 'bigint', 1, True)).availability is Availability.AVAILABLE
+    assert _column(query, ('public', 'users', 'pw', 'text', 2, False)).availability is Availability.RESTRICTED
+    assert _column(query, ('public', 'users', 'pw', 'text', 2, None)).availability is Availability.UNKNOWN
+
+
+def test_a_relation_whose_columns_are_not_the_question_reports_unknown() -> None:
+    """An index has no grantable columns and SELECT on a sequence means something else."""
+    query = POSTGRES.catalog_queries.tables
+    assert _relation(query, ('public', 'users', 'r', 100, False)).availability is Availability.RESTRICTED
+    assert _relation(query, ('public', 'users_pkey', 'i', 0, False)).availability is Availability.UNKNOWN
+    assert _relation(query, ('public', 'users_id_seq', 'S', 0, False)).availability is Availability.UNKNOWN
+
+
+def test_the_search_queries_report_it_too() -> None:
+    """Or a column found across schemas would know less than the same column fetched by relation."""
+    columns = POSTGRES.catalog_queries.column_search
+    relations = POSTGRES.catalog_queries.relation_search
+    assert _column(columns, ('public', 'users', 'pw', 'text', 2, False)).availability is Availability.RESTRICTED
+    assert _relation(relations, ('public', 'users', 'r', 100, False)).availability is Availability.RESTRICTED
+
+
+def test_the_other_dialects_say_nothing_rather_than_guessing() -> None:
+    """ClickHouse has no has_column_privilege equivalent and Trino exposes nothing through SQL."""
+    for dialect in (CLICKHOUSE, TRINO):
+        query = dialect.catalog_queries.columns
+        assert query is not None
+        assert 'privilege' not in query.sql
+        assert _column(query, ('db', 'users', 'id', 'bigint', 1)).availability is Availability.UNKNOWN

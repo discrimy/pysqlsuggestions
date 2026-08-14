@@ -16,16 +16,26 @@ Accepting one writes the whole clause — relation, alias and condition.
 
 ## What you need
 
-**Python 3.10 or newer on your PATH.** The extension builds its own environment
-from wheels shipped inside it, so nothing is downloaded and your project's
-environment is never touched. If no suitable interpreter is found it says so
-once and stays out of the way; point `pysqlsuggestions.pythonPath` at one if it
-lives somewhere unusual.
+**Nothing.** The extension carries its own Python — a stripped CPython 3.13
+built by [python-build-standalone](https://github.com/astral-sh/python-build-standalone),
+with the language server already installed into it. It is unpacked once, into
+the extension's own storage, the first time you open a `.sql` file.
 
-**PostgreSQL**, for anything schema-aware. ClickHouse, Trino and `ansi` are
-selectable and give you the right keywords and quoting, but read no schema:
-their drivers are not pure Python, and bundling them would mean a separate
-download per operating system.
+Your machine's Python is never looked at, let alone used. There is no virtual
+environment, no `pip` at install time, and no network: a first run on a train
+works.
+
+That is why there is one download per platform rather than one for everyone.
+The marketplace picks the right build for your OS and architecture; installing
+from a `.vsix` file by hand means picking it yourself.
+
+**PostgreSQL, ClickHouse and Trino** all read a catalog, so completion is
+schema-aware against any of them. Postgres additionally answers foreign keys,
+column search and most-common-values, which is where join proposals and value
+hints come from; the other two declare no constraints, so they get neither.
+
+`ansi` is selectable too and completes from the statement alone — keywords,
+aliases, CTE columns and select-list names, with no connection at all.
 
 ## Connections
 
@@ -69,9 +79,8 @@ workspace's `.vscode/settings.json` is edited where it lives.
 
 | setting | what it does |
 | --- | --- |
-| `pysqlsuggestions.connections` | the connections themselves — name, dialect, host, port, database, user |
+| `pysqlsuggestions.connections` | the connections themselves — name, dialect, host, port, database, user, secure, verify |
 | `pysqlsuggestions.defaultConnection` | which one to use |
-| `pysqlsuggestions.pythonPath` | interpreter used to build the extension's own environment, not the one your project runs on |
 
 ## When something is wrong
 

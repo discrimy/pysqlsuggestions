@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import threading
 import time
+from importlib import import_module
 from typing import Any
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
-from pysqlsuggestions_lsp.connections import DRIVERS, Profile, open_catalog
+from pysqlsuggestions_lsp.connections import DRIVERS, Profile, _connect, open_catalog
 
 PROFILE = Profile(dialect='postgres', host='localhost', port=5432, database='app', user='ana', password='secret')
 
@@ -92,12 +93,14 @@ def test_an_unknown_dialect_gives_nothing() -> None:
 
 def test_a_registered_dialect_with_no_bundled_driver_gives_nothing() -> None:
     """
-    ClickHouse is a dialect this library serves and this server does not.
+    A dialect resolving is not enough — something has to be able to read it.
 
-    Its driver is not pure Python, so bundling it would mean one VSIX per
-    platform. The dialect resolving is not enough — a driver has to exist too.
+    `ansi` is the case now that ClickHouse and Trino have readers: it describes
+    a grammar and names no server, so there is nothing to connect to and no
+    driver to name. The same shape is what a third-party dialect registered
+    through the entry point gets.
     """
-    profile = Profile(dialect='clickhouse', host='db')
+    profile = Profile(dialect='ansi', host='db')
     assert open_catalog(profile, connect=lambda p: FakeConnection()) is None
 
 
@@ -174,3 +177,133 @@ def test_one_connection_is_opened_when_queries_arrive_together() -> None:
     for thread in threads:
         thread.join()
     assert len(opened) == 1
+
+
+def test_every_dialect_the_library_serves_has_a_catalog() -> None:
+    """
+    All three backends read a catalog now, and none of them needs a wheel.
+
+    This was three dialects and one driver: pg8000 is pure and the other two
+    clients were not, so ClickHouse and Trino resolved a dialect and no catalog.
+    The stdlib readers close that, and the assertion is written against the
+    whole set rather than the two additions so that a dialect added without a
+    reader is visible here rather than as silence at a caret.
+    """
+    assert set(DRIVERS) == {'postgres', 'clickhouse', 'trino'}
+
+
+def test_the_readers_are_reached_by_module_path_not_by_import() -> None:
+    """DRIVERS names modules so `connections` itself imports no transport."""
+    assert DRIVERS['clickhouse'] == ('pysqlsuggestions.catalogs.clickhouse_http', 'named')
+    assert DRIVERS['trino'] == ('pysqlsuggestions.catalogs.trino_http', 'qmark')
+
+
+def test_each_readers_paramstyle_matches_what_it_declares() -> None:
+    """
+    A paramstyle written twice is a paramstyle that can disagree with itself.
+
+    `DbapiCatalog` is told the value from DRIVERS while the reader rewrites
+    against the one it declares, and a mismatch produces valid-looking SQL with
+    unsubstituted markers in it — which surfaces as an empty completion list,
+    not as an error.
+    """
+    for dialect, (module, paramstyle) in DRIVERS.items():
+        if module.startswith('pysqlsuggestions.'):
+            assert import_module(module).paramstyle == paramstyle, dialect
+
+
+def test_a_clickhouse_profile_opens_a_catalog() -> None:
+    """Nothing is connected — this asserts the profile resolves to a catalog at all."""
+    profile = Profile(dialect='clickhouse', host='localhost')
+    assert open_catalog(profile, connect=lambda _: FakeConnection()) is not None
+
+
+def test_secure_defaults_to_false_and_survives_the_wire() -> None:
+    """
+    A profile that says nothing is plaintext, and one that says so is not.
+
+    Defaulting the other way would be safer in the abstract and wrong here: the
+    docker fixtures are plaintext, and a default that breaks every local setup
+    to protect a remote one nobody described is a default people turn off.
+    """
+    assert Profile(dialect='trino', host='h').secure is False
+    profile = Profile.from_options({'dialect': 'trino', 'host': 'h', 'secure': True})
+    assert profile is not None
+    assert profile.secure is True
+
+
+def test_a_non_boolean_secure_is_ignored_like_every_other_bad_field() -> None:
+    """This is whatever the client put on the wire, and `"yes"` is not True."""
+    profile = Profile.from_options({'dialect': 'trino', 'host': 'h', 'secure': 'yes'})
+    assert profile is not None
+    assert profile.secure is False
+
+
+def test_secure_reaches_a_reader() -> None:
+    """A flag that is parsed and not passed is worse than one that does not exist."""
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='clickhouse', host='h', secure=True), opener=fake_connect)
+    assert seen['secure'] is True
+
+
+def test_secure_is_withheld_from_a_driver_that_never_heard_of_it() -> None:
+    """
+    pg8000 takes `ssl_context`, not `secure`.
+
+    Passing it anyway is a TypeError raised from inside the driver on the first
+    catalog read — which degrades to a catalog-free completion list, so the
+    user sees fewer suggestions and no reason for it.
+    """
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='postgres', host='h', secure=True), opener=fake_connect)
+    assert 'secure' not in seen
+
+
+def test_verify_defaults_on_and_only_an_explicit_false_turns_it_off() -> None:
+    """
+    Every other field fails towards absence; this one fails towards the safe answer.
+
+    A `"no"` typed into settings.json is not False, and reading it as one would
+    silently disable certificate checking on a connection whose owner believed
+    they had asked for something else.
+    """
+    assert Profile(dialect='trino', host='h').verify is True
+    for value, expected in ((False, False), (True, True), ('no', True), (0, True), (None, True)):
+        profile = Profile.from_options({'dialect': 'trino', 'host': 'h', 'verify': value})
+        assert profile is not None
+        assert profile.verify is expected, value
+
+
+def test_verify_reaches_a_reader() -> None:
+    """A verification flag that is parsed and not passed verifies nothing."""
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='trino', host='h', secure=True, verify=False), opener=fake_connect)
+    assert seen['verify'] is False
+    assert seen['secure'] is True
+
+
+def test_verify_is_withheld_from_a_driver_that_never_heard_of_it() -> None:
+    """Same rule as `secure`: pg8000 takes an ssl_context and would raise on either name."""
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return object()
+
+    _connect(Profile(dialect='postgres', host='h', secure=True, verify=False), opener=fake_connect)
+    assert 'verify' not in seen

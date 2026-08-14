@@ -1,6 +1,7 @@
 # Development backends
 
-Three real backends for integration tests and the web demo.
+Three real backends for integration tests and the web demo, plus a fourth service
+that exists only so the readers can be tested against real authentication.
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d --wait
@@ -12,9 +13,34 @@ docker compose -f docker/docker-compose.yml down -v      # and to tear down
 | PostgreSQL 16 | `57432` | `report` / `report`, db `report_service` | report_service's own Django schema, plus a `billing` schema |
 | ClickHouse 24.8 | `57123` (HTTP), `57900` (native) | `report` / `report` | `analytics` and `staging` databases |
 | Trino 468 | `57080` | any user, no password | catalogs `postgresql` and `clickhouse`, federating the other two |
+| Trino 468, secured | `57443` (HTTPS) | `report` / `report`, required | `tpch` only — see below |
 
 Ports are offset into the 57xxx range because this machine already runs several
 other stacks; check `docker ps` before changing them.
+
+## The secured Trino
+
+`trino-secure` runs a second coordinator with TLS and file-based password
+authentication. It is a separate service rather than a flag on the first,
+because enabling `http-server.authentication.type=PASSWORD` makes Trino refuse
+plain HTTP — so one coordinator cannot be both the unauthenticated fixture the
+catalog tests read from and the authenticated one the credential tests need.
+
+It carries `tpch` alone, so it federates nothing and waits on no other service:
+a failure there is never a failure of Postgres or ClickHouse.
+
+Its certificate is **self-signed and generated into a named volume** by the
+`trino-tls-init` service, using `keytool` from the Trino image itself. Nothing
+about it is committed here — a private key in a repository is a private key in
+everyone's clone — and `down -v` discards it, so the next `up` makes a new one.
+
+That is also what makes it the right fixture: connecting to it requires
+`verify: false`, which is the setting those tests exist to exercise.
+
+```bash
+curl -sk https://localhost:57443/v1/info                 # up, no credentials needed
+curl -sk -u report:report https://localhost:57443/v1/statement -d 'SHOW CATALOGS'
+```
 
 ## Why the schema looks like this
 

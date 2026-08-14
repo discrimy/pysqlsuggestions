@@ -626,3 +626,35 @@ def test_clickhouse_and_trino_declare_no_constraints(
     """Neither backend keeps them, so neither offers a proposal and both positions are unchanged."""
     assert list(clickhouse_catalog.foreign_keys('analytics')) == []
     assert list(trino_catalog.foreign_keys('public')) == []
+
+
+def test_clickhouse_row_counts_are_integers_not_strings(clickhouse_catalog: DbapiCatalog) -> None:
+    """
+    UInt64 over JSON is quoted unless the reader says otherwise.
+
+    `Table.rows` feeds ranking, and a string would sort lexically — '9' above
+    '10' — which is a wrong order in a list that still looks entirely healthy.
+    """
+    tables = clickhouse_catalog.tables('analytics')
+    counted = [table for table in tables if table.rows is not None]
+    assert counted, 'no ClickHouse table reported a row count'
+    assert all(isinstance(table.rows, int) for table in counted)
+
+
+def test_clickhouse_columns_bind_two_parameters(clickhouse_catalog: DbapiCatalog) -> None:
+    """The `columns` query is the only one taking $1 and $2, so it is the one that proves binding."""
+    columns = clickhouse_catalog.columns('analytics', 'report_executions')
+    assert columns
+    assert [column.position for column in columns] == sorted(column.position for column in columns)
+
+
+def test_trino_pages_through_a_result_larger_than_one_response(trino_catalog: DbapiCatalog) -> None:
+    """
+    `SHOW FUNCTIONS` returns 846 rows on Trino 468, split across six pages.
+
+    Measured, not assumed: one POST and six GETs. A reader that stopped at the
+    first `nextUri` would return a plausible-looking subset, and nothing else in
+    the suite is big enough to notice.
+    """
+    functions = trino_catalog.functions()
+    assert len(functions) > 500

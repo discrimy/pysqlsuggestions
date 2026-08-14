@@ -34,6 +34,7 @@ from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
+from pysqlsuggestions.types import Availability
 
 HERE = Path(__file__).parent
 MAX_SQL_LENGTH = 20_000
@@ -129,14 +130,29 @@ def _discovered_example(key: str, catalog: DbapiCatalog) -> str | None:
     The shipped examples name the docker fixture's tables, which say nothing on
     someone else's database. Rather than show a query that cannot resolve, pick
     a relation and start one.
+
+    A relation holding a column this role may not read wins, where there is one.
+    Otherwise the first relation with any columns at all.
+
+    The preference matters more than it looks. Opening on a relation nothing is
+    withheld from shows a correct list that demonstrates nothing, and the first
+    relation alphabetically is exactly as likely to be that one as not — which
+    is how pointing the demo at a restricted role produced a page with no
+    evidence of the restriction anywhere on it.
     """
     if key != 'postgres' or POSTGRES_DSN == _DOCKER_PG_DSN:
         return None
     with suppress(Exception):
+        fallback: str | None = None
         for table in catalog.tables(None):
             columns = catalog.columns(table.schema, table.name)
-            if columns:
-                return f'SELECT *\nFROM {table.name} t\nWHERE t.'
+            if not columns:
+                continue
+            opening = f'SELECT *\nFROM {table.name} t\nWHERE t.'
+            if any(column.availability is Availability.RESTRICTED for column in columns):
+                return opening
+            fallback = fallback or opening
+        return fallback
     return None
 
 

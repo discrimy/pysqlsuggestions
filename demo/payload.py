@@ -94,6 +94,12 @@ def _suggestion(suggestion: Suggestion, sql: str, dialect: Dialect, pending: Seq
         'kind': suggestion.kind.value,
         'detail': suggestion.detail,
         'note': suggestion.note,
+        'availability': suggestion.availability.value,
+        # Both, and separately. `availability` decides whether the row is drawn
+        # as usable; `reason` is text, and one candidate carries a reason
+        # without being restricted — a star expansion that dropped columns still
+        # runs, and saying so is the whole point of it.
+        'reason': suggestion.reason,
         'score': suggestion.score,
         'replace_span': list(suggestion.replace_span),
         'takes_arguments': suggestion.takes_arguments,

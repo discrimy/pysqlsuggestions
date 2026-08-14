@@ -13,7 +13,7 @@ implements what its backend actually supports.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
@@ -28,6 +28,7 @@ from pysqlsuggestions.ports import (
     SupportsRelationSearch,
 )
 from pysqlsuggestions.types import (
+    Availability,
     Candidate,
     Column,
     ColumnValue,
@@ -184,12 +185,30 @@ class _Reader:
         self._dialect = dialect
         self._cache = cache
         self._identity = identity
+        self._memo: dict[tuple[str | None, ...], Any] = {}
+        """
+        Answers already given during this request.
+
+        Distinct from `cache`, which belongs to the caller and may be absent. A
+        single completion can ask the same question twice — the relation list
+        serves both the TABLE candidates and the join proposals' availability —
+        and with no cache supplied that would be two round trips for one answer.
+        """
 
     def _key(self, *parts: str) -> tuple[str | None, ...]:
         """The documented cache key: (role, dialect, schema, table)."""
         return (self._identity, self._dialect.name, *parts)
 
     def _read(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
+        if key in self._memo:
+            remembered: _T = self._memo[key]
+            return remembered
+        value = self._read_through(key, produce)
+        self._memo[key] = value
+        return value
+
+    def _read_through(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
+        """The caller's cache, when there is one."""
         if self._cache is None:
             return produce()
         cached = self._cache.get(key)
@@ -211,6 +230,17 @@ class _Reader:
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
         return self._read(self._key(schema or '', table), lambda: self._catalog.columns(schema, table))
+
+    def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
+        """
+        Relations in `schema` the role may read nothing in, as (schema, name) pairs.
+
+        Free at a JOIN caret: the same relation list already answers the TABLE
+        candidates there, and `_read` remembers it within the request.
+        """
+        return frozenset(
+            (table.schema, table.name) for table in self.tables(schema) if table.availability is Availability.RESTRICTED
+        )
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
         """Functions in `schema`, or everywhere."""
@@ -415,7 +445,12 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
     scope = request.scope
 
     if request.clause == 'JOIN' and Kind.TABLE in request.kinds:
-        candidates += joins.relation_joins(scope, _edges(scope, reader), dialect)
+        candidates += joins.relation_joins(
+            scope,
+            _edges(scope, reader),
+            dialect,
+            restricted=reader.unreadable_relations(),
+        )
     elif request.clause == 'ON' and Kind.COLUMN in request.kinds:
         candidates += joins.join_conditions(scope, _edges(scope, reader), dialect)
 
@@ -688,10 +723,20 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     ambiguous = _ambiguous_labels(relations)
     seen: set[tuple[str, ...]] = set()
     names: list[str] = []
+    omitted = 0
     for relation in relations:
         path = _qualifier_for(relation, ambiguous) if qualify else ()
         prefix = '.'.join(quote_if_needed(part, dialect) for part in path)
         for column in _columns_of(relation, reader, seen):
+            if column.availability is Availability.RESTRICTED:
+                # Dropped rather than listed, because this is the only candidate
+                # at this caret the server would accept. Over a partly-restricted
+                # relation `SELECT *` is refused outright — table SELECT implies
+                # every column, so withholding one means there is no table-level
+                # grant — and the expansion turns a statement that errors into
+                # one that runs.
+                omitted += 1
+                continue
             rendered = quote_if_needed(column.text, dialect)
             names.append(f'{prefix}.{rendered}' if prefix else rendered)
     if not names:
@@ -711,8 +756,21 @@ def _expansion(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
             match_text='*',
             literal=True,
             span=request.star,
+            # Deliberately not RESTRICTED: accepting this works. `reason` says
+            # why the list is shorter than the relation, `availability` says
+            # whether accepting succeeds, and here it does — marking it
+            # restricted would sink the one suggestion the server accepts here
+            # underneath the columns it is assembled from.
+            reason=_omission(omitted),
         ),
     ]
+
+
+def _omission(omitted: int) -> str | None:
+    """How many columns the expansion left out, or None when it left out none."""
+    if not omitted:
+        return None
+    return f'{omitted} column{"" if omitted == 1 else "s"} omitted: {_NO_PRIVILEGE}'
 
 
 def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
@@ -794,6 +852,19 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
         column = next((c for c in reader.columns(schema, table) if c.name == path[-1]), None)
         if column is None:
             continue
+        if column.availability is Availability.RESTRICTED:
+            # The check sits here rather than in `_Reader.common_values` for two
+            # reasons. The Column is already in hand, so it costs no lookup —
+            # and this also covers `datatypes.literals`, whose values come from
+            # the type rather than from statistics. Those leak nothing, but a
+            # literal compared against a column the role cannot reference is a
+            # statement the server refuses either way.
+            #
+            # In the resolver rather than in each adapter, because Postgres is
+            # the only backend whose statistics the server already filters by
+            # role: it is every *other* adapter that needs this rule, which is
+            # exactly why it cannot live in them.
+            return []
         # The type first: where it enumerates itself the answer is exhaustive,
         # and statistics could only narrow it to the frequent ones.
         listed = datatypes.literals(column.type)
@@ -950,6 +1021,27 @@ def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
     return path[-2], path[-1]
 
 
+_NO_PRIVILEGE = 'no SELECT privilege'
+"""
+Why a restricted candidate would fail, in the words the server uses.
+
+One string because there is one cause. A column withheld individually and a
+column inside a relation with no grant at all are the same refusal to whoever
+typed it, and Postgres reports both as `permission denied`.
+"""
+
+
+def _restriction(state: Availability) -> tuple[Availability, str | None]:
+    """
+    The availability and reason a candidate carries, given what the catalog said.
+
+    UNKNOWN travels through rather than becoming AVAILABLE. A suggestion drawn
+    from a backend that cannot answer does not know it is readable, and saying
+    so costs nothing: every consumer tests `is RESTRICTED`.
+    """
+    return state, _NO_PRIVILEGE if state is Availability.RESTRICTED else None
+
+
 def _column_candidate(
     column: Column,
     label: str | None = None,
@@ -957,6 +1049,7 @@ def _column_candidate(
     relation: tuple[str, ...] = (),
     position: int | None = None,
 ) -> Candidate:
+    availability, reason = _restriction(column.availability)
     return Candidate(
         text=column.name,
         kind=Kind.COLUMN,
@@ -965,6 +1058,8 @@ def _column_candidate(
         type=column.type,
         qualifier=qualify,
         relation=relation,
+        availability=availability,
+        reason=reason,
     )
 
 
@@ -979,12 +1074,15 @@ def _table_candidate(table: Table, qualify: tuple[str, ...] = (), kind: Kind = K
     perfect match in another schema would lose to a poor match in this one.
     """
     size = f' ~{_as_count(table.rows)} rows' if table.rows is not None else ''
+    availability, reason = _restriction(table.availability)
     return Candidate(
         text=table.name,
         kind=kind,
         detail=f'{table.schema}.{table.name} ({table.kind}){size}',
         qualifier=qualify,
         position=1 if qualify else 0,
+        availability=availability,
+        reason=reason,
     )
 
 

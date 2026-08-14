@@ -65,6 +65,48 @@ a later reader nothing about what was decided.
   else. The advice about being deliberate stands, and is why `CREATE VIEW`,
   `CREATE INDEX` and `CREATE TABLE … AS SELECT` are still not here.
 
+- **Per-role availability.** A column the connected role may not read is offered
+  last carrying `no SELECT privilege` rather than as though it would work.
+  `SELECT *` over a partly-granted relation expands to the columns that run, no
+  value literal is drawn from a restricted column, and a join proposal to a
+  relation with no grant at all sinks with its `fk:` annotation intact.
+
+  This was the one entry with a full specification already written — `plan.md`
+  §7, in git at `f4cb9cd` — and three parts of it turned out to be wrong.
+
+  It asked for **two table-level booleans**: `has_any_column_privilege` to grey
+  a whole relation, and `has_table_privilege` to mark one whose `SELECT *` will
+  error. The second needs no column. Table-level `SELECT` implies every column,
+  so losing it is *exactly* "some column was granted individually" — which the
+  column rows already say. `03-roles.sql` had documented the same equivalence
+  from the other side for a year, in the comment explaining why a column-level
+  `REVOKE` cannot subtract from a table-level `GRANT`.
+
+  It asked for restricted items to sink to **the bottom of their kind group**.
+  No constant expresses that: `_KIND_STEP` is 5.0 against match strengths
+  spanning 25 to 100, so any penalty small enough to stay inside a kind leaves a
+  restricted exact-prefix match above an available substring one. A leading sort
+  term states the rule in one sentence instead, and settles rank's `(kind, text)`
+  dedupe in the readable candidate's favour as a side effect.
+
+  It located the **value-hint check** in the capability wrapper. It belongs in
+  `_values`, where the `Column` is already in hand — which costs no lookup and
+  also covers the type-derived literals the plan did not consider. A boolean's
+  or an enum's values leak no rows, but the comparison they would be written
+  into is refused all the same.
+
+  Two things it got exactly right and both were load-bearing. `role` leading the
+  cache key from v0.1, on an argument alone, was correct — the test that finally
+  proves it passed on its first run. And `UNKNOWN` as a third state: without it
+  the catalog records would default to `AVAILABLE`, which is a claim no snapshot
+  and no ClickHouse row has any evidence for.
+
+  The join rule is narrower than specified. It works at relation level, not
+  column level, because at `JOIN ⌶` the target's columns have not been fetched
+  and fetching them would be one read per proposal. An FK column is a key column
+  and key columns are granted; the columns withheld individually are not the
+  ones constraints are declared on.
+
 - **Relation kinds finer than one notch.** `DROP VIEW ⌶`, `DROP INDEX ⌶` and
   `DROP MATERIALIZED VIEW ⌶` offer what they mean, and `DROP TABLE ⌶` stopped
   offering views — which the server refuses, so that half was a wrong answer
@@ -146,10 +188,6 @@ paragraph, repeated here so the whole list lives in one place:
 - **Physical layout ranking.** `Table.rows` is fetched and stored; nothing
   scores on it. A relation with millions of rows and one with dozens are
   currently indistinguishable in a ranked list.
-- **Per-role availability.** The `Availability` idea — what the connected role
-  may actually read — exists in the design and nowhere in the code. Postgres
-  statistics are already role-filtered by the server, which covers value
-  suggestions and nothing else.
 - **Documentation at the caret.** No comment, column description or function
   signature is offered as hover text. `Function.args` is fetched and used only
   to decide where the caret lands.

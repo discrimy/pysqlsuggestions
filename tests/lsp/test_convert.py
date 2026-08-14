@@ -10,10 +10,16 @@ holds the right items, and is quietly wrong.
 
 from __future__ import annotations
 
-from lsprotocol.types import CompletionItem, CompletionItemKind, InsertTextFormat, TextEdit
+from lsprotocol.types import (
+    CompletionItem,
+    CompletionItemKind,
+    CompletionItemTag,
+    InsertTextFormat,
+    TextEdit,
+)
 
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.types import Kind, Suggestion
+from pysqlsuggestions.types import Availability, Kind, Suggestion
 from pysqlsuggestions_lsp.convert import match_term, to_item
 from pysqlsuggestions_lsp.documents import line_starts
 
@@ -226,3 +232,41 @@ def test_an_expansion_replaces_the_star_it_was_offered_for() -> None:
     edit = edit_of(item('SELECT * FROM users u', offered))
     assert (edit.range.start.character, edit.range.end.character) == (7, 8)
     assert edit.new_text == 'id, name, email'
+
+
+def test_a_restricted_item_is_tagged_and_says_why() -> None:
+    """Strikethrough is the closest thing the protocol has to a disabled state."""
+    offered = suggestion(
+        'password',
+        Kind.COLUMN,
+        (7, 7),
+        detail='users.password :: text',
+        availability=Availability.RESTRICTED,
+        reason='no SELECT privilege',
+    )
+    result = item('SELECT ', offered)
+    assert result.tags == [CompletionItemTag.Deprecated]
+    assert result.detail is not None
+    assert 'no SELECT privilege' in result.detail
+
+
+def test_an_available_item_carries_no_tag() -> None:
+    """Every ordinary suggestion, which is nearly all of them."""
+    assert item('SELECT ', suggestion('id', Kind.COLUMN, (7, 7))).tags is None
+
+
+def test_all_three_annotations_reach_the_one_field_a_client_has() -> None:
+    """detail says what it is, note why it won, reason why it will fail. None may be dropped."""
+    offered = suggestion(
+        'flight f ON b.flight_id = f.id',
+        Kind.JOIN,
+        (7, 7),
+        detail='joins booking',
+        note='fk: flight.id',
+        reason='no SELECT privilege',
+    )
+    detail = item('SELECT ', offered).detail
+    assert detail is not None
+    assert 'joins booking' in detail
+    assert 'fk: flight.id' in detail
+    assert 'no SELECT privilege' in detail

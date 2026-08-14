@@ -95,7 +95,7 @@ class FakeCursor:
 
 def test_catalog_maps_rows_through_the_dialect() -> None:
     """The adapter holds no schema knowledge; the dialect's row mapper does."""
-    cursor = FakeCursor([('public', 'reports_report', 'id', 'bigint', 1)])
+    cursor = FakeCursor([('public', 'reports_report', 'id', 'bigint', 1, True)])
     catalog = DbapiCatalog(lambda: cursor, POSTGRES, paramstyle='format')
     columns = catalog.columns('public', 'reports_report')
     assert [(c.schema, c.table, c.name, c.type, c.position) for c in columns] == [
@@ -150,7 +150,7 @@ def test_search_relations_is_inert_when_the_dialect_ships_no_query() -> None:
 
 def test_search_relations_maps_rows_through_the_dialect() -> None:
     """The schema travels with the row, because that is what makes the insertion qualifiable."""
-    cursor = FakeCursor([('billing', 'invoices', 'r', 42)])
+    cursor = FakeCursor([('billing', 'invoices', 'r', 42, True)])
     catalog = DbapiCatalog(lambda: cursor, POSTGRES, paramstyle='format')
     [found] = catalog.search_relations('invo', 10)
     assert (found.schema, found.name, found.kind) == ('billing', 'invoices', 'table')

@@ -1339,9 +1339,21 @@ def words_in_item(tokens: Sequence[Token], caret: int, dialect: Dialect) -> froz
     """
     Unquoted keywords written in the caret's own list item, at its own depth.
 
-    An item runs from the last comma to the caret. Some words are one choice
-    made once — a sort direction, a nulls placement — and the clause's
-    continuation list cannot know which of them the author already picked.
+    An item runs from the last comma, or from the start of its own clause,
+    to the caret. Some words are one choice made once — a sort direction, a
+    nulls placement — and the clause's continuation list cannot know which of
+    them the author already picked.
+
+    Stopping at the clause is what makes the answer about *this* item. Without
+    it the run reached back across the whole statement whenever no comma
+    intervened, so `JOIN b USING (id) ORDER BY x ` reported `USING` as a word of
+    the ORDER BY item and settled the sort-direction choice that word shares
+    with `ASC`. The same shape as the bug `at_the_clause_start` carried, in the
+    other function that walks back from the caret.
+
+    The clause's own name stays in the set, because a clause can itself be one
+    half of a choice: `LIMIT 10 ` must not go on offering `FETCH`, and `LIMIT`
+    is the only evidence it was written.
 
     A select item's `*` is reported as `*`, which no keyword can collide with.
     It is not a word, but what it rules out is the same kind of thing the words
@@ -1357,6 +1369,8 @@ def words_in_item(tokens: Sequence[Token], caret: int, dialect: Dialect) -> froz
             break
         if token.type is TokenType.IDENT and not token.quoted:
             found.append(token.value.upper())
+            if _clause_starting_at(tokens, index, len(tokens), dialect.clauses) is not None:
+                break
         elif token.type is TokenType.OPERATOR and token.text == '*' and _star_is_an_item(tokens, index, dialect):
             found.append('*')
     return frozenset(found)

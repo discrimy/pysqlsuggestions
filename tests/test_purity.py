@@ -44,6 +44,25 @@ def test_import_pulls_in_no_drivers() -> None:
     assert not (DRIVERS & loaded), f'drivers leaked into import: {sorted(DRIVERS & loaded)}'
 
 
+READERS = {'pysqlsuggestions.catalogs.trino_http', 'pysqlsuggestions.catalogs.clickhouse_http'}
+
+
+def test_import_pulls_in_no_catalog_readers() -> None:
+    """
+    The stdlib readers are adapters, and no adapter is imported by the package root.
+
+    `test_import_pulls_in_no_drivers` guards the same property against
+    third-party drivers and cannot see these: they take no dependency, so a
+    reader reaching `sys.modules` on a bare import would leak past every check
+    the project has. Two backends now have their transport inside this library,
+    which is why the guard needs restating rather than assuming.
+    """
+    code = 'import sys, pysqlsuggestions; print(" ".join(sorted(sys.modules)))'
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
+    loaded = set(result.stdout.split())
+    assert not (READERS & loaded), f'a catalog reader leaked into import: {sorted(READERS & loaded)}'
+
+
 def _imported_modules(path: Path) -> set[str]:
     """Fully-qualified module names imported by `path`, resolving relative imports."""
     package_parts = path.relative_to(ENGINE.parents[1]).with_suffix('').parts
@@ -171,3 +190,47 @@ def test_the_settings_schema_has_nowhere_to_put_a_password() -> None:
     profile = properties['pysqlsuggestions.connections']['items']
     assert 'password' not in profile['properties']
     assert profile['additionalProperties'] is False
+
+
+def test_the_extension_declares_no_python_requirement_it_no_longer_has() -> None:
+    """
+    The VSIX carries its interpreter, so nothing may still tell a user to install one.
+
+    Left behind, the README and the settings schema keep describing an extension
+    that stopped existing — and a requirement a user cannot satisfy is worse than
+    no documentation, because they will go and satisfy it.
+    """
+    package = json.loads((ROOT / 'editors' / 'vscode' / 'package.json').read_text(encoding='utf-8'))
+    settings = package['contributes']['configuration']['properties']
+    assert 'pysqlsuggestions.pythonPath' not in settings
+    readme = (ROOT / 'editors' / 'vscode' / 'README.md').read_text(encoding='utf-8')
+    assert 'on your PATH' not in readme
+    assert 'pythonPath' not in readme
+
+
+def test_the_lock_names_a_runtime_for_every_target_the_build_packages() -> None:
+    """
+    Two lists that must agree, in two files, neither of which reads the other.
+
+    `TARGETS` decides what `vsce package --target` is invoked for and the lock
+    decides what can be fetched, so a target in one and not the other is a build
+    that fails eight-ninths of the way through — after twenty minutes of
+    downloads.
+    """
+    from scripts.runtime import LOCK, TARGETS, read_lock, verify_lock
+
+    assets = read_lock(LOCK.read_text(encoding='utf-8'))
+    assert set(assets) == set(TARGETS)
+    assert verify_lock(assets) == []
+
+
+def test_the_bundle_ships_a_runtime_and_not_the_wheels_that_built_it() -> None:
+    """
+    `bundled/wheels` feeds the install that produced the runtime and has nothing to do at run time.
+
+    Shipping it would add a megabyte of already-installed packages to each of
+    the nine builds, and would give a future reader two plausible places to look
+    for the code that actually runs.
+    """
+    ignored = (ROOT / 'editors' / 'vscode' / '.vscodeignore').read_text(encoding='utf-8')
+    assert 'bundled/wheels/**' in ignored
