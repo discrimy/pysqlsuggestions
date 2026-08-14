@@ -1,12 +1,17 @@
 /**
- * The extension's private Python environment.
+ * The interpreter the VSIX carries.
  *
- * Built once per version from wheels inside the VSIX, with `--no-index` so the
- * install cannot reach the network: a first run on a train must work, and a
- * wheel that is missing is a build bug rather than a slow download.
+ * There is no interpreter discovery here any more, and that is the point. The
+ * extension used to find a `python3` and build a venv in it, which fails in an
+ * open-ended number of ways — an unbundled `ensurepip`, PEP 668, a Windows
+ * Store stub, a conda environment shadowing what we install. Every one of them
+ * is a separate detection rule written against a machine we do not have, and
+ * the graceful answer to an open-ended set of environment failures is to stop
+ * depending on the environment.
  *
- * The workspace's own environment is never touched. A user who curated a
- * project venv did not curate it for this.
+ * What is left is: unpack an archive once per version, mark its interpreter
+ * executable, remember that it worked. The workspace's own environment is
+ * never touched, and neither is the machine's.
  *
  * Everything that touches the outside world is injected, so every decision here
  * is testable without spawning a process — which matters because the failures
@@ -18,108 +23,62 @@ export interface Runtime {
   ready: boolean;
 }
 
-/** The library's own floor. A venv below it installs none of the wheels. */
-export const MINIMUM_PYTHON = '3.10';
+/** Where the archive is unpacked. One directory, replaced wholesale. */
+export function runtimeRoot(root: string): string {
+  return `${root}/runtime`;
+}
 
 /**
- * Whether an interpreter reporting `version` can run the server.
+ * The bundled interpreter's path.
  *
- * Checking that `--version` exits zero is not enough, and this is not a
- * hypothetical: on Windows `python3` is often a Store stub that prints
- * `Python`, exits zero and installs nothing, and a system `python` of 3.9 will
- * happily build a venv that then refuses every wheel in the bundle. Both
- * produce a working-looking extension with no completion in it.
+ * Every python-build-standalone archive unpacks to a single `python/`
+ * directory. Windows puts the executable at its root; everyone else under
+ * `bin/`, where `python3` is a symlink the archive carries.
  */
-export function meetsMinimum(reported: string): boolean {
-  const match = /^(\d+)\.(\d+)/.exec(reported.trim());
-  if (match === null) {
-    return false;
-  }
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  return major > 3 || (major === 3 && minor >= 10);
+export function interpreterPath(root: string, platform: NodeJS.Platform): string {
+  const base = `${runtimeRoot(root)}/python`;
+  return platform === 'win32' ? `${base}/python.exe` : `${base}/bin/python3`;
 }
 
 /**
- * The first candidate that runs and is new enough, or undefined.
+ * Where the installed-version marker lives — beside the runtime, never inside it.
  *
- * `probe` reports an interpreter's version and throws when it cannot run at
- * all. Failures are swallowed per candidate because only the caller knows
- * whether running out of them matters.
- */
-export async function findInterpreter(
-  candidates: readonly string[],
-  probe: (command: string) => Promise<string>,
-): Promise<string | undefined> {
-  for (const candidate of candidates) {
-    try {
-      if (meetsMinimum(await probe(candidate))) {
-        return candidate;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return undefined;
-}
-
-export interface EnsureOptions {
-  root: string;
-  /** What the installed environment must match — see `stampFor`. */
-  version: string;
-  wheelDir: string;
-  platform: NodeJS.Platform;
-  findPython: () => Promise<string | undefined>;
-  run: (command: string, args: string[]) => Promise<void>;
-  readStamp: () => Promise<string | undefined>;
-  writeStamp: (value: string) => Promise<void>;
-}
-
-/** Where the venv's interpreter sits, which differs by platform. */
-export function venvPython(root: string, platform: NodeJS.Platform): string {
-  return platform === 'win32' ? `${root}/venv/Scripts/python.exe` : `${root}/venv/bin/python`;
-}
-
-/**
- * Where the installed-version marker lives — beside the venv, never inside it.
- *
- * Inside, deleting a broken venv would delete the evidence that it was ever
- * built, and a half-deleted one would keep a stamp claiming it was fine.
+ * Inside, deleting a broken tree would delete the evidence that it was ever
+ * unpacked, and a half-deleted one would keep a stamp claiming it was fine.
  */
 export function stampPath(root: string): string {
   return `${root}/installed.txt`;
 }
 
 /**
- * Whether the environment has to be built for `stamp`.
+ * Whether the runtime has to be unpacked for `stamp`.
  *
  * Any difference means install, not just an older one: a downgraded extension
- * carries wheels its existing venv has never seen either.
+ * carries an archive its existing tree has never seen either.
  */
 export function needsInstall(existing: string | undefined, wanted: string): boolean {
   return existing !== wanted;
 }
 
 /**
- * What the installed environment must match: the version, and the bundle.
+ * What the installed runtime must match: the version, and the archive.
  *
  * The version alone is not enough, and that is not hypothetical — a server
- * rebuilt under an unchanged version once left a venv holding a package with no
- * `check.py` in it, and nothing noticed because the number had not moved. The
- * wheels are the thing actually installed, so the wheels are what is fingerprinted.
+ * rebuilt under an unchanged version once left an environment holding a package
+ * with no `check.py` in it, and nothing noticed because the number had not
+ * moved. The archive is the thing actually installed, so the archive is what is
+ * fingerprinted.
  *
- * Names and sizes rather than content hashes: reading twelve wheels on every
- * activation to detect a change that only happens when the extension is
- * rebuilt would be paying constantly for a rare event.
+ * Name and size rather than a content hash: reading forty megabytes on every
+ * activation to detect a change that only happens when the extension is rebuilt
+ * would be paying constantly for a rare event.
  *
- * Sorted, because directory order is not a fact about the bundle and
- * reinstalling at random would be worse than not reinstalling at all.
+ * `undefined` when the archive cannot be read, which makes the stamp depend on
+ * the version alone. The extraction step reports a missing archive far more
+ * clearly than a stamp mismatch ever would.
  */
-export function stampFor(version: string, wheels: readonly { name: string; size: number }[]): string {
-  const listed = [...wheels]
-    .map((wheel) => `${wheel.name}:${String(wheel.size)}`)
-    .sort()
-    .join('|');
+export function stampFor(version: string, archive: { name: string; size: number } | undefined): string {
+  const listed = archive === undefined ? '' : `${archive.name}:${String(archive.size)}`;
   let hash = 0;
   for (let index = 0; index < listed.length; index += 1) {
     hash = (Math.imul(hash, 31) + listed.charCodeAt(index)) | 0;
@@ -128,46 +87,46 @@ export function stampFor(version: string, wheels: readonly { name: string; size:
   return `${version}+${(hash >>> 0).toString(16)}`;
 }
 
+export interface EnsureOptions {
+  root: string;
+  /** What the installed runtime must match — see `stampFor`. */
+  version: string;
+  /** The bundled archive, inside the VSIX. */
+  archive: string;
+  platform: NodeJS.Platform;
+  extract: (archive: string, into: string) => Promise<void>;
+  makeExecutable: (path: string) => Promise<void>;
+  remove: (path: string) => Promise<void>;
+  readStamp: () => Promise<string | undefined>;
+  writeStamp: (value: string) => Promise<void>;
+}
+
 /**
  * The interpreter to run the server with.
  *
  * `ready` false means the caller should report and stay dormant — never
- * half-start. The only unrecoverable case is having no interpreter at all,
- * and in that case nothing is run and nothing is written.
+ * half-start. Nothing is written on failure, so the next activation tries again
+ * rather than trusting a stamp over a tree that is not there.
  */
-export async function ensureVenv(options: EnsureOptions): Promise<Runtime> {
-  const python = venvPython(options.root, options.platform);
+export async function ensureRuntime(options: EnsureOptions): Promise<Runtime> {
+  const python = interpreterPath(options.root, options.platform);
   if (!needsInstall(await options.readStamp(), options.version)) {
     return { python, ready: true };
   }
 
-  const found = await options.findPython();
-  if (found === undefined) {
-    return { python, ready: false };
-  }
-
   try {
-    await options.run(found, ['-m', 'venv', `${options.root}/venv`]);
-    await options.run(python, [
-      '-m',
-      'pip',
-      'install',
-      '--no-index',
-      // pip skips a distribution whose version is already installed, whatever
-      // the wheel now contains — "requirement already satisfied", and the old
-      // files stay. Since we only reach here when the bundle's fingerprint
-      // changed, replacing unconditionally is the point rather than a cost.
-      '--force-reinstall',
-      '--find-links',
-      options.wheelDir,
-      // The extra is what carries the driver. Without it the server installs
-      // and can read no catalog at all, which looks like a working extension
-      // that has stopped being schema-aware.
-      'pysqlsuggestions-lsp[pg8000]',
-    ]);
+    // Removed rather than extracted over: a half-unpacked tree from an
+    // activation the user killed would merge with the new one, and the result
+    // looks exactly like a complete interpreter.
+    await options.remove(runtimeRoot(options.root));
+    await options.extract(options.archive, runtimeRoot(options.root));
+    // The archive carries the bit, but a zip in the middle of the delivery
+    // chain does not, and an interpreter that is present and not executable is
+    // the failure that looks most like success.
+    await options.makeExecutable(python);
   } catch {
-    // No stamp on failure: a stamp written here is a broken environment that
-    // never rebuilds itself, and the user has no way to learn that is why.
+    // No stamp on failure: a stamp written here is a broken runtime that never
+    // rebuilds itself, and the user has no way to learn that is why.
     return { python, ready: false };
   }
 

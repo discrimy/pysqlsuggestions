@@ -6,6 +6,30 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### The extension carries its own Python
+
+There is no interpreter to install and no setting pointing at one. Each build
+ships a stripped CPython 3.13 with the language server already inside it,
+unpacked once into the extension's storage the first time a `.sql` file is
+opened.
+
+This closes a failure that had no graceful answer before: an interpreter that is
+present, new enough, and still unable to build a virtual environment. Debian
+unbundles `ensurepip` from `python3.13`, so `python3 -m venv` fails there with a
+message about `apt install python3.13-venv` — and PEP 668, the Windows Store
+stub and a shadowing conda environment each fail differently in the same place.
+The extension no longer asks.
+
+`pysqlsuggestions.pythonPath` is **removed**. Keeping it would mean keeping
+interpreter discovery, virtual-environment creation and the whole matrix of
+environment failures alive on the machines that set it — and almost nobody
+would, so that code would go untested until it broke for someone.
+
+The download is now per platform: nine builds rather than one, between 17 MB
+(win32-arm64) and 34 MB (linux-x64). The marketplace picks the right one;
+installing a `.vsix` by hand means picking the one matching your OS and
+architecture.
+
 ### ClickHouse and Trino answer from a catalog in the editor
 
 Both read one now, so `FROM ⌶`, `db.⌶` and `alias.⌶` offer real relations and

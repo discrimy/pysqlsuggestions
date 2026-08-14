@@ -1,0 +1,12 @@
+# python-build-standalone, one archive per VS Code target.
+# Regenerate with: uv run python -m scripts._fetch_runtime_lock
+# release 20260807, CPython 3.13, stripped.
+44bf9ae71f4b45e3ba3104ae331c6eff3f7002593c26fd12453eb9310c4f259a  win32-x64  cpython-3.13.15+20260807-x86_64-pc-windows-msvc-install_only_stripped.tar.gz
+aa90bcd4eccbec2753cd6e134d7a0477b23f2f972d83c7894e507bbc874c4fef  win32-arm64  cpython-3.13.15+20260807-aarch64-pc-windows-msvc-install_only_stripped.tar.gz
+faae10a9faa9bec06da009ac69326cc1d9691dc138fec6a1b69159dff1781f35  linux-x64  cpython-3.13.15+20260807-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
+1dfc9565c26f8892a33202b5966bdf9ff45c56a57b06e8fa65fecf05030afe5b  linux-arm64  cpython-3.13.15+20260807-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz
+1d1fb61733e73d173105b158b26a18a4019a15bfb583deaec5c46fb869849e9e  linux-armhf  cpython-3.13.15+20260807-armv7-unknown-linux-gnueabihf-install_only_stripped.tar.gz
+00613f7203052c2605f0a8f8f837d5858771f663bdadf3c17d51f40aabf280f3  alpine-x64  cpython-3.13.15+20260807-x86_64-unknown-linux-musl-install_only_stripped.tar.gz
+05e5f536da0990e707545631b2b871e2a590d773771fbab24f663d72d43f9e6e  alpine-arm64  cpython-3.13.15+20260807-aarch64-unknown-linux-musl-install_only_stripped.tar.gz
+187eed2282e9c3a5b6b14953d564ee25a9f35cf2c209c9fa292186ee48b0e4a1  darwin-x64  cpython-3.13.15+20260807-x86_64-apple-darwin-install_only_stripped.tar.gz
+dbadb0ffe46f8bace50daaf8a0c5fc6903c003690776da9eb5269e33c856bb53  darwin-arm64  cpython-3.13.15+20260807-aarch64-apple-darwin-install_only_stripped.tar.gz

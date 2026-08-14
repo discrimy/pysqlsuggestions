@@ -20,6 +20,11 @@ dist/
 # Fetched by scripts/vendor_pyodide.py, verified against scripts/pyodide.lock
 .pyodide/
 
+# Interpreters fetched by scripts/build_vsix.py, verified against
+# scripts/runtime.lock. Nine of them is 238 MB, so the cache is load-bearing
+# rather than a convenience — but it is still a download, not a source.
+.cache/
+
 # The VS Code extension's build output. `bundled/` is assembled by
 # scripts/build_vsix.py from wheels built here plus their pure-Python
 # dependencies, so it is reproducible rather than tracked.
