@@ -98,6 +98,16 @@ An UPDATE or a DELETE has no result to group or order, and every one of these
 offered after a finished one wrote SQL the server refuses.
 """
 
+_COLUMN_CONSTRAINTS = ('NOT NULL', 'NULL', 'DEFAULT', 'PRIMARY KEY')
+"""
+What may follow a column's type, in the baseline.
+
+The four that at least two of the three shipped backends accept, verified
+against the containers rather than read off the standard. UNIQUE, REFERENCES and
+CHECK are Postgres's alone here — ClickHouse and Trino both refuse all three —
+so they are declared there, the way DROP SEQUENCE is.
+"""
+
 CLAUSES = ClauseModel(
     clauses=(
         # A CTE body takes a whole statement. `VALUES` is in `opens_a_group` and
@@ -333,6 +343,7 @@ CLAUSES = ClauseModel(
             name='CREATE TABLE',
             suggests=(),
             before_the_item=('IF NOT EXISTS',),
+            defines_columns=_COLUMN_CONSTRAINTS,
         ),
         # No `followed_by`: a call ends the statement, and an empty continuation
         # list is how a clause says so — the same rule that stops RETURNING and

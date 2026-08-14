@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
-from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.dialects.base import Clause, Dialect
 from pysqlsuggestions.engine.analyse import (
     after_as,
     after_cast,
@@ -22,6 +22,7 @@ from pysqlsuggestions.engine.analyse import (
     clauses_written,
     comparand_at,
     continues_a_keyword,
+    defines_a_column,
     depth_at,
     in_literal,
     in_placeholder,
@@ -98,6 +99,17 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         # name, and an editor still needs the range a completion would replace
         # even when there is nothing to put in it.
         return Request(kinds=(), prefix=prefix, replace_span=span, clause=clause, scope=scope)
+    defines = defines_a_column(tokens, lo, hi, caret, clause, dialect.clauses)
+    if defines is not None:
+        return _defining_a_column(
+            defines,
+            dialect.clauses.get(clause) if clause else None,
+            clause,
+            scope,
+            prefix,
+            span,
+            words_in_item(tokens, caret, dialect),
+        )
     continues, only = _continues(tokens, lo, hi, caret, dialect, clause, prefix)
     expecting = _expecting(tokens, lo, hi, caret, clause, dialect)
 
@@ -199,6 +211,59 @@ def _inside_a_literal(
         comparand=comparand,
         writes_a_literal=True,
     )
+
+
+def _defining_a_column(
+    where: Literal['name', 'type', 'constraint'],
+    governing: Clause | None,
+    clause: str | None,
+    scope: Scope | None,
+    prefix: str,
+    span: tuple[int, int],
+    held: frozenset[str],
+) -> Request:
+    """
+    What a caret inside a parenthesised column definition admits.
+
+    Three positions and three answers. A name being invented has none. A type
+    comes from the dialect's own list, which `CAST(x AS ⌶)` already reads. The
+    constraints ride on `continues` rather than on the clause's continuations,
+    because that is what the field means — words finishing the construct under
+    the caret, where a clause's own list would be talking about the statement.
+
+    `held` is what the item already contains, and filtering by it is not
+    optional: `engine/local.py` renders `continues` verbatim, and the
+    `_unchosen` pass that stops a clause repeating its own continuations lives
+    in `resolve._keywords`, which this field deliberately skips. Every earlier
+    user of `continues` was a set of alternatives at a single caret, where a
+    repeat could not arise. A constraint list is the first where several are
+    written in sequence, so it is the first that has to say so.
+
+    An early return like `in_placeholder` above, rather than a narrowing of what
+    follows: both halves of the answer have to go quiet in the name position,
+    the kinds as much as the keywords.
+    """
+    if where == 'type':
+        return Request(
+            kinds=(Kind.TYPE,),
+            prefix=prefix,
+            replace_span=span,
+            clause=clause,
+            scope=scope,
+            expecting='type',
+        )
+    if where == 'constraint' and governing is not None:
+        unspent = tuple(word for word in governing.defines_columns if not set(word.split()) <= held)
+        if unspent:
+            return Request(
+                kinds=(Kind.KEYWORD,),
+                prefix=prefix,
+                replace_span=span,
+                clause=clause,
+                scope=scope,
+                continues=unspent,
+            )
+    return Request(kinds=(), prefix=prefix, replace_span=span, clause=clause, scope=scope)
 
 
 def _literal_argument_kinds(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple[Kind, ...]:

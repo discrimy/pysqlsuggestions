@@ -146,12 +146,14 @@ def test_an_unmodelled_form_offers_nothing() -> None:
     about. It used to say `SELECT`.
 
     `CALL` was on this list and has been modelled since; what it answers is
-    asserted in `tests/test_procedures.py`. The rule is unchanged — these are
-    the forms still unmodelled, and the list is expected to shrink.
+    asserted in `tests/test_procedures.py`. `CREATE TABLE t (id ⌶` was on it
+    too, and `tests/test_create_table.py` now asserts the types it offers. The
+    rule is unchanged — these are the forms still unmodelled, and the list is
+    expected to go on shrinking.
     """
     assert offered('GRANT ') == []
     assert offered('VACUUM ') == []
-    assert offered('CREATE TABLE t (id ') == []
+    assert offered('REINDEX ') == []
 
 
 def test_an_empty_editor_still_offers_the_statement_starts() -> None:

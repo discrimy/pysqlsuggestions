@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from functools import cache
+from typing import Literal
 
 from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
@@ -401,6 +402,99 @@ def _plain_word(tokens: Sequence[Token], index: int) -> str | None:
     if token.type is not TokenType.IDENT or token.quoted:
         return None
     return token.value.upper()
+
+
+def defines_a_column(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    clause: str | None,
+    clauses: ClauseModel,
+) -> Literal['name', 'type', 'constraint'] | None:
+    """
+    Where in a parenthesised column definition the caret sits, or None if outside one.
+
+    `CREATE TABLE t (id integer NOT NULL, email text)` is an alternation rather
+    than a list of one thing: each item invents a name, then names a type, then
+    takes any number of constraints. Only the last two can be answered — a name
+    being invented has nothing behind it in any catalog.
+
+    Which of the three it is comes from counting the item's plain words since
+    the last comma, at the list's own depth. Counting rather than parsing is
+    what makes every nested construct fall out for free: `numeric(10, 2)`,
+    `CHECK (x > 0)`, `REFERENCES users (id)` and `PRIMARY KEY (a, b)` all sit
+    one level deeper, and none of them is named here.
+
+    A two-word type — `double precision` — reads as a constraint position,
+    because a count cannot see that the type is unfinished. Deliberate: the
+    caret before it offers `double precision` whole, so only somebody typing the
+    first word by hand reaches the bad caret. The alternative, offering types at
+    every caret past the name, writes `id integer text`.
+    """
+    governing = clauses.get(clause) if clause else None
+    if governing is None or not governing.defines_columns:
+        return None
+
+    opening = _definition_paren(tokens, lo, hi, caret, governing.name, clauses)
+    if opening < 0 or depth_at(tokens, caret) != tokens[opening].depth + 1:
+        return None
+
+    # The word under the caret is being typed rather than finished, so it is not
+    # part of the count: without this the first character of a column name looks
+    # like a completed name and the position answers with types.
+    last = _index_before(tokens, caret)
+    if last >= 0 and tokens[last].type is TokenType.IDENT and tokens[last].end >= caret:
+        last -= 1
+
+    depth = tokens[opening].depth + 1
+    words = 0
+    for index in range(opening + 1, last + 1):
+        token = tokens[index]
+        if token.type in _SKIP or token.depth != depth:
+            continue
+        if token.type is TokenType.PUNCT and token.text == ',':
+            words = 0
+        elif token.type is TokenType.IDENT:
+            words += 1
+    if words == 0:
+        return 'name'
+    return 'type' if words == 1 else 'constraint'
+
+
+def _definition_paren(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    name: str,
+    clauses: ClauseModel,
+) -> int:
+    """
+    Index of the first `(` after the clause called `name`, or -1.
+
+    The clause's own list is the first group it opens, and finding it by
+    position is what lets the caller tell `CREATE TABLE t (id ⌶` from
+    `CREATE TABLE t (id numeric(⌶`. Both are governed by the same clause, and
+    only their depth relative to *this* paren separates them.
+    """
+    after = -1
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type is not TokenType.IDENT or token.quoted or token.end >= caret:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, clauses)
+        if matched is not None and matched[0] == name:
+            after = matched[1]
+    if after < 0:
+        return -1
+    for index in range(after, hi):
+        token = tokens[index]
+        if token.start >= caret:
+            break
+        if token.type is TokenType.PUNCT and token.text == '(':
+            return index
+    return -1
 
 
 def _words_before(tokens: Sequence[Token], caret: int) -> tuple[str, ...]:

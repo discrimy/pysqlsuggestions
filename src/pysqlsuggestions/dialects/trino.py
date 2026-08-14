@@ -106,6 +106,18 @@ TRINO = replace(
     ),
     namespace=Namespace(levels=('catalog', 'schema', 'table')),
     clauses=ANSI.clauses.extend(
+        # Trino takes `NOT NULL` in a column definition and nothing else — NULL,
+        # DEFAULT and PRIMARY KEY are all `mismatched input … Expecting: ')', ','`.
+        # Restated rather than refined through a helper, which is safe only
+        # because this clause deliberately carries no `followed_by`: the trap
+        # `postgres.py`'s `_ansi` exists to close is a hand-copied continuation
+        # list falling behind the canonical clause order, and there is none here.
+        Clause(
+            name='CREATE TABLE',
+            suggests=(),
+            before_the_item=('IF NOT EXISTS',),
+            defines_columns=('NOT NULL',),
+        ),
         # Like LATERAL, and unlike a join: `FROM t, UNNEST(a)` and
         # `CROSS JOIN UNNEST(a)` are right, `FROM t UNNEST(a)` is not.
         Clause(

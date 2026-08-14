@@ -293,6 +293,21 @@ class DialectConformance:
                     expect=(grouped.opens_a_group[0],),
                 ),
             )
+        # Found by what the clause declares rather than by the name
+        # `CREATE TABLE`, so a dialect spelling its DDL differently is still
+        # covered. A new field that changes what a caret admits belongs here:
+        # the corpus ships in the wheel for third-party dialects, which have no
+        # other test at all.
+        defines = next((c for c in dialect.clauses.clauses if c.defines_columns), None)
+        if defines is not None and dialect.types:
+            cases.append(
+                Case(
+                    name='a definition list answers its type position with a type',
+                    sql=f'{defines.name} t (id ',
+                    expect=(dialect.types[0],),
+                    forbid=('users',),
+                ),
+            )
         # Found by what the clause suggests rather than by the name `CALL`, so a
         # dialect spelling its call statement differently is still covered.
         calls = next((c.name for c in dialect.clauses.clauses if Kind.PROCEDURE in c.suggests), None)

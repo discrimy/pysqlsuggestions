@@ -210,6 +210,21 @@ class Clause:
     not after one. `followed_by` cannot serve both without offering `AS` inside
     the body and the body's words after a written name.
     """
+    defines_columns: tuple[str, ...] = ()
+    """
+    Words that may follow a column's type in this clause's parenthesised list.
+
+    A non-empty tuple is also what marks the clause as opening one, the way
+    `opens_a_group` marks a clause as opening a body. A separate flag beside the
+    list would let a dialect declare a definition list with no constraint words
+    and get silence at every caret past a type — a state worth making
+    unspellable.
+
+    Not `opens_a_group`, which names what may *begin* a group. A definition list
+    has no opening word; it has an alternation. The names in it are the author's
+    to invent and this engine has nothing to invent them from, so only the
+    second half of each item can be answered at all.
+    """
     relation_kinds: tuple[str, ...] = ()
     """
     Which `Table.kind` values this clause's relation position admits.
@@ -489,7 +504,16 @@ class Dialect:
         spoken = {
             word.upper()
             for clause in self.clauses.clauses
-            for phrase in (clause.name, *clause.followed_by, *clause.after_operand, *clause.opens_a_group)
+            for phrase in (
+                clause.name,
+                *clause.followed_by,
+                *clause.after_operand,
+                *clause.opens_a_group,
+                # Load-bearing rather than tidy: `KEY` is in no dialect's
+                # `RESERVED`, so without this the second half of `PRIMARY KEY`
+                # reads as an identifier to the analyser.
+                *clause.defines_columns,
+            )
             for word in phrase.split()
         }
         spoken |= {word.upper() for phrase in self.statement_start for word in phrase.split()}

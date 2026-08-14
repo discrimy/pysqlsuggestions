@@ -340,6 +340,13 @@ POSTGRES = replace(
         # No kind, still: ansi.py records that giving LIMIT one made `LIMIT ⌶`
         # offer OFFSET, which goes after the number rather than instead of it.
         replace(_ansi('LIMIT'), before_the_item=('ALL',)),
+        # Three more column constraints than the baseline, each verified against
+        # the server: ClickHouse and Trino refuse all three, so they cannot go
+        # in ANSI without offering words their parsers reject.
+        replace(
+            _ansi('CREATE TABLE'),
+            defines_columns=(*_ansi('CREATE TABLE').defines_columns, 'UNIQUE', 'REFERENCES', 'CHECK'),
+        ),
         # TABLESAMPLE is derived from `follows` for most clauses, but `FROM`'s
         # continuations are an explicit list and derivation only adds what that
         # list omits — so the word has to be named here to reach the caret after
