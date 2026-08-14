@@ -4,7 +4,7 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
-## Unreleased
+## 0.6.0
 
 ### Positions that now say what the role may not read
 
