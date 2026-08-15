@@ -72,6 +72,23 @@ def _is_ident_char(ch: str) -> bool:
     return ch.isalnum() or ch in '_$' or unicodedata.combining(ch) != 0
 
 
+def reads_as_one_identifier(text: str) -> bool:
+    """
+    Whether this scanner would read `text`, written bare, back as a single name.
+
+    The other half of the quoting decision, and the half that was missing.
+    `Syntax` says what the *server* accepts unquoted; this says what the engine
+    can parse back. Postgres accepts far more than is read here — its scanner is
+    byte-based, so nearly everything above ASCII goes bare — and a name left
+    unquoted on the server's authority alone came back as two identifiers, after
+    which every completion in that statement worked from the wrong prefix.
+
+    Exposed rather than duplicated in `rank`, because a second copy of these
+    predicates is a second thing to keep in step with the scan below.
+    """
+    return bool(text) and _is_ident_start(text[0]) and all(_is_ident_char(ch) for ch in text[1:])
+
+
 def _fold(value: str, syntax: Syntax) -> str:
     if syntax.unquoted_case == 'lower':
         return value.lower()

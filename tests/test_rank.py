@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from pysqlsuggestions.dialects.ansi import ANSI
+from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions.engine.rank import rank
+from pysqlsuggestions.dialects.trino import TRINO
+from pysqlsuggestions.engine.lex import TokenType, lex
+from pysqlsuggestions.engine.rank import quote_if_needed, rank
 from pysqlsuggestions.types import Availability, Candidate, Kind, Request
 
 
@@ -62,3 +67,77 @@ def test_an_unknown_column_ranks_exactly_as_it_always_did() -> None:
         Candidate(text='user_passphrase', kind=Kind.COLUMN),
     ]
     assert [s.text for s in rank(candidates, _request('pass'), POSTGRES)] == ['password', 'user_passphrase']
+
+
+def _round_trips(name: str, dialect: Dialect) -> bool:
+    """Whether the engine can re-read a name it just wrote as that same name."""
+    written = quote_if_needed(name, dialect)
+    tokens = [t for t in lex(f'SELECT {written} FROM t', dialect.syntax) if t.type is not TokenType.WHITESPACE]
+    return len(tokens) == 4 and tokens[1].type is TokenType.IDENT and tokens[1].text == written  # noqa: PLR2004
+
+
+def test_a_name_the_lexer_would_split_is_quoted() -> None:
+    """
+    The quoter asked whether the *server* would accept a name bare, and never
+    whether this engine could read it back.
+
+    Postgres accepts most of the byte range above ASCII, so `unquoted_non_ascii`
+    admitted the whole basic plane -- punctuation, symbols, private use, and
+    nineteen code points Python calls whitespace. The lexer is far narrower, so a
+    column whose name holds a non-breaking space was inserted bare and read back
+    as two identifiers, leaving every later completion in that statement working
+    from a prefix of the second half.
+    """
+    for name in ('total\xa0due', 'a\u200bb', 'a\ufeffb', 'a–b', 'a«b', 'a\u202eb'):
+        assert quote_if_needed(name, POSTGRES) != name, repr(name)
+        assert _round_trips(name, POSTGRES), repr(name)
+
+
+def test_the_names_postgres_reads_back_are_still_bare() -> None:
+    """The point of `unquoted_non_ascii`, which the narrowing must not undo."""
+    for name in ('отчёты', 'a$b', 'café', 'straße'):
+        assert quote_if_needed(name, POSTGRES) == name, repr(name)
+        assert _round_trips(name, POSTGRES), repr(name)
+
+
+def test_every_dialect_can_re_read_what_it_writes() -> None:
+    """
+    The property the whole rule exists for, over the shapes that broke it.
+
+    Quoting a name that did not need it merely runs; leaving one bare that did
+    need it is a statement the engine cannot parse back.
+    """
+    names = [
+        'plain',
+        'MixedCase',
+        'select',
+        'a b',
+        'a"b',
+        'a`b',
+        "a'b",
+        'a.b',
+        'a;b',
+        'a--b',
+        'a/*b',
+        '1abc',
+        '123',
+        '_leading',
+        'a$b',
+        'отчёты',
+        'café',
+        'total\xa0due',
+        'a\u200bb',
+        'a\u3000b',
+        'a\xa0b',
+        'a\x85b',
+        'a𝐀b',
+        '🙂',
+        'a\x09b',
+        'a\nb',
+        'a\x00b',
+        '',
+        ' ',
+    ]
+    for dialect in (ANSI, POSTGRES, CLICKHOUSE, TRINO):
+        for name in names:
+            assert _round_trips(name, dialect), (dialect.name, repr(name))
