@@ -378,6 +378,13 @@ class _Reader:
         return [(word, '') for word in sorted(self._dialect.keywords)]
 
 
+def _answers_to(relation: Relation, qualifier: tuple[str, ...]) -> bool:
+    """Whether `qualifier` is a way of writing this relation's own name."""
+    if relation.label != qualifier[-1]:
+        return False
+    return len(qualifier) == 1 or tuple(relation.path[-len(qualifier) :]) == qualifier
+
+
 def _names_a_relation(scope: Scope | None, qualifier: tuple[str, ...]) -> bool:
     """
     Whether the statement says what it reads from, without naming `qualifier`.
@@ -393,7 +400,11 @@ def _names_a_relation(scope: Scope | None, qualifier: tuple[str, ...]) -> bool:
     if scope is None:
         return False
     visible = list(scope.visible())
-    if qualifier and any(relation.label == qualifier[-1] for relation in visible):
+    # The whole path, not its last segment. Matching on the segment alone let any
+    # prefix through — `billing.auth_user.⌶`, and even `nowhere.auth_user.⌶`
+    # where `nowhere` is not a schema at all, answered with the table's columns
+    # for references Trino cannot resolve.
+    if qualifier and any(_answers_to(relation, qualifier) for relation in visible):
         return False
     return bool(visible)
 

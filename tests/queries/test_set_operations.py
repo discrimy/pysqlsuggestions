@@ -172,14 +172,23 @@ def test_the_tail_begins_after_its_own_keyword() -> None:
     assert 'BY' in [s.text for s in complete(sql, sql.index('ORDER BY') + 6, POSTGRES, catalog, limit=40)]
 
 
-def test_a_subquery_inside_the_tail_keeps_its_own_scope() -> None:
+def test_the_tail_stays_suppressed_inside_parentheses() -> None:
     """
-    Parenthesised, the caret is in an ordinary query with its own FROM.
+    This asserted the opposite, on a premise the server does not share.
 
-    The disagreement is about names resolving against the set operation's
-    *result*; inside a subquery all three backends agree, and Postgres accepts
-    `... LIMIT (SELECT count(*) FROM orders o WHERE o.id > 0)`.
+    It read: inside a parenthesised subquery the caret is in an ordinary query
+    with its own FROM, so the guard should step aside. Postgres refuses the whole
+    shape — `ORDER BY (SELECT 1)` after a UNION is `invalid
+    UNION/INTERSECT/EXCEPT ORDER BY clause: only result column names can be used,
+    not expressions or functions` — so there was nothing to step aside for.
+
+    And `depth_at` is true of *any* group, not only a query's, so the escape
+    reopened `ORDER BY abs(<caret>)` as well, where the last branch's columns came
+    back: the exact answer this refuses, and one ClickHouse accepts and then
+    sorts the wrong rows by.
     """
     catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint')], ('public', 'orders'): [('id', 'bigint')]})
-    sql = 'SELECT id FROM users UNION SELECT id FROM orders LIMIT (SELECT count(*) FROM orders o WHERE o.)'
-    assert [s.text for s in complete(sql, sql.rindex('o.') + 2, POSTGRES, catalog)] == ['id']
+    head = 'SELECT id FROM users UNION SELECT id FROM orders ORDER BY '
+    for tail in ('abs()', '(SELECT )'):
+        sql = f'{head}{tail}'
+        assert complete(sql, len(sql) - 1, POSTGRES, catalog) == [], tail

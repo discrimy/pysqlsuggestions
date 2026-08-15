@@ -1260,10 +1260,12 @@ def in_set_operation_tail(
     `LIMIT` in this position already said it.
     """
     base = _base_depth(tokens, lo, hi)
-    # A parenthesised subquery written *in* the tail is an ordinary query with
-    # its own FROM, and all three backends agree about what resolves there.
-    if depth_at(tokens, caret) != base:
-        return False
+    # No escape for parentheses. This used to step aside for them, reasoning that
+    # a subquery written in the tail is an ordinary query — but Postgres refuses
+    # an expression there outright (`invalid UNION/INTERSECT/EXCEPT ORDER BY
+    # clause`), subquery included, so the premise was false; and `depth_at` is
+    # true of *any* group, so `ORDER BY abs(⌶)` after a UNION went back to
+    # offering the last branch's columns, which is the whole thing this refuses.
     operators = [
         index
         for index in range(lo, hi)
@@ -1582,12 +1584,17 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
     # derived table or a CTE body used to scan straight out of it and answer with
     # an offset in the enclosing statement — which then grew a second FROM while
     # the subquery that needed one still had none.
-    # Only a group that opens a *query*. A call's argument list is at the same
-    # depth and is not a place a FROM clause can go — clamping to it wrote
-    # `SELECT count(auth_user.id FROM public.auth_user)`, which does not parse.
-    group = _group_start(tokens, caret, depth_at(tokens, caret))
-    if group > lo and _opens_a_query(tokens, group - 1, hi, dialect):
-        lo, hi = group, min(hi, _matching_paren(tokens, group - 1, hi))
+    # The nearest enclosing group that opens a *query*, stepping outward. A
+    # call's argument list is not a place a FROM clause can go, and clamping to
+    # it wrote `SELECT count(auth_user.id FROM public.auth_user)` — but simply
+    # declining to clamp there was worse: the offset then fell back to the whole
+    # statement, so `WITH c AS (SELECT count(na⌶))` put the clause in the *outer*
+    # query, text the author never touched.
+    for depth in range(depth_at(tokens, caret), 0, -1):
+        group = _group_start(tokens, caret, depth)
+        if group > lo and _opens_a_query(tokens, group - 1, hi, dialect):
+            lo, hi = group, min(hi, _matching_paren(tokens, group - 1, hi))
+            break
     depth = _base_depth(tokens, lo, hi)
     for index in range(lo, hi):
         token = tokens[index]
