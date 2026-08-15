@@ -13,6 +13,7 @@ implements what its backend actually supports.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from inspect import getattr_static
 from typing import Any, TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
@@ -188,6 +189,36 @@ def _edges(scope: Scope | None, reader: _Reader) -> Sequence[ForeignKey]:
     return list(found.values())
 
 
+def _declared(catalog: object, method: str) -> bool:
+    """
+    Whether `catalog` really implements `protocol`, rather than merely answering to it.
+
+    `isinstance` against a runtime-checkable Protocol asks a different question on
+    either side of Python 3.12. Before it, the check is `hasattr`, which a
+    `__getattr__` proxy satisfies for every name it is ever asked about — so a
+    lazy wrapper, or any `MagicMock` in a downstream test suite, claimed every
+    capability here and then failed on the first call with `TypeError: 'object'
+    object is not iterable`. From 3.12 the check uses `inspect.getattr_static`
+    and the same adapter degrades cleanly.
+
+    Both are supported: `requires-python` is `>=3.10` and CI runs three. So the
+    static half is asked here as well, which makes the answer the same on all of
+    them — and makes it the honest one, since a capability that exists only when
+    something asks for it is not a capability this can call.
+
+    Presence, not callability. `getattr_static` finds a plain method, a
+    `classmethod`, a `staticmethod`, an inherited one and one assigned in
+    `__init__`, on 3.10 and 3.12 alike; it declines only the invented kind.
+    Testing that the result is callable would reject `classmethod`, whose
+    descriptor is not, and that is a shape an adapter is entitled to use.
+    """
+    try:
+        getattr_static(catalog, method)
+    except AttributeError:
+        return False
+    return True
+
+
 class _Reader:
     """Catalog access with caching and capability detection in one place."""
 
@@ -285,7 +316,7 @@ class _Reader:
         Degrades to nothing when the catalog cannot answer, which is the
         documented behaviour when SupportsColumnSearch is absent.
         """
-        if not isinstance(self._catalog, SupportsColumnSearch):
+        if not isinstance(self._catalog, SupportsColumnSearch) or not _declared(self._catalog, 'all_columns'):
             return ()
         everything = self._catalog.all_columns()
         if everything is not None:
@@ -302,6 +333,8 @@ class _Reader:
         """
         if not prefix or not isinstance(self._catalog, SupportsRelationSearch):
             return ()
+        if not _declared(self._catalog, 'search_relations'):
+            return ()
         return self._catalog.search_relations(prefix, limit)
 
     def common_values(self, schema: str | None, table: str, column: str) -> Sequence[ColumnValue]:
@@ -314,7 +347,7 @@ class _Reader:
         runs, not between keystrokes.
         """
         catalog = self._catalog
-        if not isinstance(catalog, SupportsColumnValues):
+        if not isinstance(catalog, SupportsColumnValues) or not _declared(catalog, 'common_values'):
             return ()
         key = self._key(schema, table, f'\x00values:{column}')
         return self._read(key, lambda: catalog.common_values(schema, table, column, _MAX_VALUES))
@@ -328,13 +361,13 @@ class _Reader:
         constraints change when someone runs DDL, not between keystrokes.
         """
         catalog = self._catalog
-        if not isinstance(catalog, SupportsForeignKeys):
+        if not isinstance(catalog, SupportsForeignKeys) or not _declared(catalog, 'foreign_keys'):
             return ()
         return self._read(self._key(schema, '\x00fk'), lambda: catalog.foreign_keys(schema))
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords when available, otherwise the dialect's shipped set."""
-        if isinstance(self._catalog, SupportsKeywords):
+        if isinstance(self._catalog, SupportsKeywords) and _declared(self._catalog, 'keywords'):
             return self._catalog.keywords()
         return [(word, '') for word in sorted(self._dialect.keywords)]
 

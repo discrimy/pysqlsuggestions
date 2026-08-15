@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 
 from pysqlsuggestions.api import complete, derive_request
@@ -11,7 +13,7 @@ from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
-from pysqlsuggestions.types import Kind
+from pysqlsuggestions.types import Column, Function, Kind, Table
 from tests.corpus.cases import split_caret
 
 SNAPSHOT = {
@@ -632,3 +634,57 @@ def test_a_negative_limit_offers_nothing_rather_than_slicing_from_the_end() -> N
     snapshot = MemoryCatalog({('public', 'w'): [(f'col{index}', 'int') for index in range(12)]})
     for limit in (0, -1, -3, -100):
         assert complete('SELECT  FROM w', 7, POSTGRES, snapshot, limit=limit) == []
+
+
+class _InventsEverything:
+    """
+    A catalog whose extras exist only because `__getattr__` answers for them.
+
+    A lazy wrapper looks like this, and so does any `MagicMock` standing in for a
+    catalog in a downstream test suite.
+    """
+
+    def schemas(self, catalog: str | None = None) -> Sequence[str]:
+        """No namespaces."""
+        del catalog
+        return []
+
+    def tables(self, schema: str | None = None) -> Sequence[Table]:
+        """No relations."""
+        del schema
+        return []
+
+    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
+        """No columns."""
+        del schema, table
+        return []
+
+    def functions(self, schema: str | None = None) -> Sequence[Function]:
+        """No functions."""
+        del schema
+        return []
+
+    def __getattr__(self, name: str) -> object:
+        """Anything else, as something that is not what the port promises."""
+        del name
+        return lambda *args, **kwargs: object()
+
+
+def test_a_capability_that_only_answers_to_its_name_is_not_one() -> None:
+    """
+    `isinstance` against a runtime-checkable Protocol changed meaning in 3.12.
+
+    Before it the check is `hasattr`, which the class above satisfies for every
+    name asked of it, so the engine claimed each capability and then failed on
+    the first call with `TypeError: object is not iterable`. From 3.12 the check
+    uses `inspect.getattr_static` and the same adapter degrades. Both are
+    supported — `requires-python` is `>=3.10` and CI runs three — so the engine
+    asks the static question itself and answers the same on all of them.
+
+    This regression guards 3.10 and 3.11 specifically: on 3.12 the interpreter
+    already refuses the proxy, so the assertion holds there with or without the
+    fix. Kept because those are the versions the project ships for.
+    """
+    catalog = _InventsEverything()
+    for sql, caret in (('SELECT sta', 10), ("SELECT * FROM t WHERE s = 'a", 28), ('SELECT * FROM t JOIN ', 21)):
+        assert complete(sql, caret, POSTGRES, catalog) is not None, sql
