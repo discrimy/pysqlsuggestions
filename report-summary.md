@@ -12,8 +12,11 @@ end and still green. The repo source was never modified; agents wrote only to sc
 **Status: complete. All 8 agents reported — 37 verified, 2 unsure, 0 false.**
 
 Two further sweeps then audited the *fixes* rather than the library, finding 18 and 12 more defects
-respectively — see [The fixes were then audited twice](#the-fixes-were-then-audited-twice). Everything
-below this line is the first sweep.
+respectively — see [The fixes were then audited twice](#the-fixes-were-then-audited-twice). A fourth
+pass then re-ran every closed finding's original repro against the merged tree and re-derived every
+open one from source — see [The closed findings were re-run](#the-closed-findings-were-re-run). It
+confirmed all 21 repros closed and corrected two entries in the open list. Everything below this line
+is the first sweep.
 
 The eighth was a high-volume differential fuzzer: **≈1,566,800 distinct (sql, caret, dialect) triples**
 plus an `apply_suggestion` and a re-entrant `complete()` per suggestion. Five of its seven harnesses —
@@ -33,9 +36,10 @@ resource use.
 ## Fixed — merged to `main`
 
 **39 findings closed and one substantially improved**, across sixteen commits, each fix carrying a
-regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1857 passed** (from 1700) once the two
-later sweeps' fixes are counted, and with the docker backends up the integration suite passes too.
+regression test written *before* it and watched to fail. Gate green throughout: `./scripts/check.sh`
+→ ruff format (129 files), ruff check, mypy strict (120 source files), and **1788 passed, 1 skipped,
+10 xfailed** with integration deselected — against the 1700 of the same command at the baseline. With
+the docker backends up the integration suite passes too.
 
 | Commit | Closes |
 | --- | --- |
@@ -70,12 +74,6 @@ not a formality:
 - **U2** — the documented rationale ("a `;` inside a string or parens") turned out to guard nothing
   reachable, and the impact was *smaller* than filed: `lsp/documents.py` already split on any
   semicolon, so only direct `complete()` callers could reach the leak.
-
-### Still open, and why
-
-| # | Finding | Why it is still here |
-| --- | --- | --- |
-| 34 | The language server re-lexes the document per keystroke | Not a caching problem, which is worth stating because it reads like one. The document changes with every keystroke, so a content-keyed cache never hits — five consecutive keystrokes are five distinct texts. Measured cost on a 15.8 KB statement is 2 lex calls and 90 ms; the 10 s figure is a 10 MB document. Fixing it means lexing incrementally against `didChange` ranges, or tracking statement boundaries per document version — structurally larger than anything on this branch. |
 
 ### One reason that did not survive being tested
 
@@ -164,6 +162,7 @@ was recorded here.
 | First | 8 | 39 | the library |
 | Second | 8 | 18 | the first sweep's fixes |
 | Third | 5 (4 reported) | 12 | the second sweep's fixes |
+| Re-run | 1 | 0 new, 2 entries corrected | **this report** |
 
 The third sweep's fifth agent — the memo bound and the nesting budget, `b64771a` — was stopped before
 it reported. That commit was not left unexamined: the differential below covers it directly, and
@@ -172,9 +171,15 @@ triples, checked triple-by-triple, so neither the bound nor the dialect-keyed me
 anywhere; and the nesting fix is pinned behaviourally — depth 32 answered before, 33 through 64 answer
 only after, 65+ is quiet at both, and depth 600 stays bounded at 1.6× the wall time.
 
-The rate is falling and has **not** converged. That, rather than any single entry, is the result worth
-recording: a fix is not evidence of correctness, and each round found defects only reachable because
-the previous round's fix created them.
+The rate is falling. Through the third sweep it had **not** converged, and that, rather than any
+single entry, was the result worth recording: a fix is not evidence of correctness, and each round
+found defects only reachable because the previous round's fix created them.
+
+The re-run is the first pass to find **no new defect in the code** — every closed repro stayed closed
+and every open one reproduced as filed or narrower. What it found instead was two entries in this
+document that described the code wrongly: O2 had its direction inverted, O6 its mechanism. That is
+the same lesson one layer up. A finding is not evidence of the thing it names either, and the two it
+corrected had both been written from a mechanism that was reasoned rather than run.
 
 ### Two fixes that were worse than the bug they closed
 
@@ -246,30 +251,135 @@ statements no commit touched (`UPDATE`, `DELETE`, `MERGE`, `GRANT`, plain `SELEC
 INSERT excluded) leaves 17,000 differences, **all** attributable to one of the ten known causes and 97%
 of them the insertion-separator path. Nothing at those positions is unexplained.
 
+## The closed findings were re-run
+
+The three sweeps each audited the round before it. A fourth pass audited **the record itself**: every
+closed finding's original repro re-run against the merged tree, and every open one re-derived from
+source rather than recalled. Nothing was taken from this document's own word.
+
+**21 of 21 repros are closed.** Three came back red on the first attempt and all three were the
+harness, not the library — worth writing down, because in each the fix lives at a different layer
+from the one the finding was filed against, and re-running the original repro unchanged therefore
+proves nothing:
+
+- **#4** — `plan_insertion` still returns two coincident zero-width edits at `SELECT ⌶`. That is the
+  library's documented contract, where tuple order carries the ordering; the fold lives in
+  `lsp/convert.py`. Checked there, `snippetSupport` both true and false give one edit and zero
+  coincident ranges.
+- **#6** — the keyword fold is word by word, so `GROUPING SETS` and `IF NOT EXISTS` never appear in
+  `keywords` as phrases. No dialect has a gap once the phrases are split, and `GROUP BY ROLLUP ⌶` on
+  postgres offers columns, which is the outcome the finding predicted.
+- **#20** — `render`'s literal-awareness is opt-in through `syntax=`. The sole in-package caller
+  (`dbapi.py:184`) passes it; the context-free path survives deliberately, and the docstring says so.
+
+The gate was green at the same commit: ruff format, ruff check, mypy strict, and the suite above.
+
+### O2 was filed backwards
+
+The entry read "`INSERT INTO t (⌶) (SELECT …)` leaks the source's columns". The column list is
+**clean**. The leak runs the other way — a parenthesised source query sees the **target**:
+
+```
+INSERT INTO users (id) (SELECT ⌶ FROM orders)
+  postgres, trino, clickhouse → ['orders.id', 'users.id', 'orders.total', 'users.username']
+  accepting                   → INSERT INTO users (id) (SELECT users.username FROM orders)
+
+control, source not parenthesised → ['orders.id', 'orders.total']      # correct
+```
+
+`_around_an_insert_target` locates the source by scanning for a `SELECT` clause at `tokens[lo].depth`
+only. Parenthesising the source puts that `SELECT` one level down, so `opens_source` stays `None` and
+the function falls through to its last line — `[*written_to, *relations]` — which keeps the target in
+scope for the whole statement. The subquery then reads it as an enclosing scope, the way a correlated
+subquery is meant to read one.
+
+It contradicts that function's own docstring, which records the measurement: *"The target is **not**
+in scope for the source query"*, `column "name" does not exist` on Postgres, `Column 'name' cannot be
+resolved` on Trino, `Missing columns` on ClickHouse. So this is the unfixed half of finding 28 rather
+than a new defect — the commit that split the three positions fixed the bare form and left the
+parenthesised one, exactly as that same docstring notes a previous commit did to the column list.
+
+### O6 had a second mechanism
+
+Filed as "two-FK dedupe, and reverse edges across schemas", costing "a duplicate or a missing
+proposal". Both halves reproduce, and the first is settled: it is never a duplicate, always a
+**deletion**.
+
+```python
+# resolve._edges
+key = (edge.schema, edge.table, *edge.columns)
+found[key] = edge
+```
+
+The key omits the referenced side. A column that is the referencing end of two constraints — legal,
+and the shape a polymorphic reference takes — collapses to one entry, last write winning:
+
+```
+orders.party_id → users.id  and  orders.party_id → companies.id
+'SELECT * FROM orders JOIN ⌶'  →  ['companies c ON orders.party_id = c.id']   # users lost
+```
+
+The second half is the schema the fetch is keyed on. `_edges` asks the catalog for the schemas the
+statement *names*, and a catalog returns the constraints **declared in** that schema — but a reverse
+link needs the ones whose *referenced* side is there:
+
+```
+'SELECT * FROM users JOIN ⌶'         → tickets, sales.orders        # correct
+'SELECT * FROM public.users JOIN ⌶'  → public.tickets               # sales.orders lost
+```
+
+Qualifying the relation is what loses the proposal, which is the opposite of what writing more of the
+name should do. `joins._links` finds both edges either way — verified directly against the pure
+function — so neither half is in `joins.py`; both are in what `resolve` hands it.
+
 ### Still open — the whole list, worst first
 
 Nothing here is a blocker. There is **no known crash and no known silently-wrong SQL**, which is the
 class this library cares most about; the differential's 1,266,984 triples found zero raise-splits in
-either direction. What is left is suggestions a server refuses loudly, performance on inputs larger
-than the documented budget, and things outside the library.
+either direction, and the re-run raised nothing either. What is left is suggestions a server refuses
+loudly, performance on inputs larger than the documented budget, one capability that fails closed on
+a slow database, and things outside the library.
+
+Ordered by severity as the re-run assessed it, worst first.
 
 | # | Open | Cost when it fires | Where |
 | --- | --- | --- | --- |
-| O1 | ~~`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE` offered in a set operation's tail~~ | ~~server refuses the statement~~ | **fixed — `0f78223`** |
-| O2 | `INSERT INTO t (⌶) (SELECT …)` leaks the source's columns | wrong names offered; server refuses on accept | `analyse._around_an_insert_target` |
-| O3 | The server re-lexes the whole document on every keystroke | 90 ms on a 15.8 KB statement, 10 s on 10 MB | `lsp/documents.py` (finding 34) |
-| O4 | A run of *bare* unclosed parens is cleanly quadratic | ~4 s at 8,000 parens; 3.9× per doubling | `analyse.clause_at` (finding 17, part) |
-| O5 | `CONNECT_TIMEOUT` bounds the whole socket, not the connect | a slow but working database is cut off mid-read | `lsp/connections.py` |
-| O6 | Join proposals: two-FK dedupe, and reverse edges across schemas | a duplicate or a missing proposal | `engine/joins.py` |
+| O5 | `CONNECT_TIMEOUT` bounds the whole socket, not the connect | a catalog read over 5 s degrades the session outright | `lsp/connections.py` |
+| O2 | An INSERT whose source is *parenthesised* leaks the **target** into the source query | wrong names offered; all three servers refuse on accept | `analyse._around_an_insert_target` |
+| O4 | A run of *bare* unclosed parens is cleanly quadratic | 1.0 s at 4,000 parens, ~4 s at 8,000; 3.9× per doubling | `analyse.clause_at` (finding 17, part) |
+| O3 | The server re-lexes the whole document on every keystroke | 28 ms on a 14.2 KB statement, 10 s on 10 MB | `lsp/documents.py` (finding 34) |
+| O6 | Join proposals: a dedupe key without the target, and reverse edges across schemas | a missing proposal, silently | `engine/joins.py`, `resolve._edges` |
 | O7 | `time`/`interval` value families, and `CAST(x AS t)` narrowing | fewer suggestions than the type allows | `resolve.py` |
 | O8 | Demo and build: `pending` unvalidated, paramstyle drift, no 20k cap in the browser build, `build_pages` picks a wheel lexicographically | not the library | `demo/`, `scripts/` |
 
-Two of these are worth a sentence each on *why* they are the shape they are. **O3 is not a caching
-problem**, which matters because it reads like one: the document changes with every keystroke, so a
-content-keyed cache never hits. Fixing it means lexing incrementally against `didChange` ranges. **O4
-is a different mechanism from the hash fix that closed the rest of finding 17** — `clause_at` widens
-outward once per paren depth, calling two O(n) helpers each time — and it is a far less realistic input
-than the nested subqueries that were fixed, which is why it was left.
+O1 — `FOR UPDATE` and its three siblings in a set operation's tail — was closed in `0f78223` and is
+no longer on this list. Verified: the tail keeps `USING`, `ASC`, `DESC`, `NULLS LAST` and the four
+governing clauses and offers no `FOR *`, while a plain `ORDER BY` still offers `FOR UPDATE`.
+
+Four of these are worth a sentence each on *why* they are the shape they are.
+
+**O5 is the one that costs the most in practice, and the fix for finding 33 introduced it.** The
+`timeout` argument reaches `socket.create_connection`, which leaves it *on the socket* — so it
+governs every later `recv`, not just the connect. Any catalog read slower than five seconds raises,
+and `server.py:243` catches it into `degrade()`, which sets `_catalog = None` for the rest of the
+session. The largest databases, where introspection is genuinely slow and completion is worth most,
+are exactly the ones that lose schema completion entirely. Bounding the connect alone needs the
+timeout dropped from the socket once the connection is up, which is per-driver work.
+
+**O3 is not a caching problem**, which matters because it reads like one: the document changes with
+every keystroke, so a content-keyed cache never hits — five consecutive keystrokes are five distinct
+texts. Three identical requests measured 0.035 s, 0.028 s and 0.028 s on a 14.2 KB statement, so the
+second keystroke really does cost what the first did. Growth is linear, so the constant and the
+absence of any per-document cache are the finding, not the complexity. Fixing it means lexing
+incrementally against `didChange` ranges, or tracking statement boundaries per document version —
+structurally larger than anything on this branch.
+
+**O4 is a different mechanism from the hash fix that closed the rest of finding 17** — `clause_at`
+widens outward once per paren depth, calling two O(n) helpers each time — and it is a far less
+realistic input than the nested subqueries that were fixed, which is why it was left.
+
+**O6 costs a suggestion, never a wrong one**, which is why it sits below the rest despite having two
+independent mechanisms. Both are recorded under [the re-run](#o6-had-a-second-mechanism).
 
 ### A reason that did not survive being tested, again
 
@@ -752,6 +862,11 @@ from `_RELATION_CLAUSES`:
 
 The target must be visible to the column list and to `RETURNING`, and invisible from the `SELECT`
 onward.
+
+Closed in `a6a7fb1` for the bare source, which is the form above. **The parenthesised source was
+left**, because the fix locates the source query by scanning at one depth — see
+[O2](#o2-was-filed-backwards), where the same statement written `INSERT INTO users (id) (SELECT ⌶
+FROM orders)` still offers the target.
 
 ### 29. Nested derived tables cost roughly cubic
 
