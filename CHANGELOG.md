@@ -4,7 +4,7 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
-## Unreleased
+## 0.8.0
 
 ### Accepting a suggestion no longer breaks the statement
 
@@ -33,6 +33,26 @@ Typing `SELECT "".⌶` no longer empties the relation list for the rest of the
 session. A quoted empty identifier reaches the catalog as both "every relation"
 and "the relations in a schema named nothing", and the two shared a cache key.
 
+`INSERT INTO users (id) (SELECT ⌶ FROM orders)` offers the source's columns and
+not the target's. A source query written in parentheses is the same statement
+with brackets round it, and all three backends refuse the target inside them —
+but the target was found one level up and stayed in scope, so the subquery read
+it the way a correlated subquery reads an enclosing one. The unparenthesised
+form was already right; this was the half of it that was missed.
+
+`WHERE CAST(x AS boolean) = ⌶` narrows to what a boolean can face, as
+`WHERE x::boolean = ⌶` already did. Two spellings of one operation gave two
+answers, and `::` is an extension — on a dialect that declares no cast operator,
+the functional form is the only spelling there is and narrowing never happened
+at all.
+
+`JOIN ⌶` proposes every declared constraint rather than losing some of them
+silently. A column that is the referencing end of two constraints — what a
+polymorphic reference looks like — offered only the last of them; and qualifying
+a relation returned *fewer* proposals than writing its bare name, because the
+constraints were fetched for the schema the statement named and a join reaches
+in both directions.
+
 ### Statements that used to crash or hang
 
 A document of deeply nested `WITH` bodies, or a long chain of CTEs each selecting
@@ -43,8 +63,23 @@ than the whole request.
 
 A half-typed query of nested subqueries — parentheses opened and not yet closed,
 which is what an editor holds on most keystrokes — took thirty-five seconds at
-2.4 KB and now takes under one. A run of bare unclosed parentheses is still
-quadratic; that is a different mechanism and a much less likely input.
+2.4 KB and now takes under one. A run of *bare* unclosed parentheses was a
+second, separate mechanism and is now linear too: eight thousand of them took
+about four seconds and take 0.04.
+
+### For anyone running the language server
+
+A slow database no longer costs the session its schema completion. The bound on
+reaching a host was left on the socket afterwards, so it governed every later
+read — and a catalog query on a database with enough tables to be slow raised,
+which the server treats as the catalog having failed. Reaching a host is still
+bounded at five seconds; reading one is now bounded separately, and the two
+HTTP-backed dialects keep their own per-request bound rather than the connect's.
+
+The server still re-lexes the whole document on each keystroke: about 28 ms on a
+14 KB statement, and linear in the size of the document. That is now recorded as
+gap 2 in `docs/gaps.md` rather than left implicit — closing it means lexing
+incrementally against `didChange`, which is a feature rather than a repair.
 
 ## 0.7.0
 
