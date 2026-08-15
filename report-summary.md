@@ -28,9 +28,10 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-**27 findings closed and one substantially improved**, across five commits, each fix carrying a
+**34 findings closed and one substantially improved**, across ten commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1734 passed** (from 1700).
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1839 passed** (from 1700), and with
+the docker backends up the integration suite passes too.
 
 | Commit | Closes |
 | --- | --- |
@@ -39,20 +40,43 @@ regression test written *before* it and watched to fail. Gate green throughout:
 | `8b5f21c` the server's half of a position | 30, 31, 32, 33, 35, 36 |
 | `4fce7b7` a literal's opening is not always one character | 9, 16, 21, 22, 23 |
 | `0dce915` four things that answered for something nobody asked | 8, 12, 15, 18 |
+| `8936c78` the tail of a set operation answers nothing | 26 |
+| `a6a7fb1` an INSERT's three positions see three different things | 28 |
+| `4036140` every semicolon token ends a statement | U2 |
+| `2578fc8` `without()` refuses a name the model does not have | 19 |
+| `fe01ae7` a dialect name claimed twice says so | 14 |
+| `6e196cf` an empty argument list keeps the caret it opened | U1 |
+
+### Measurement changed three of the six decisions
+
+The design calls were settled against the running backends rather than the standard, and that was
+not a formality:
+
+- **#26** — I was about to recommend "offer the result columns everywhere". ClickHouse **rejects**
+  exactly those: it binds a trailing `ORDER BY` to the *last branch*, and the resulting query runs
+  without sorting the union at all. Postgres and Trino bind it to the result. No answer is right on
+  all three, so the position answers nothing.
+- **#28** — measuring found a *second* bug in the position I had reported as working: `RETURNING`
+  needs the target, but it was also offering the source's columns, which Postgres rejects.
+- **U2** — the documented rationale ("a `;` inside a string or parens") turned out to guard nothing
+  reachable, and the impact was *smaller* than filed: `lsp/documents.py` already split on any
+  semicolon, so only direct `complete()` callers could reach the leak.
 
 ### Still open, and why
 
 | # | Finding | Why it is still here |
 | --- | --- | --- |
-| 7 | Postgres leaves ~13k BMP code points unquoted | Real, and the fix is a narrower character class — but it changes what every non-ASCII name inserts as, so it wants its own change and its own round-trip corpus. |
+| 7 | Postgres leaves ~13k BMP code points unquoted | The last real correctness bug. The fix is a narrower character class, but it changes what every non-ASCII name inserts as, so it wants its own change and its own round-trip corpus. |
 | 11 | Capability detection differs on 3.10 vs 3.12 | Left deliberately. Matching 3.12 means `inspect.getattr_static`, which stops seeing `classmethod` capabilities that work today — a live regression traded for a proxy-catalog edge case. |
-| 14 | A plugin named `postgres` shadows the built-in | Design call: should built-ins be privileged, or is last-wins intended? |
-| 19 | `without()` is a silent no-op on an unknown name | Design call. Making it raise matches `postgres._ansi`'s stated reasoning but would break any third-party dialect dropping a clause it does not have. |
 | 20 | Markers rewritten inside strings and comments | Latent; no shipped query trips it. Needs a real scanner in `render`, not a regex. |
-| 26 | `ORDER BY` after a set operation | Needs a decision on what the position should offer — result columns only, I would argue. |
-| 28 | The `INSERT` target is in scope for the source `SELECT` | Needs the target visible to the column list and `RETURNING` while invisible after the `SELECT`. |
-| 29, 34 | Cubic nesting cost; per-keystroke LSP cost | Both are constants and caching, not correctness. |
-| U1, U2 | The two design calls | Unchanged. |
+| 29, 34 | Cubic nesting cost; per-keystroke LSP cost | Constants and caching, not correctness. |
+
+### Found while fixing, not in the original sweep
+
+A qualifier naming any catalog relation resolves to its columns even when that relation is not in
+scope: `SELECT users.⌶ FROM orders` offers `id, name`, and every backend refuses
+`SELECT users.id FROM orders`. General behaviour, not specific to any statement form — noticed while
+fixing #28 and deliberately left out of that commit rather than widening it.
 
 | # | Fix | Test |
 | --- | --- | --- |
