@@ -265,3 +265,20 @@ def test_a_function_taking_no_arguments_still_fills_its_blank() -> None:
     plan = plan_insertion('SELECT  FROM users AS u', offered, pending=(23,))
     assert plan.caret == 28, 'the next blank, since there is nothing to type inside now()'
     assert plan.pending == ()
+
+
+def test_the_relation_is_not_written_inside_a_function_call() -> None:
+    """
+    The clamp asked which parenthesised group the caret is in, not what it opens.
+
+    A subquery's parentheses and a call's argument list are both "a group at the
+    caret's depth", so `SELECT count(i⌶)` put the clause inside the call:
+    `SELECT count(auth_user.id FROM public.auth_user)`, which Postgres answers
+    with `syntax error at or near "FROM"`. `_opens_a_query` is the distinction
+    the module already draws for exactly this.
+    """
+    for sql, caret in (('SELECT count(i)', 14), ('SELECT coalesce(a, i)', 20), ('SELECT (na)', 10)):
+        pick = suggestion('auth_user.id', Kind.COLUMN, (caret - 1, caret), relation=('auth_user',))
+        written = applied(sql, plan_insertion(sql, pick))
+        assert 'FROM auth_user)' not in written, written
+        assert written.endswith('FROM auth_user'), written

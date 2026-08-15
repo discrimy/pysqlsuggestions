@@ -316,7 +316,13 @@ class _Reader:
         Degrades to nothing when the catalog cannot answer, which is the
         documented behaviour when SupportsColumnSearch is absent.
         """
-        if not isinstance(self._catalog, SupportsColumnSearch) or not _declared(self._catalog, 'all_columns'):
+        # Both methods, because `all_columns` returning None is how a DB-API
+        # catalog says "too many to enumerate" — so `search_columns` is what
+        # actually answers, and checking only the other one let an adapter that
+        # invents it through `__getattr__` past the guard on 3.10.
+        if not isinstance(self._catalog, SupportsColumnSearch):
+            return ()
+        if not _declared(self._catalog, 'all_columns') or not _declared(self._catalog, 'search_columns'):
             return ()
         everything = self._catalog.all_columns()
         if everything is not None:
@@ -372,9 +378,24 @@ class _Reader:
         return [(word, '') for word in sorted(self._dialect.keywords)]
 
 
-def _names_a_relation(scope: Scope | None) -> bool:
-    """Whether the statement already says what it reads from, here or further out."""
-    return scope is not None and any(scope.visible())
+def _names_a_relation(scope: Scope | None, qualifier: tuple[str, ...]) -> bool:
+    """
+    Whether the statement says what it reads from, without naming `qualifier`.
+
+    False when the qualifier is one of the relations already in scope, even
+    though it did not resolve through `_find_relation` — which matches only the
+    first segment against a label, so a multi-part `schema.table.` never reaches
+    it. On a three-level namespace that is not the deepest reading either, so
+    Trino's `SELECT public.auth_user.<caret> FROM public.auth_user` fell through
+    to the catalog fallback and this gate then closed it — a reference Trino
+    accepts, answering nothing.
+    """
+    if scope is None:
+        return False
+    visible = list(scope.visible())
+    if qualifier and any(relation.label == qualifier[-1] for relation in visible):
+        return False
+    return bool(visible)
 
 
 def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
@@ -418,7 +439,7 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         return [_column_candidate(column) for column in reader.columns(schema, table)]
 
     candidates: list[Candidate] = []
-    if Kind.COLUMN in request.kinds and not _names_a_relation(scope):
+    if Kind.COLUMN in request.kinds and not _names_a_relation(scope, request.qualifier):
         # A name that is not in scope may still be the relation the author is
         # about to write, so long as the statement names none yet: `SELECT
         # auth_user.<caret>` has no FROM and the qualifier is a fair guess at

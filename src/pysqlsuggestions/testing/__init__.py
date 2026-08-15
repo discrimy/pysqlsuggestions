@@ -23,16 +23,13 @@ one fixed string would only ever test the dialect it was written for.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from pysqlsuggestions.api import complete
+from pysqlsuggestions.catalogs.dbapi import _markers, _quoted_spans
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.types import Function, Kind
-
-_MARKER = re.compile(r'\$(\d+)')
-"""The neutral parameter marker, as `catalogs.dbapi` reads it."""
 
 _QUERY_ARITY = {
     'schemas': 1,
@@ -425,7 +422,17 @@ class DialectConformance:
             query = getattr(dialect.catalog_queries, name, None)
             if query is None:
                 continue
-            wanted = max((int(marker) for marker in _MARKER.findall(query.sql)), default=0)
+            # Counted the way `render` counts, not with a bare regex: a `$N`
+            # inside a literal is text to it, and Trino spells regexp
+            # backreferences that way — so a working `schemas` query was
+            # reported as binding more values than it is given.
+            found = [int(marker.group(1)) for marker in _markers(query.sql, _quoted_spans(query.sql, dialect.syntax))]
+            if 0 in found:
+                # The one `$N` the arity test below cannot see, and the one
+                # `render` refuses outright — so a dialect carrying it passed
+                # every check here and raised on its first catalog read.
+                problems.append(f'catalog query {name!r} uses $0, and markers are one-based')
+            wanted = max(found, default=0)
             if wanted > given:
                 problems.append(
                     f'catalog query {name!r} binds ${wanted} but is only ever given {given} value(s)',

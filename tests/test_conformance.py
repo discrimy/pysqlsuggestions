@@ -427,3 +427,38 @@ def test_two_plugins_claiming_one_name_also_say_so(monkeypatch: pytest.MonkeyPat
             assert registry.named('duckdb') is second
     finally:
         registry._scan.cache_clear()
+
+
+def test_conformance_reads_markers_the_way_render_does() -> None:
+    """
+    A `$N` inside a literal is text to `render` and was a parameter to the check.
+
+    Trino spells regexp backreferences `$1`, `$2` inside the replacement string,
+    so a perfectly good `schemas` query was reported as binding more values than
+    it is given. The arity check has to count what `render` counts, or it rejects
+    dialects that work.
+    """
+    sql = "SELECT regexp_replace(s, '(.*)_(.*)', '$2_$1') AS name FROM system.jdbc.schemas WHERE table_catalog = $1"
+    dialect = replace(
+        TRINO,
+        catalog_queries=replace(TRINO.catalog_queries, schemas=Query(sql=sql, row=lambda row: str(row[0]))),
+    )
+    assert DialectConformance.structure(dialect) == []
+
+
+def test_conformance_names_a_zero_marker() -> None:
+    """
+    The one `$N` the arity test cannot see, and the one `render` refuses outright.
+
+    `max(marker) <= arity` holds for `$0`, so a dialect carrying one passed every
+    check and then raised on its first catalog read — which is the mistake this
+    harness exists to catch rather than to forward.
+    """
+    dialect = replace(
+        POSTGRES,
+        catalog_queries=replace(
+            POSTGRES.catalog_queries,
+            schemas=Query(sql='SELECT nspname FROM pg_namespace WHERE $0 = $0', row=lambda row: str(row[0])),
+        ),
+    )
+    assert any('$0' in problem for problem in DialectConformance.structure(dialect))

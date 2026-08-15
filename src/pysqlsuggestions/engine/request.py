@@ -80,11 +80,6 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     scope = scope_of(tokens, lo, hi, caret, dialect) if tokens else None
 
     comparand, comparand_type = comparand_at(tokens, caret, dialect)
-    if in_set_operation_tail(tokens, lo, hi, caret, dialect):
-        # Above everything else, because the reason is about the position rather
-        # than about what was typed in it: no answer here is right on all three
-        # backends, and the one the engine gave errored on two of them.
-        return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
     if in_placeholder(tokens, caret):
         # Above the literal check rather than folded into it: a half-written
         # literal has an answer — the values that column holds — and a
@@ -134,6 +129,17 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         + _values_first(comparand, expecting, qualifier)
         + _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
     )
+    if in_set_operation_tail(tokens, lo, hi, caret, dialect):
+        # Names only. Which *column* resolves against a set operation's result is
+        # what the three backends disagree about — Postgres and Trino bind the
+        # tail to the result, ClickHouse to the last branch, and it then does not
+        # sort the union at all — so no name offered here is right everywhere.
+        # The clause's own vocabulary is not in that argument: `DESC`, `NULLS
+        # LAST` and the six words finishing `FETCH FIRST n ROWS ONLY` carry no
+        # reference, and all three servers take them. Suppressing those too left
+        # the engine unable to complete a clause it had just suggested.
+        kinds = tuple(kind for kind in kinds if kind is Kind.KEYWORD)
+
     if clause is None and not continues and statement_has_begun(tokens, lo, hi, caret):
         # No clause matched and yet the statement has begun: this is a form the
         # engine does not model, and the empty-editor answer would propose the

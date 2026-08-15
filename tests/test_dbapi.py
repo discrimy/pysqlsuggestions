@@ -242,3 +242,43 @@ def test_the_shipped_queries_are_unaffected() -> None:
             plain = render(query.sql, ('a', 'b', 'c'), 'format')
             aware = render(query.sql, ('a', 'b', 'c'), 'format', dialect.syntax)
             assert plain == aware, (dialect.name, name)
+
+
+def test_a_percent_before_a_marker_does_not_shift_the_literal_spans() -> None:
+    """
+    The spans were computed on `sql` and consulted against the escaped copy.
+
+    `format` and `pyformat` double every `%` before substituting, which moves
+    every later offset. So a marker's position in the escaped text no longer
+    matched the literal spans measured on the original, and the protection
+    slipped by one place per `%` ahead of it: a `$1` that is text got rewritten,
+    and `pyformat` then bound nothing while its SQL asked for `p1` — a KeyError
+    from inside the driver.
+    """
+    sql = "SELECT '%%%%', 'zz$1'"
+    assert render(sql, ('A',), 'format', POSTGRES.syntax) == ("SELECT '%%%%%%%%', 'zz$1'", ())
+    assert render(sql, ('A',), 'pyformat', POSTGRES.syntax) == ("SELECT '%%%%%%%%', 'zz$1'", {})
+    live = "SELECT '%%' , x WHERE a = $1"
+    rendered, parameters = render(live, ('A',), 'format', POSTGRES.syntax)
+    assert rendered == "SELECT '%%%%' , x WHERE a = %s"
+    assert parameters == ('A',)
+
+
+def test_numeric_binds_positionally_because_that_is_what_the_marker_means() -> None:
+    """
+    `:N` in PEP 249's numeric style indexes the sequence, so it cannot be compacted.
+
+    Cutting the tuple down to the markers that occur is right for `named` and
+    `pyformat`, which bind by key, and wrong here: `:3` went on saying "the third
+    value" while the third value had been removed. Enough of the sequence to
+    reach the highest marker is the answer, which still binds nothing when the
+    query holds no marker at all.
+    """
+    assert render('SELECT * FROM t WHERE a = $1 AND c = $3', ('A', 'B', 'C'), 'numeric') == (
+        'SELECT * FROM t WHERE a = :1 AND c = :3',
+        ('A', 'B', 'C'),
+    )
+    assert render('SELECT * FROM t WHERE name = $2', ('A', 'B', 'C'), 'numeric')[1] == ('A', 'B')
+    functions = TRINO.catalog_queries.functions
+    assert functions is not None
+    assert render(functions.sql, ('public',), 'numeric')[1] == ()

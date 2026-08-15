@@ -1251,6 +1251,10 @@ def in_set_operation_tail(
     `LIMIT` in this position already said it.
     """
     base = _base_depth(tokens, lo, hi)
+    # A parenthesised subquery written *in* the tail is an ordinary query with
+    # its own FROM, and all three backends agree about what resolves there.
+    if depth_at(tokens, caret) != base:
+        return False
     operators = [
         index
         for index in range(lo, hi)
@@ -1262,11 +1266,14 @@ def in_set_operation_tail(
         return False
     for index in range(operators[-1] + 1, hi):
         token = tokens[index]
-        if token.type in _SKIP or token.depth != base or caret < token.start:
+        if token.type in _SKIP or token.depth != base:
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is not None and matched[0] in _SET_OPERATION_TAIL:
-            return True
+            # Past the clause's own keyword, not from where it starts. A caret on
+            # the `O` of ORDER, or between its letters, is completing that word —
+            # and blanking it there left `ORDER B⌶Y` unable to finish itself.
+            return caret >= tokens[matched[1] - 1].end
     return False
 
 
@@ -1551,8 +1558,11 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
     # derived table or a CTE body used to scan straight out of it and answer with
     # an offset in the enclosing statement — which then grew a second FROM while
     # the subquery that needed one still had none.
+    # Only a group that opens a *query*. A call's argument list is at the same
+    # depth and is not a place a FROM clause can go — clamping to it wrote
+    # `SELECT count(auth_user.id FROM public.auth_user)`, which does not parse.
     group = _group_start(tokens, caret, depth_at(tokens, caret))
-    if group > lo:
+    if group > lo and _opens_a_query(tokens, group - 1, hi, dialect):
         lo, hi = group, min(hi, _matching_paren(tokens, group - 1, hi))
     depth = _base_depth(tokens, lo, hi)
     for index in range(lo, hi):

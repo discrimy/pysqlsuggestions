@@ -733,3 +733,38 @@ def test_a_qualifier_before_any_from_still_names_its_relation() -> None:
     """
     sql = 'SELECT auth_user.'
     assert [s.text for s in complete(sql, len(sql), POSTGRES, catalog(), limit=3)]
+
+
+def test_a_search_capability_is_checked_on_the_method_it_calls() -> None:
+    """
+    `SupportsColumnSearch` names two methods, and the guard checked the wrong one.
+
+    `all_columns` returns None by design for every DB-API catalog — that is how it
+    says "too many to enumerate" — so `search_columns` is what actually answers,
+    and it was the one not verified. An adapter declaring `all_columns` while
+    inventing `search_columns` through `__getattr__` therefore passed the guard on
+    3.10 and returned None where a sequence was promised.
+    """
+
+    class DeclaresOneInventsTheOther(_InventsEverything):
+        def all_columns(self) -> None:
+            """Too many to enumerate, which is what None means here."""
+            return
+
+    assert complete('SELECT sta', 10, POSTGRES, DeclaresOneInventsTheOther()) is not None
+
+
+def test_a_multi_part_qualifier_reaches_its_relation_on_a_three_level_namespace() -> None:
+    """
+    Trino has three namespace levels, so `schema.table.` is not "deep enough" for
+    the branch that answers a fully qualified column, and fell through to the
+    catalog fallback — which the out-of-scope gate then closed. The statement
+    names the relation; `public.auth_user.id` is exactly what Trino accepts.
+    """
+    for sql in (
+        'SELECT public.auth_user. FROM public.auth_user',
+        'SELECT * FROM public.auth_user WHERE public.auth_user.',
+    ):
+        caret = sql.index('public.auth_user.') + len('public.auth_user.')
+        assert complete(sql, caret, TRINO, catalog()), sql
+        assert complete(sql, caret, POSTGRES, catalog()), sql

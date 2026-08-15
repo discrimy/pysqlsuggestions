@@ -23,6 +23,28 @@ from pysqlsuggestions.engine.lex import TokenType, lex
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
 _MARKER = re.compile(r'\$(\d+)')
+
+_PARAMSTYLES = {
+    'qmark': '?',
+    'format': '%s',
+    'numeric': ':{}',
+    'named': ':p{}',
+    'pyformat': '%(p{})s',
+}
+"""How each PEP 249 style spells one parameter. `{}` takes the marker's number."""
+
+
+def _escaped(text: str, *, doubles: bool) -> str:
+    r"""
+    `text` with `%` doubled for the styles that read it as a placeholder.
+
+    Introspection SQL is full of literal percents — `nspname NOT LIKE 'pg\_%'` is
+    the obvious one — and leaving them raises an opaque IndexError from inside
+    the driver rather than anything a reader could act on.
+    """
+    return text.replace('%', '%%') if doubles else text
+
+
 _DEFAULT_PARAMSTYLE = 'format'
 
 
@@ -81,60 +103,51 @@ def render(sql: str, values: Sequence[str], paramstyle: str, syntax: Syntax | No
     that separately and then kept in step.
     """
     protected = _quoted_spans(sql, syntax)
-    order: list[int] = []
+    if paramstyle not in _PARAMSTYLES:
+        message = f'unsupported paramstyle: {paramstyle!r}'
+        raise ValueError(message)
 
     # Checked once, for every paramstyle, because `$0` is malformed in the
-    # neutral language rather than in any one driver's. Markers are one-based,
-    # so the subtraction below turns `$0` into Python's `-1` and silently binds
-    # the *last* value — valid SQL against the wrong parameter, where every
-    # other out-of-range marker raises. `Template.snippet` in this package
-    # spells `$0` with its own meaning ("last"), which is exactly the confusion
-    # that puts one in a `Query.sql` by mistake.
+    # neutral language rather than in any one driver's. Markers are one-based, so
+    # treating it as an index turns it into Python's `-1` and silently binds the
+    # *last* value — valid SQL against the wrong parameter, where every other
+    # out-of-range marker raises loudly.
     if any(int(found.group(1)) == 0 for found in _markers(sql, protected)):
         message = f'markers are one-based, so $0 is not a parameter: {sql!r}'
         raise ValueError(message)
 
-    def positional(match: re.Match[str], token: str) -> str:
-        if _within(match.start(), protected):
-            return match.group(0)
-        order.append(int(match.group(1)) - 1)
-        return token
+    # One pass over `sql`, escaping each stretch as it is emitted. The escaping
+    # used to happen first, on a copy — and `_quoted_spans` measures `sql`, so
+    # every `%` ahead of a marker shifted that marker's offset by one and the
+    # protection slipped a place. A `$1` that is text got rewritten, and
+    # `pyformat` then bound nothing while its SQL asked for `p1`.
+    doubles = paramstyle in ('format', 'pyformat')
+    order: list[int] = []
+    wanted = sorted({int(found.group(1)) for found in _markers(sql, protected)})
+    parts: list[str] = []
+    cursor = 0
 
-    def named(match: re.Match[str], template: str) -> str:
-        if _within(match.start(), protected):
-            return match.group(0)
-        return template.format(match.group(1))
-
-    # The %-based styles read `%` as the start of a placeholder, so a literal one
-    # in the query text has to be doubled. Introspection SQL is full of them —
-    # `nspname NOT LIKE 'pg\_%'` is the obvious case — and forgetting this raises
-    # an opaque IndexError from inside the driver rather than anything readable.
-    escaped = sql.replace('%', '%%') if paramstyle in ('format', 'pyformat') else sql
+    for found in _MARKER.finditer(sql):
+        parts.append(_escaped(sql[cursor : found.start()], doubles=doubles))
+        if _within(found.start(), protected):
+            parts.append(found.group(0))
+        else:
+            number = int(found.group(1))
+            order.append(number - 1)
+            parts.append(_PARAMSTYLES[paramstyle].format(number))
+        cursor = found.end()
+    parts.append(_escaped(sql[cursor:], doubles=doubles))
+    rendered = ''.join(parts)
 
     if paramstyle in ('qmark', 'format'):
-        token = '?' if paramstyle == 'qmark' else '%s'
-        rendered = _MARKER.sub(lambda m: positional(m, token), escaped)
         return rendered, tuple(values[index] for index in order)
-
-    # The three styles below name their parameters, so what they bind comes from
-    # the markers that occur rather than from everything the caller passed.
-    # Returning all of them described a parameter the SQL never asks for —
-    # Trino's `SHOW FUNCTIONS` takes none and got one — which a positional driver
-    # rejects outright. `trino_http._prepare` already special-cased this shape,
-    # which was the sign the general rule was wrong rather than that query odd.
-    wanted = sorted({int(found.group(1)) for found in _markers(sql, protected)})
-
     if paramstyle == 'numeric':
-        rendered = _MARKER.sub(lambda m: m.group(0) if _within(m.start(), protected) else f':{m.group(1)}', sql)
-        return rendered, tuple(values[number - 1] for number in wanted)
-
-    if paramstyle in ('named', 'pyformat'):
-        template = ':p{}' if paramstyle == 'named' else '%(p{})s'
-        rendered = _MARKER.sub(lambda m: named(m, template), escaped)
-        return rendered, {f'p{number}': values[number - 1] for number in wanted}
-
-    message = f'unsupported paramstyle: {paramstyle!r}'
-    raise ValueError(message)
+        # `:N` indexes the sequence, so this one cannot be compacted the way the
+        # two keyed styles are: `:3` goes on meaning "the third value" however
+        # few markers occur. Enough of the sequence to reach the highest marker,
+        # and nothing at all when the query holds none.
+        return rendered, tuple(values[: max(wanted)]) if wanted else ()
+    return rendered, {f'p{number}': values[number - 1] for number in wanted}
 
 
 class DbapiCatalog:
