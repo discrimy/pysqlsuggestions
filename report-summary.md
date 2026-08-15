@@ -28,20 +28,31 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-**18 findings closed and one substantially improved**, across three commits, each fix carrying a
+**27 findings closed and one substantially improved**, across five commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1724 passed** (from 1700).
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1734 passed** (from 1700).
 
 | Commit | Closes |
 | --- | --- |
 | `9e123c1` from a caret to the catalog | 1, 2, 3, 4, 5, 6, 10, 13, 17*, 37 |
 | `4b38c3e` a CTE belongs to the query that declares it | 24, 25, 27 |
 | `8b5f21c` the server's half of a position | 30, 31, 32, 33, 35, 36 |
+| `4fce7b7` a literal's opening is not always one character | 9, 16, 21, 22, 23 |
+| `0dce915` four things that answered for something nobody asked | 8, 12, 15, 18 |
 
-Still open: **7** (Postgres quoting), **8** (`SELECT NULL`), **9** (empty clause name), **11** (3.10
-capability detection), **12** (`render` binds unasked values), **14**–**16** (registry and
-conformance), **18**–**20**, **21**–**23** (literal prefixes, placeholder hang), **26** (ORDER BY
-after a set operation), **28** (INSERT target), **29**, **34**, and both design calls U1/U2.
+### Still open, and why
+
+| # | Finding | Why it is still here |
+| --- | --- | --- |
+| 7 | Postgres leaves ~13k BMP code points unquoted | Real, and the fix is a narrower character class — but it changes what every non-ASCII name inserts as, so it wants its own change and its own round-trip corpus. |
+| 11 | Capability detection differs on 3.10 vs 3.12 | Left deliberately. Matching 3.12 means `inspect.getattr_static`, which stops seeing `classmethod` capabilities that work today — a live regression traded for a proxy-catalog edge case. |
+| 14 | A plugin named `postgres` shadows the built-in | Design call: should built-ins be privileged, or is last-wins intended? |
+| 19 | `without()` is a silent no-op on an unknown name | Design call. Making it raise matches `postgres._ansi`'s stated reasoning but would break any third-party dialect dropping a clause it does not have. |
+| 20 | Markers rewritten inside strings and comments | Latent; no shipped query trips it. Needs a real scanner in `render`, not a regex. |
+| 26 | `ORDER BY` after a set operation | Needs a decision on what the position should offer — result columns only, I would argue. |
+| 28 | The `INSERT` target is in scope for the source `SELECT` | Needs the target visible to the column list and `RETURNING` while invisible after the `SELECT`. |
+| 29, 34 | Cubic nesting cost; per-keystroke LSP cost | Both are constants and caching, not correctness. |
+| U1, U2 | The two design calls | Unchanged. |
 
 | # | Fix | Test |
 | --- | --- | --- |
