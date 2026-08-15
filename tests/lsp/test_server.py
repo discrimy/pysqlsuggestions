@@ -303,3 +303,24 @@ def test_initialize_stays_on_the_event_loop() -> None:
     """
     handler = create_server().protocol.fm.features[INITIALIZE]
     assert not dispatched_in_a_thread(handler)
+
+
+def test_a_degraded_session_reduces_the_driver_error_to_its_sentence() -> None:
+    """
+    The notification carries `why` for a person to read, so it gets the sentence.
+
+    `check.describe` exists to turn pg8000's dict into one — its own test calls
+    the raw form unreadable — and `Session.degrade` was announcing that raw form
+    instead. The two paths now answer the same way for the same failure.
+    """
+
+    class DatabaseError(Exception):
+        pass
+
+    def rejecting(profile: object) -> object:
+        raise DatabaseError({'S': 'FATAL', 'C': '28P01', 'M': 'password authentication failed for user "report"'})
+
+    told: list[str] = []
+    session = Session(profile=Profile(dialect='postgres', host='db'), connect=rejecting, on_degrade=told.append)
+    session.suggest('SELECT * FROM ', 14)
+    assert told == ['password authentication failed for user "report"']

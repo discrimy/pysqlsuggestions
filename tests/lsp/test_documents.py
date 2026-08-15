@@ -83,7 +83,7 @@ def test_the_caret_within_the_statement_is_recoverable() -> None:
 
 def test_line_starts_marks_every_line() -> None:
     """Including the empty one, which has a start like any other."""
-    assert line_starts('a\nbb\n\nc') == [0, 2, 5, 6]
+    assert line_starts('a\nbb\n\nc').starts == [0, 2, 5, 6]
 
 
 def test_an_offset_on_the_first_line() -> None:
@@ -100,3 +100,35 @@ def test_an_offset_at_end_of_input() -> None:
     """A caret past a trailing newline sits at the start of the line after it."""
     text = 'SELECT 1\n'
     assert to_position(line_starts(text), len(text)) == (1, 0)
+
+
+def test_a_character_column_is_counted_in_utf16_units() -> None:
+    """
+    LSP counts `character` in UTF-16 code units, and the server says so.
+
+    Its `initialize` result advertises `positionEncoding: utf-16`, and 3.17 makes
+    that the default regardless. An emoji is one code point and two units, so a
+    column reported as code points is short by one for every astral character
+    before it — and the edit range built from it lands inside the word, which is
+    how `FROM rec` became `FROMrecentc` when the completion was applied.
+    """
+    text = 'SELECT \U0001f642 x'
+    assert to_position(line_starts(text), len(text)) == (0, len(text) + 1)
+
+
+def test_a_column_is_unaffected_by_a_basic_plane_character() -> None:
+    """One code point, one unit: an accent must not be counted twice."""
+    text = 'SELECT é x'
+    assert to_position(line_starts(text), len(text)) == (0, len(text))
+
+
+def test_a_lone_carriage_return_starts_a_line() -> None:
+    """
+    A bare CR ends a line for the client and for pygls, and used not to here.
+
+    `line_starts` counted the newline alone while the inbound half of the same
+    request goes through `TextDocument.lines`, which splits on CR too. One
+    request, two line models: the caret decoded correctly and the range came
+    back naming a line above it, at a column longer than that line.
+    """
+    assert line_starts('a\rbb\r\nc\nd').starts == [0, 2, 6, 8]

@@ -118,3 +118,20 @@ def test_a_catalog_that_raises_is_a_failed_verdict() -> None:
     verdict = check(POSTGRES, connect=refusing)
     assert verdict['ok'] is False
     assert '57432' in verdict['detail']
+
+
+def test_an_error_with_no_message_still_says_something() -> None:
+    """
+    A verdict is the product, so an empty one is a failure of this module.
+
+    `describe` ends by collapsing `str(error)`, which is `''` for an exception
+    raised bare — and any HTTP answer with a non-200 status and an empty body
+    produces exactly that, a bodiless 503 from a proxy being the ordinary way to
+    get one. The class name is not a sentence, but it is a fact, and the tooltip
+    that would otherwise be blank is what this feature exists to fill.
+    """
+
+    class DatabaseError(Exception):
+        pass
+
+    assert describe(DatabaseError(), password='x') == 'DatabaseError'
