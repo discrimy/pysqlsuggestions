@@ -768,3 +768,40 @@ def test_a_multi_part_qualifier_reaches_its_relation_on_a_three_level_namespace(
         caret = sql.index('public.auth_user.') + len('public.auth_user.')
         assert complete(sql, caret, TRINO, catalog()), sql
         assert complete(sql, caret, POSTGRES, catalog()), sql
+
+
+def test_a_functional_cast_names_the_type_of_its_comparison() -> None:
+    """
+    `CAST(r.id AS text) > ` is `r.id::text > ` written the other way about.
+
+    Only the postfix spelling was read, so the two forms of one operation gave
+    different answers — and `::` is an extension. ANSI declares no cast operator
+    at all, which `test_ansi_has_no_cast_operator_so_no_type_position` records,
+    so on that dialect the functional form is the *only* spelling and narrowing
+    never happened there whatever the author wrote.
+    """
+    found = texts('SELECT * FROM reports_report r WHERE CAST(r.id AS text) > ⌶')
+    assert 'r.name' in found
+    assert 'r.id' not in found
+
+
+def test_a_functional_cast_narrows_on_a_dialect_with_no_cast_operator() -> None:
+    """The spelling ANSI actually has, which is why reading only `::` left it with none."""
+    sql, caret = split_caret('SELECT * FROM r WHERE CAST(x AS interval) > ⌶')
+    assert derive_request(sql, caret, ANSI).comparand_type == 'interval'
+
+
+def test_a_multi_word_cast_type_survives_being_read() -> None:
+    """`double precision` and `timestamp with time zone` are one type name each, not two words."""
+    sql, caret = split_caret('SELECT * FROM r WHERE CAST(x AS double precision) > ⌶')
+    assert derive_request(sql, caret, POSTGRES).comparand_type == 'double precision'
+
+
+def test_a_call_that_is_not_a_cast_does_not_name_a_type() -> None:
+    """
+    The control. `upper(name) > ` ends in the same `)` and names no type, and
+    `count(*) > ` is the shape this would most easily mistake for one.
+    """
+    for sql in ('SELECT * FROM r WHERE upper(name) > ⌶', 'SELECT * FROM r WHERE count(*) > ⌶'):
+        marked, caret = split_caret(sql)
+        assert derive_request(marked, caret, POSTGRES).comparand_type is None, sql

@@ -838,6 +838,10 @@ def comparand_at(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple
         if cast >= 0 and tokens[cast].type is TokenType.OPERATOR and tokens[cast].text == marker:
             return (), tokens[index].value
 
+    functional = _functional_cast_type(tokens, index)
+    if functional is not None:
+        return (), functional
+
     segments: list[str] = []
     while index >= 0 and tokens[index].type is TokenType.IDENT:
         segments.append(tokens[index].value)
@@ -846,6 +850,51 @@ def comparand_at(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple
             break
         index = _skip_back(tokens, dot - 1)
     return tuple(reversed(segments)), None
+
+
+def _functional_cast_type(tokens: Sequence[Token], index: int) -> str | None:
+    """
+    The type named by a `CAST(x AS t)` ending at `index`, or None.
+
+    The other spelling of the postfix operator handled above, and the only one
+    ANSI has: `cast_operator` is None there, so a dialect without the extension
+    narrowed on nothing however its author wrote the cast. Two spellings of one
+    operation answering differently is the defect; the type is the same type.
+
+    Read from the closing parenthesis back to the `AS` that governs it, so the
+    argument may be anything — a call, a nested cast, an expression with its own
+    parentheses — without this having to understand it. Only the depth matters,
+    and `AS` at the group's own level is the one that belongs to this cast.
+
+    The type is every token after that `AS`, joined by what the text already
+    holds between them: `double precision` and `timestamp with time zone` are
+    each one type name, and reading only the first word would call the second a
+    timestamp and narrow to the wrong family rather than to none.
+    """
+    if tokens[index].type is not TokenType.PUNCT or tokens[index].text != ')':
+        return None
+    inside = tokens[index].depth + 1
+    opened = _matching_open(tokens, index)
+    if opened is None or opened == 0:
+        return None
+    named = _skip_back(tokens, opened - 1)
+    if named < 0 or tokens[named].type is not TokenType.IDENT or tokens[named].value.upper() != 'CAST':
+        return None
+    for at in range(index - 1, opened, -1):
+        token = tokens[at]
+        if token.depth == inside and token.type is TokenType.IDENT and token.value.upper() == 'AS':
+            text = ''.join(part.text for part in tokens[at + 1 : index]).strip()
+            return text or None
+    return None
+
+
+def _matching_open(tokens: Sequence[Token], index: int) -> int | None:
+    """Index of the `(` the `)` at `index` closes, by depth rather than by counting."""
+    for at in range(index - 1, -1, -1):
+        token = tokens[at]
+        if token.type is TokenType.PUNCT and token.text == '(' and token.depth == tokens[index].depth:
+            return at
+    return None
 
 
 def predicate_complete(
