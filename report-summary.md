@@ -28,9 +28,9 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-**38 findings closed and one substantially improved**, across fifteen commits, each fix carrying a
+**39 findings closed and one substantially improved**, across sixteen commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1848 passed** (from 1700), and with
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1851 passed** (from 1700), and with
 the docker backends up the integration suite passes too.
 
 | Commit | Closes |
@@ -50,6 +50,7 @@ the docker backends up the integration suite passes too.
 | `d274806` a capability that only answers to its name is not one | 11 |
 | `6f61ef1` a marker inside a literal is text, not a parameter | 20 |
 | `df2cf00` the scope walk stops re-asking the same question | 29 |
+| `d27192b` a relation the catalog knows is not one to read from | new |
 
 ### Measurement changed three of the six decisions
 
@@ -84,10 +85,15 @@ invented kind. Fixed in `d274806`, verified on all three supported interpreters.
 
 ### Found while fixing, not in the original sweep
 
-A qualifier naming any catalog relation resolves to its columns even when that relation is not in
-scope: `SELECT users.⌶ FROM orders` offers `id, name`, and every backend refuses
-`SELECT users.id FROM orders`. General behaviour, not specific to any statement form — noticed while
-fixing #28 and deliberately left out of that commit rather than widening it.
+A qualifier naming any catalog relation resolved to its columns even when that relation was not in
+scope: `SELECT users.⌶ FROM orders` offered `id, name`, which every backend refuses. Noticed while
+fixing #28 and deliberately kept out of that commit; fixed in `d27192b`.
+
+It is the one change on this branch that **reverses an existing asserted behaviour**.
+`test_unknown_qualifier_still_falls_back_to_catalog` called the reference valid; all three servers
+refuse the SQL in its own docstring, and `resolve.py` cited that same shape as the case the fallback
+served. Test and code agreed with each other and with nothing else. The docstring now carries the
+measurement instead of the premise.
 
 | # | Fix | Test |
 | --- | --- | --- |
