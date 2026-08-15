@@ -95,12 +95,17 @@ def _snippet(text: str, stops: Sequence[int]) -> str:
     Literal dollars, braces and backslashes are escaped, since a value like
     `'$1 off'` is not a template and must not become one.
     """
+    # Walked in text order, numbered in visiting order — they are not the same
+    # sequence. `expand_snippet` hands these back in the order a front end should
+    # tab through them, so the shipped `(13, 17, 7, 17)` sent a single advancing
+    # cut past 17 and then back to 7: `text[17:7]` is empty and the tail was
+    # emitted a second time.
     parts: list[str] = []
     cut = 0
-    for index, stop in enumerate(stops, start=1):
+    for stop, index in sorted((stop, index) for index, stop in enumerate(stops, start=1)):
         parts.append(text[cut:stop].translate(_SNIPPET_SPECIALS))
         parts.append(f'${index}')
-        cut = stop
+        cut = max(cut, stop)
     parts.append(text[cut:].translate(_SNIPPET_SPECIALS))
     return ''.join(parts)
 

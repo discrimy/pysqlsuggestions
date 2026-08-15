@@ -221,3 +221,25 @@ def test_the_insert_column_list_still_names_the_target() -> None:
     for sql in ('INSERT INTO users (', 'INSERT INTO users (id) VALUES (1) RETURNING '):
         offered = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=10)]
         assert [text for text in offered if 'id' in text], sql
+
+
+def test_the_insert_column_list_names_only_the_target() -> None:
+    """
+    The commit that split an INSERT's three positions did not actually change
+    this one — `[*written_to, *relations]` is target *and* source.
+
+    `INSERT INTO auth_group (username)` is `column "username" of relation
+    "auth_group" does not exist`; the list names columns of the table being
+    written to, and nothing else. The earlier test used a statement with no
+    source `SELECT`, which is the one shape where the two happen to agree.
+    """
+    catalog = MemoryCatalog(
+        {
+            ('public', 'groups'): [('id', 'bigint'), ('name', 'text')],
+            ('public', 'users'): [('id', 'bigint'), ('username', 'text')],
+        }
+    )
+    sql = 'INSERT INTO groups () SELECT id, username FROM users'
+    offered = [s.text for s in complete(sql, sql.index('()') + 1, POSTGRES, catalog, limit=20)]
+    assert offered, 'the target still answers'
+    assert not [text for text in offered if 'username' in text], offered
