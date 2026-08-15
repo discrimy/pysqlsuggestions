@@ -14,6 +14,7 @@ consults the dialect's vocabulary. That keeps this module dependent on dialect
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -267,6 +268,40 @@ def _opener_length(placeholder: Placeholder) -> int:
     return len(placeholder.opens)
 
 
+class Tokens(tuple):  # type: ignore[type-arg]
+    """
+    A scanned statement, carrying room for what gets derived from it.
+
+    A tuple, so every existing caller is unaffected — and a subclass of one, so
+    it can hold a memo. The analysis above `lex` asks the same question of the
+    same tokens over and over: the scope walk descends a level at a time and each
+    level rescans ranges the level above already scanned, which for a query of
+    nested derived tables meant 235,245 clause lookups answering 324 distinct
+    questions.
+
+    The memo lives here rather than in a module-level cache because that is what
+    makes its lifetime right. A token stream is derived from one text and is
+    immutable, so an entry can never go stale; a new keystroke produces new
+    tokens and, with them, an empty memo. Nothing has to decide when to clear it,
+    nothing is shared between threads, and a slice — which is an ordinary tuple —
+    simply has none.
+    """
+
+    memo: dict[object, object]
+    """
+    Answers already derived from these tokens.
+
+    No `__slots__`: a tuple subclass cannot have a non-empty one, so the instance
+    carries a `__dict__` — one per scan, which is the granularity this is for.
+    """
+
+    def __new__(cls, tokens: Iterable[Token]) -> Tokens:
+        """A token stream with an empty memo."""
+        found = super().__new__(cls, tokens)
+        found.memo = {}
+        return found
+
+
 def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
     """Tokenize `src`. Total, never raises, and preserves every offset."""
     tokens: list[Token] = []
@@ -380,4 +415,4 @@ def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
         tokens.append(Token(TokenType.UNKNOWN, pos, pos + 1, ch, ch, depth=depth))
         pos += 1
 
-    return tuple(tokens)
+    return Tokens(tokens)

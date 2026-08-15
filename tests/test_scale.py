@@ -119,3 +119,24 @@ def test_a_long_cte_chain_resolves_without_exhausting_the_stack() -> None:
     parts = ['a0 AS (SELECT * FROM users)'] + [f'a{i} AS (SELECT * FROM a{i - 1})' for i in range(1, 600)]
     sql = 'WITH ' + ', '.join(parts) + ' SELECT * FROM a599 z WHERE z.'
     assert complete(sql, len(sql), POSTGRES) is not None
+
+
+def test_deeply_nested_derived_tables_stay_interactive() -> None:
+    """
+    The scope walk asked the same question about the same tokens repeatedly.
+
+    `_scope_level` recurses a level at a time and each level rescans ranges the
+    level above already scanned, so `_clause_starting_at` was called 235,245
+    times for a query holding 324 distinct questions — a 99.9% repeat rate at
+    depth eighty. The token stream cannot change while a request is being
+    derived, so every one of those repeats had the same answer.
+
+    A generated query is where this arrives: `_MAX_NESTING`'s own comment says
+    "nobody writes sixty-four, but a code generator does", and 2.6 KB of it took
+    almost two seconds.
+    """
+    depth = 160
+    sql = 'SELECT * FROM ' + '(SELECT * FROM ' * depth + 'users u WHERE u.' + ')' * depth
+    started = time.perf_counter()
+    derive_request(sql, sql.index('u.') + 2, POSTGRES)
+    assert time.perf_counter() - started < _BUDGET_SECONDS

@@ -10,11 +10,13 @@ from __future__ import annotations
 import bisect
 from collections.abc import Callable, Mapping, Sequence
 from functools import cache
-from typing import Literal
+from typing import Literal, TypeVar
 
 from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
 from pysqlsuggestions.types import Projection, Relation, Scope
+
+_Answer = TypeVar('_Answer')
 
 _SKIP = (TokenType.WHITESPACE, TokenType.COMMENT)
 _RELATION_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO', 'TABLE'})
@@ -1270,12 +1272,21 @@ def in_set_operation_tail(
 
 def _base_depth(tokens: Sequence[Token], lo: int, hi: int) -> int:
     """The shallowest paren depth among the significant tokens in [lo, hi)."""
-    return min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
+    return _remembered(
+        tokens,
+        ('base', lo, hi),
+        lambda: min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0),
+    )
 
 
-def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> list[tuple[int, int]]:
+def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> tuple[tuple[int, int], ...]:
     """Index ranges of parenthesised bodies that begin with SELECT, one level down."""
-    depth = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
+    return _remembered(tokens, ('bodies', lo, hi), lambda: _scan_subquery_bodies(tokens, lo, hi))
+
+
+def _scan_subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> tuple[tuple[int, int], ...]:
+    """Index ranges of parenthesised bodies that begin with SELECT, one level down."""
+    depth = _base_depth(tokens, lo, hi)
     bodies = []
     for index in range(lo, hi):
         token = tokens[index]
@@ -1287,7 +1298,7 @@ def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> list[tuple[in
         if tokens[body_lo].value.upper() not in {'SELECT', 'WITH', 'VALUES', 'TABLE'}:
             continue
         bodies.append((body_lo, _matching_paren(tokens, index, hi)))
-    return bodies
+    return tuple(bodies)
 
 
 def _derived_tables(
@@ -1365,8 +1376,19 @@ def _relations_in(
     hi: int,
     caret: int,
     dialect: Dialect,
-) -> list[Relation]:
+) -> tuple[Relation, ...]:
     """Every table reference introduced between `lo` and `hi`."""
+    return _remembered(tokens, ('relations', lo, hi, caret), lambda: _scan_relations_in(tokens, lo, hi, caret, dialect))
+
+
+def _scan_relations_in(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> tuple[Relation, ...]:
+    """The scan behind `_relations_in`."""
     relations: list[Relation] = []
     written_to: list[Relation] = []
     shelter = _unclosed_call_depth(tokens, lo, hi, dialect)
@@ -1391,8 +1413,8 @@ def _relations_in(
         found = written_to if matched[0] == 'INSERT INTO' else relations
         index = _read_relation_list(tokens, matched[1], hi, caret, dialect, found, matched[0])
     if not written_to:
-        return relations
-    return _around_an_insert_target(tokens, lo, hi, caret, dialect, written_to, relations)
+        return tuple(relations)
+    return tuple(_around_an_insert_target(tokens, lo, hi, caret, dialect, written_to, relations))
 
 
 def _around_an_insert_target(
@@ -1646,7 +1668,49 @@ def _introduces_relations(tokens: Sequence[Token], matched: tuple[str, int], hi:
     return name in _RELATION_CLAUSES
 
 
+def _remembered(tokens: Sequence[Token], key: object, produce: Callable[[], _Answer]) -> _Answer:
+    """
+    `produce()`, asked once per key for the life of this token stream.
+
+    Every caller is a pure function of the tokens and an index range, and the
+    stream is immutable, so an answer cannot go stale. The scope walk descends a
+    level at a time and rescans ranges the level above already scanned, which is
+    what turns a generated query of nested subqueries from linear into something
+    much worse. A plain sequence — a slice, or a list a test built — has no memo
+    and is computed as before.
+    """
+    memo: dict[object, object] | None = getattr(tokens, 'memo', None)
+    if memo is None:
+        return produce()
+    if key not in memo:
+        memo[key] = produce()
+    answer: _Answer = memo[key]  # type: ignore[assignment]
+    return answer
+
+
 def _clause_starting_at(
+    tokens: Sequence[Token],
+    index: int,
+    hi: int,
+    clauses: ClauseModel,
+) -> tuple[str, int] | None:
+    """
+    The clause beginning at `index`, memoised against the token stream.
+
+    The scope walk descends a level at a time and each level rescans ranges the
+    level above already scanned, so this was asked 235,245 times for a query of
+    nested derived tables holding 324 distinct questions — a 99.9% repeat rate at
+    depth eighty, and the cubic term in what a code generator produces.
+
+    Safe because the answer is a pure function of its arguments and the stream is
+    immutable, so the memo cannot go stale; it lives on the stream, so it is
+    discarded with it. A plain sequence — a slice, or a list built by a test —
+    simply has no memo and is scanned as before.
+    """
+    return _remembered(tokens, ('clause', index, hi, clauses), lambda: _scan_clause_start(tokens, index, hi, clauses))
+
+
+def _scan_clause_start(
     tokens: Sequence[Token],
     index: int,
     hi: int,
