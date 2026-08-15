@@ -8,9 +8,10 @@ the shape of the cost, not a benchmark figure.
 
 from __future__ import annotations
 
+import sys
 import time
 
-from pysqlsuggestions.api import derive_request
+from pysqlsuggestions.api import complete, derive_request
 from pysqlsuggestions.dialects.postgres import POSTGRES
 
 _BUDGET_SECONDS = 1.5
@@ -55,3 +56,66 @@ def test_absurd_nesting_does_not_exhaust_the_stack() -> None:
     depth = 1500
     sql = 'SELECT ' + '(SELECT ' * depth + 'x'
     assert derive_request(sql, len(sql), POSTGRES) is not None
+
+
+def test_unclosed_nesting_does_not_cost_its_square() -> None:
+    """
+    A query with dangling parens is not an edge case — it is what the editor
+    holds on most keystrokes, since the caret arrives before the closing paren.
+
+    Two separate costs met here. `_unclosed_call_depth` handed back a lookup that
+    counted its open groups by scanning them, once per token. The larger one was
+    `_by_first_word`, whose `@cache` re-hashed the entire `ClauseModel` on every
+    clause lookup — 118 million hash calls for a query this shape, and 24 seconds
+    of its 44. This depth took 5.3 seconds before those two and takes well under
+    one after.
+
+    Depth eighty rather than something rounder because it is the point the old
+    cost crossed this budget: the assertion is meant to fail if either fix is
+    undone, not to leave headroom for a third. What it does *not* cover is
+    `clause_at`'s outward widening, which is still quadratic on a run of bare
+    unclosed parens — a separate mechanism and a far less realistic input.
+    """
+    sql = 'SELECT * FROM ' + '(SELECT * FROM ' * 80 + 't'
+    started = time.perf_counter()
+    derive_request(sql, len(sql), POSTGRES)
+    assert time.perf_counter() - started < _BUDGET_SECONDS
+
+
+def test_nested_ctes_do_not_exhaust_the_stack() -> None:
+    """
+    `_MAX_NESTING` bounded `_scope_level` and nothing else.
+
+    `select_outputs` and `_read_ctes` call each other once per nesting level with
+    no bound at all, so a generated document raised RecursionError out of
+    `complete` itself — and out of the language server's handler, whose docstring
+    says it never raises.
+
+    The interpreter's limit is lowered rather than the input deepened, and that
+    is a statement about cost rather than a trick: the only shape reaching this
+    recursion is nested *unclosed* subqueries, which is also the shape still
+    quadratic in `_by_first_word`'s hashing, so proving the bound at the stock
+    limit costs four hundred seconds. Lowering the limit asserts the same thing
+    — the walk stops at `_MAX_NESTING` rather than at the interpreter — for
+    three. Restore it in `finally`, or every later test inherits it.
+    """
+    sql = 'WITH a AS(' * 150 + 'SELECT 1'
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(300)
+    try:
+        assert derive_request(sql, len(sql), POSTGRES) is not None
+    finally:
+        sys.setrecursionlimit(limit)
+
+
+def test_a_long_cte_chain_resolves_without_exhausting_the_stack() -> None:
+    """
+    The same missing bound one stage down, in `resolve`.
+
+    `_columns_of` and `_from_projection` walk a projection's stars recursively.
+    CTEs are siblings rather than nested scopes, so `_MAX_NESTING` never applies
+    to a chain of them and 495 links was enough to raise — with no catalog at all.
+    """
+    parts = ['a0 AS (SELECT * FROM users)'] + [f'a{i} AS (SELECT * FROM a{i - 1})' for i in range(1, 600)]
+    sql = 'WITH ' + ', '.join(parts) + ' SELECT * FROM a599 z WHERE z.'
+    assert complete(sql, len(sql), POSTGRES) is not None

@@ -270,3 +270,21 @@ def test_all_three_annotations_reach_the_one_field_a_client_has() -> None:
     assert 'joins booking' in detail
     assert 'fk: flight.id' in detail
     assert 'no SELECT privilege' in detail
+
+
+def test_the_edit_at_the_caret_is_the_primary_one_at_an_empty_prefix() -> None:
+    """
+    The same contract as above, at the position where the span stops settling it.
+
+    `SELECT ⌶` is the commonest trigger there is, and the select list ends there,
+    so the column and its FROM clause are both edits starting at offset 7.
+    `_split_edits` matched on `span[0]` from the front of a tuple `plan_insertion`
+    orders latest-first, so it took the clause — handing the client an item whose
+    `text_edit` was ` FROM auth_user` and demoting the column to an additional
+    edit at the identical range, which the spec leaves undefined.
+    """
+    offered = suggestion('auth_user.id', Kind.COLUMN, (7, 7), relation=('auth_user',))
+    result = item('SELECT ', offered)
+    assert edit_of(result).new_text == 'auth_user.id'
+    assert result.additional_text_edits is not None
+    assert [extra.new_text for extra in result.additional_text_edits] == [' FROM auth_user']

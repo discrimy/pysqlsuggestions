@@ -560,3 +560,43 @@ def test_a_table_of_unknown_size_says_nothing_about_it() -> None:
     """A backend that cannot estimate must not be made to look like it did."""
     found = {s.text: s.detail for s in complete('SELECT * FROM reports_rep', 25, POSTGRES, catalog())}
     assert found['reports_report'] == 'public.reports_report (table)'
+
+
+def test_an_empty_qualifier_does_not_evict_the_relation_list() -> None:
+    """
+    `tables` and `columns` shared a cache key when the table name was empty.
+
+    Every reader sharing the four-tuple key shape carries a NUL sentinel in
+    its last slot to keep it clear of a column read — except `tables`, which
+    used the bare empty string, so `tables(None)` and `columns(None, '')` were
+    one key. `SELECT "".⌶` is a quoted empty identifier and reaches the second,
+    which meant one such caret either crashed the next relation read or silently
+    emptied it for as long as the cache lived.
+    """
+    cache: dict[tuple[object, ...], object] = {}
+    warm = catalog()
+    complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')
+    complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
+    after = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')]
+    cold = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, catalog(), identity='analyst')]
+    assert after == cold
+
+
+def test_an_empty_namespace_does_not_empty_the_relation_list() -> None:
+    """
+    The other order, and the other half of the same conflation.
+
+    `_key` folded None and the empty string together with `schema or ''`, so
+    `tables(None)` — every relation the search path reaches — shared a key with
+    `tables('')` — the relations in a schema actually named '', which is none at
+    all. `SELECT "".` reads the quoted empty identifier as a namespace, so one
+    such caret cached the empty answer over the real one, silently, for as long
+    as the cache lived. A sentinel on `tables` does not help: both calls are
+    `tables`, and it is the argument that was lost.
+    """
+    cache: dict[tuple[object, ...], object] = {}
+    warm = catalog()
+    complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
+    after = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')]
+    cold = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, catalog(), identity='analyst')]
+    assert after == cold

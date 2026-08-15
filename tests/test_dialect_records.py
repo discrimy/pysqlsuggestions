@@ -152,3 +152,24 @@ def test_the_other_dialects_say_nothing_rather_than_guessing() -> None:
         assert query is not None
         assert 'privilege' not in query.sql
         assert _column(query, ('db', 'users', 'id', 'bigint', 1)).availability is Availability.UNKNOWN
+
+
+def test_before_the_item_is_folded_into_the_keywords() -> None:
+    """
+    A word the model can suggest but `keywords` omits reads as an identifier.
+
+    `__post_init__` folds every other vocabulary field, and `before_the_item` is
+    just as much a set of words the model puts on screen — Postgres offers
+    ROLLUP, CUBE and GROUPING SETS at a GROUP BY caret. Left unfolded, the
+    analyser read the accepted word as that clause's *item*, so the caret after
+    it offered clause continuations and accepting one wrote `GROUP BY ROLLUP
+    HAVING`, which the server refuses.
+    """
+    for dialect in (ANSI, POSTGRES, CLICKHOUSE, TRINO):
+        spoken = {
+            word.upper()
+            for clause in dialect.clauses.clauses
+            for phrase in clause.before_the_item
+            for word in phrase.split()
+        }
+        assert spoken <= dialect.keywords, f'{dialect.name}: {sorted(spoken - dialect.keywords)}'

@@ -169,3 +169,65 @@ def test_every_plan_is_one_edit_unless_it_needs_two() -> None:
     plan = plan_insertion('SELECT * FROM ord', suggestion('orders', Kind.TABLE, (14, 17)))
     assert len(plan.edits) == 1
     assert plan.edits[0].span == (14, 17)
+
+
+def test_the_relation_clears_a_trailing_line_comment() -> None:
+    """
+    A comment ending the buffer is not the end of the select list.
+
+    `select_list_end` skips comments while looking for the clause the FROM must
+    precede, then fell back to the end of the last token — which is the comment
+    itself. The clause landed inside it, so the statement the author ran had no
+    FROM at all and the server answered `missing FROM-clause entry`.
+    """
+    sql = 'SELECT na -- note'
+    pick = suggestion('auth_user.name', Kind.COLUMN, (7, 9), relation=('auth_user',))
+    assert applied(sql, plan_insertion(sql, pick)) == 'SELECT auth_user.name FROM auth_user -- note'
+
+
+def test_the_relation_is_separated_from_a_following_set_operator() -> None:
+    """
+    The one edit that never passed through `_separated`.
+
+    `_relation_edit` writes its own text, and gave it a leading space and no
+    trailing one — so against a set operator, which ends the branch rather than
+    starting a clause, it produced `FROM auth_userUNION`: one identifier, and no
+    UNION left in the statement.
+    """
+    sql = 'SELECT na UNION SELECT 1'
+    pick = suggestion('auth_user.name', Kind.COLUMN, (7, 9), relation=('auth_user',))
+    assert applied(sql, plan_insertion(sql, pick)) == 'SELECT auth_user.name FROM auth_user UNION SELECT 1'
+
+
+def test_the_relation_stays_inside_the_subquery_that_needs_it() -> None:
+    """
+    A caret in a derived table is completing *that* query's select list.
+
+    Neither `statement_at` nor `_branch_at` clamps to the caret's paren depth, so
+    the scan walked out of the subquery and spliced the FROM into the enclosing
+    statement — which then had two of them, while the subquery that actually
+    needed one still had none.
+    """
+    sql = 'SELECT * FROM (SELECT na) t'
+    pick = suggestion('auth_user.name', Kind.COLUMN, (22, 24), relation=('auth_user',))
+    assert applied(sql, plan_insertion(sql, pick)) == 'SELECT * FROM (SELECT auth_user.name FROM auth_user) t'
+
+
+def test_the_two_edits_keep_their_order_when_they_share_an_offset() -> None:
+    """
+    `SELECT ⌶` is the commonest trigger there is, and both edits land on it.
+
+    `Insertion.edits` is ordered latest-first so applying in sequence needs no
+    arithmetic. With an empty prefix the select list ends exactly at the caret,
+    which is right — but it leaves the column and its FROM sharing an offset, so
+    position orders nothing and tuple order carries the contract by itself. That
+    is pinned here rather than left implicit: reversing the two writes
+    `SELECT  FROM auth_userauth_user.id`, and a consumer that re-sorts these by
+    offset has no way to know which comes first.
+    """
+    sql = 'SELECT '
+    pick = suggestion('auth_user.id', Kind.COLUMN, (7, 7), relation=('auth_user',))
+    plan = plan_insertion(sql, pick)
+    assert [edit.text for edit in plan.edits] == [' FROM auth_user', 'auth_user.id']
+    assert applied(sql, plan) == 'SELECT auth_user.id FROM auth_user'
+    assert plan.caret == 19, 'after the column, not after the clause'

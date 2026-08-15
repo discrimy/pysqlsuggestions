@@ -280,6 +280,35 @@ class ClauseModel:
 
     clauses: tuple[Clause, ...] = ()
 
+    _hash: int = field(init=False, repr=False, compare=False, default=0)
+    """
+    This record's hash, computed once at construction.
+
+    Not an optimisation in search of a problem. `analyse._by_first_word` is
+    `@cache`d on this record, so every clause lookup hashed the whole model —
+    each clause, each phrase tuple, each `Kind` — and a statement of nested
+    unclosed subqueries asks about a million times. That was 118 million hash
+    calls and 24 seconds of 44 for one 1.5 KB query, which is a shape the editor
+    holds between a caret and its closing paren rather than a curiosity.
+
+    Safe because the record is frozen: `extend` and `without` both return a new
+    model rather than mutating this one, so the answer cannot go stale.
+    """
+
+    def __post_init__(self) -> None:
+        """Fold the clauses into a hash now, since they cannot change later."""
+        object.__setattr__(self, '_hash', hash(self.clauses))
+
+    def __hash__(self) -> int:
+        """
+        The memoised hash.
+
+        Defined explicitly, which is also what stops `dataclass` from generating
+        the walking version over it — it leaves `__hash__` alone when the class
+        states its own.
+        """
+        return self._hash
+
     def extend(self, *clauses: Clause) -> ClauseModel:
         """
         A new model with `clauses` added. The receiver is untouched.
@@ -521,6 +550,13 @@ class Dialect:
                 # `RESERVED`, so without this the second half of `PRIMARY KEY`
                 # reads as an identifier to the analyser.
                 *clause.defines_columns,
+                # Equally load-bearing, and the last field to reach this set.
+                # Postgres offers ROLLUP, CUBE and GROUPING SETS at `GROUP BY ⌶`;
+                # unfolded, the accepted word read back as that clause's *item*,
+                # so the caret after it offered clause continuations and taking
+                # one wrote `GROUP BY ROLLUP HAVING`. Trino got this right only
+                # because it never offers the word and lists it in `RESERVED`.
+                *clause.before_the_item,
             )
             for word in phrase.split()
         }

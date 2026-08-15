@@ -46,6 +46,17 @@ _DEFAULT_SEARCH_LIMIT = 200
 _MAX_VALUES = 30
 """How many frequent values are worth offering. `pg_stats` keeps up to a hundred."""
 
+_MAX_STAR_DEPTH = 64
+"""
+How many stars the projection walk will follow through to their sources.
+
+`analyse._MAX_NESTING` is the same number for the same reason, and deliberately
+not imported: `engine/` may not import this module, and a shared constant would
+have to live in one of them. They bound different walks — that one descends the
+scope chain, this one follows `Projection.stars` from a CTE to whatever it
+selected from — and a chain of CTEs is flat to the first and deep to the second.
+"""
+
 _SEQUENCE = 'sequence'
 """
 The one relation kind that is not a relation to query.
@@ -195,8 +206,18 @@ class _Reader:
         and with no cache supplied that would be two round trips for one answer.
         """
 
-    def _key(self, *parts: str) -> tuple[str | None, ...]:
-        """The documented cache key: (role, dialect, schema, table)."""
+    def _key(self, *parts: str | None) -> tuple[str | None, ...]:
+        """
+        The documented cache key: (role, dialect, schema, table).
+
+        `None` is carried through rather than folded to `''`, because to every
+        one of these readers the two mean different things: `None` is "wherever
+        the search path reaches" and `''` is a namespace actually named that.
+        `SELECT "".` reads a quoted empty identifier as a namespace, so the two
+        calls really do both happen — and while `tables('')` correctly answers
+        with nothing, writing that nothing under `tables(None)`'s key silently
+        emptied the relation list for as long as the cache lived.
+        """
         return (self._identity, self._dialect.name, *parts)
 
     def _read(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
@@ -221,15 +242,26 @@ class _Reader:
 
     def schemas(self, catalog: str | None = None) -> Sequence[str]:
         """Namespace names one level below `catalog`."""
-        return self._read(self._key(catalog or '', '\x00schemas'), lambda: self._catalog.schemas(catalog))
+        return self._read(self._key(catalog, '\x00schemas'), lambda: self._catalog.schemas(catalog))
 
     def tables(self, schema: str | None) -> Sequence[Table]:
-        """Relations in `schema`, or the default namespace."""
-        return self._read(self._key(schema or '', ''), lambda: self._catalog.tables(schema))
+        """
+        Relations in `schema`, or the default namespace.
+
+        The sentinel is what keeps this clear of `columns`, and it is not
+        decoration: a relation named `''` is reachable from ordinary text.
+        `SELECT "".⌶` is a quoted empty identifier, so `columns(None, '')` used
+        to compute the very key the relation list occupies — which either handed
+        a `Table` to the column renderer or, in the other order, cached an empty
+        column list as the answer to "what relations are there". The second is
+        silent, and `lsp/` holds one cache per session, so a single such caret
+        emptied the relation list for the rest of it.
+        """
+        return self._read(self._key(schema, '\x00tables'), lambda: self._catalog.tables(schema))
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
-        return self._read(self._key(schema or '', table), lambda: self._catalog.columns(schema, table))
+        return self._read(self._key(schema, table), lambda: self._catalog.columns(schema, table))
 
     def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
         """
@@ -244,7 +276,7 @@ class _Reader:
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
         """Functions in `schema`, or everywhere."""
-        return self._read(self._key(schema or '', '\x00functions'), lambda: self._catalog.functions(schema))
+        return self._read(self._key(schema, '\x00functions'), lambda: self._catalog.functions(schema))
 
     def loose_columns(self, prefix: str, limit: int) -> Sequence[Column]:
         """
@@ -284,7 +316,7 @@ class _Reader:
         catalog = self._catalog
         if not isinstance(catalog, SupportsColumnValues):
             return ()
-        key = self._key(schema or '', table, f'\x00values:{column}')
+        key = self._key(schema, table, f'\x00values:{column}')
         return self._read(key, lambda: catalog.common_values(schema, table, column, _MAX_VALUES))
 
     def foreign_keys(self, schema: str | None) -> Sequence[ForeignKey]:
@@ -298,7 +330,7 @@ class _Reader:
         catalog = self._catalog
         if not isinstance(catalog, SupportsForeignKeys):
             return ()
-        return self._read(self._key(schema or '', '\x00fk'), lambda: catalog.foreign_keys(schema))
+        return self._read(self._key(schema, '\x00fk'), lambda: catalog.foreign_keys(schema))
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords when available, otherwise the dialect's shipped set."""
@@ -951,6 +983,7 @@ def _columns_of(
     seen: set[tuple[str, ...]],
     label: str | None = None,
     qualify: tuple[str, ...] = (),
+    remaining: int = _MAX_STAR_DEPTH,
 ) -> list[Candidate]:
     """
     The columns a relation offers.
@@ -968,8 +1001,15 @@ def _columns_of(
     columns of `WITH a AS (SELECT * FROM auth_user)` describe as `a.email`, not
     `auth_user.email`, because `a` is what that relation is.
     """
+    # `seen` stops a relation referring to *itself*; it does nothing for a chain
+    # of distinct relations, and a WITH is a list of siblings rather than nested
+    # scopes, so `analyse`'s `_MAX_NESTING` never reaches this walk either. 495
+    # links of `aN AS (SELECT * FROM aN-1)` was enough to raise, with no catalog
+    # involved at all. Truncating loses the tail of an absurd chain; raising
+    # loses the whole request, and `lsp/` re-enters this same path in the
+    # fallback it uses after a failure.
     key = (relation.label, *relation.path)
-    if key in seen:
+    if key in seen or remaining <= 0:
         return []
     seen.add(key)
     shown = label or relation.declared_name
@@ -980,7 +1020,7 @@ def _columns_of(
             return []
         return [_column_candidate(column, shown, qualify) for column in reader.columns(schema, table)]
 
-    return _from_projection(relation.projection, shown, reader, seen, qualify)
+    return _from_projection(relation.projection, shown, reader, seen, qualify, remaining)
 
 
 def _from_projection(
@@ -989,6 +1029,7 @@ def _from_projection(
     reader: _Reader,
     seen: set[tuple[str, ...]],
     qualify: tuple[str, ...] = (),
+    remaining: int = _MAX_STAR_DEPTH,
 ) -> list[Candidate]:
     """Named outputs need no fetch; unresolved stars are expanded against their sources."""
     candidates = [
@@ -1003,7 +1044,7 @@ def _from_projection(
         for index, name in enumerate(projection.columns)
     ]
     for star in projection.stars:
-        candidates += _columns_of(star, reader, seen, label=label, qualify=qualify)
+        candidates += _columns_of(star, reader, seen, label=label, qualify=qualify, remaining=remaining - 1)
     return candidates
 
 

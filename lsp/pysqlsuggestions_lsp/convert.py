@@ -126,8 +126,15 @@ def _split_edits(edits: Sequence[Edit], span: tuple[int, int]) -> tuple[Edit, li
     suggestion's own span may be the item's `text_edit` — a client applies that
     one at the caret and the rest wherever they say. `plan_insertion` orders them
     latest-first, so the caret's edit is not reliably either end of the tuple.
+
+    Searched from the back because the span does not always settle it. At
+    `SELECT ⌶` the select list ends exactly at the caret, so the column and its
+    FROM clause both start there and matching from the front took the clause —
+    putting it in `text_edit` and demoting the column to an additional edit at
+    the identical range, which the specification leaves undefined. Latest-first
+    ordering means the caret's edit is the *last* of any that tie.
     """
-    primary = next((edit for edit in edits if edit.span[0] == span[0]), edits[0])
+    primary = next((edit for edit in reversed(edits) if edit.span[0] == span[0]), edits[0])
     return primary, [edit for edit in edits if edit is not primary]
 
 

@@ -7,6 +7,7 @@ Nothing performs I/O, and nothing knows what a catalog is.
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Callable, Mapping, Sequence
 from functools import cache
 from typing import Literal
@@ -1386,6 +1387,13 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
     """
     lo, hi = statement_at(tokens, caret)
     lo, hi = _branch_at(tokens, lo, hi, caret)
+    # Neither of those clamps to the caret's own paren group, so a caret in a
+    # derived table or a CTE body used to scan straight out of it and answer with
+    # an offset in the enclosing statement — which then grew a second FROM while
+    # the subquery that needed one still had none.
+    group = _group_start(tokens, caret, depth_at(tokens, caret))
+    if group > lo:
+        lo, hi = group, min(hi, _matching_paren(tokens, group - 1, hi))
     depth = _base_depth(tokens, lo, hi)
     for index in range(lo, hi):
         token = tokens[index]
@@ -1394,7 +1402,18 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is not None and matched[0] != 'SELECT':
             return _skip_back_over_space(tokens, index)
-    return tokens[hi - 1].end if hi > lo else caret
+    # Back over trailing trivia, not merely to the last token. A comment closing
+    # the buffer is in `_SKIP` for the scan above and was still the answer here,
+    # so the clause landed *inside* it and the statement ran with no FROM at all.
+    # Whitespace matters for the same reason one step on: `_branch_at` ends the
+    # branch at a set operator, so the last token is the space before UNION and
+    # stopping there wrote `FROM usersUNION` — one identifier, no set operation.
+    #
+    # Never before the caret, though. At `SELECT ⌶` the select list ends exactly
+    # there, and an offset behind it would put the clause in front of the column
+    # it was fetched for, breaking `Insertion.edits`' latest-first ordering.
+    last = _skip_back(tokens, hi - 1)
+    return max(tokens[last].end, caret) if last >= lo else caret
 
 
 def _skip_back_over_space(tokens: Sequence[Token], index: int) -> int:
@@ -1440,7 +1459,15 @@ def _unclosed_call_depth(
     unfinished it is, because its FROM really is private to it.
 
     Returns a lookup rather than a list so the common case, a statement with no
-    dangling paren, costs one scan and no allocation.
+    dangling paren, costs one scan and no allocation. The dangling case answers
+    by bisection rather than by counting: `_relations_in` asks once per token, so
+    a scan per ask was O(dangling x tokens) on exactly the half-typed input the
+    editor holds between a caret and its closing paren.
+
+    Worth naming what this does *not* fix, since the shape looks solved and is
+    not: a query of nested unclosed subqueries is still super-quadratic, and the
+    cost is `_by_first_word`'s `@cache` re-hashing the whole `ClauseModel` on
+    every lookup — 118 million hash calls for 1.5 KB. That is a separate change.
     """
     open_groups: list[int] = []
     for index in range(lo, hi):
@@ -1452,10 +1479,12 @@ def _unclosed_call_depth(
         elif token.text == ')' and open_groups:
             open_groups.pop()
 
+    # `open_groups` is a stack of ascending indices, so what survives the filter
+    # is ascending too and `bisect_left` is exactly "how many start before this".
     starts = tuple(index for index in open_groups if not _opens_a_query(tokens, index, hi, dialect))
     if not starts:
         return lambda _: 0
-    return lambda index: sum(1 for start in starts if start < index)
+    return lambda index: bisect.bisect_left(starts, index)
 
 
 def _opens_a_query(tokens: Sequence[Token], index: int, hi: int, dialect: Dialect) -> bool:
@@ -1648,6 +1677,7 @@ def select_outputs(
     hi: int,
     dialect: Dialect,
     ctes: dict[str, Relation] | None = None,
+    remaining: int = _MAX_NESTING,
 ) -> Projection:
     """
     The output columns of the select body spanning [lo, hi).
@@ -1662,14 +1692,22 @@ def select_outputs(
     `WITH outer_q AS (WITH inner_q AS (...) SELECT * FROM inner_q)` has to
     reach inner_q — neither is visible from the level above.
     """
-    declared, _ = _read_ctes(tokens, lo, hi, dialect)
+    # The same bound `_scope_level` keeps, for the same stated reason: this pair
+    # of functions calls back and forth once per nesting level, and `_MAX_NESTING`
+    # used to be applied only one stage above. A generated document — 495 nested
+    # `WITH a AS(`, or a thousand nested derived tables — reached Python's stack
+    # limit and the RecursionError left `complete` entirely, including through
+    # the language server's handler, which documents that it never raises.
+    if remaining <= 0:
+        return Projection()
+    declared, _ = _read_ctes(tokens, lo, hi, dialect, remaining - 1)
     visible = {**(ctes or {}), **declared}
     body_relations = [_bind(r, visible) for r in _relations_in(tokens, lo, hi, -1, dialect)]
     for derived_lo, derived_hi, alias, columns_of in _derived_tables(tokens, lo, hi, dialect):
         nested = (
             Projection(columns=columns_of)
             if columns_of
-            else select_outputs(tokens, derived_lo, derived_hi, dialect, visible)
+            else select_outputs(tokens, derived_lo, derived_hi, dialect, visible, remaining - 1)
         )
         body_relations.append(Relation(alias=alias, path=(), source='subquery', projection=nested))
     base = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
@@ -1859,6 +1897,7 @@ def _read_ctes(
     lo: int,
     hi: int,
     dialect: Dialect,
+    remaining: int = _MAX_NESTING,
 ) -> tuple[dict[str, Relation], dict[tuple[int, int], dict[str, Relation]]]:
     """
     Every relation declared in a leading WITH clause, keyed by name.
@@ -1869,7 +1908,7 @@ def _read_ctes(
     precisely the word that adds the body's own name to its own scope.
     """
     start = _after_clause(tokens, lo, hi, 'WITH', dialect)
-    if start is None:
+    if start is None or remaining <= 0:
         return {}, {}
     ctes: dict[str, Relation] = {}
     visible: list[tuple[tuple[int, int], tuple[str, ...]]] = []
@@ -1899,7 +1938,9 @@ def _read_ctes(
         # Earlier CTEs are in scope inside this one's body, so `WITH a AS (...),
         # b AS (SELECT * FROM a)` can resolve b's star against a's projection.
         projection = (
-            Projection(columns=declared) if declared else select_outputs(tokens, body_lo, body_hi, dialect, ctes)
+            Projection(columns=declared)
+            if declared
+            else select_outputs(tokens, body_lo, body_hi, dialect, ctes, remaining - 1)
         )
         visible.append(((body_lo, body_hi), (*ctes, *((name,) if recursive else ()))))
         ctes[name] = Relation(alias=None, path=(name,), source='cte', projection=projection)

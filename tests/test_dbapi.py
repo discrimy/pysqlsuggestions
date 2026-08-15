@@ -154,3 +154,17 @@ def test_search_relations_maps_rows_through_the_dialect() -> None:
     catalog = DbapiCatalog(lambda: cursor, POSTGRES, paramstyle='format')
     [found] = catalog.search_relations('invo', 10)
     assert (found.schema, found.name, found.kind) == ('billing', 'invoices', 'table')
+
+
+def test_a_zero_marker_is_rejected_rather_than_binding_the_last_value() -> None:
+    """
+    `$0` is the one index that failed silently.
+
+    Markers are one-based, so `positional` subtracts one — which turns `$0` into
+    Python's `-1` and binds the *last* value to it, producing valid SQL bound to
+    the wrong parameter. Every other out-of-range marker raises. `Template.snippet`
+    in this same package spells `$0` with a different meaning, so writing one into
+    a `Query.sql` is a mistake a dialect author can plausibly make.
+    """
+    with pytest.raises(ValueError, match=r'\$0'):
+        render('SELECT $0, $1', ('first', 'second'), 'format')

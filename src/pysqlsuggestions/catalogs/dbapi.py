@@ -47,6 +47,17 @@ def render(sql: str, values: Sequence[str], paramstyle: str) -> tuple[str, Any]:
     """
     order: list[int] = []
 
+    # Checked once, for every paramstyle, because `$0` is malformed in the
+    # neutral language rather than in any one driver's. Markers are one-based,
+    # so the subtraction below turns `$0` into Python's `-1` and silently binds
+    # the *last* value — valid SQL against the wrong parameter, where every
+    # other out-of-range marker raises. `Template.snippet` in this package
+    # spells `$0` with its own meaning ("last"), which is exactly the confusion
+    # that puts one in a `Query.sql` by mistake.
+    if any(int(found) == 0 for found in _MARKER.findall(sql)):
+        message = f'markers are one-based, so $0 is not a parameter: {sql!r}'
+        raise ValueError(message)
+
     def positional(match: re.Match[str], token: str) -> str:
         order.append(int(match.group(1)) - 1)
         return token
