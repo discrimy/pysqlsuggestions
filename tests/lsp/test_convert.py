@@ -272,22 +272,86 @@ def test_all_three_annotations_reach_the_one_field_a_client_has() -> None:
     assert 'no SELECT privilege' in detail
 
 
-def test_the_edit_at_the_caret_is_the_primary_one_at_an_empty_prefix() -> None:
+def test_two_edits_at_one_point_are_written_as_one() -> None:
     """
-    The same contract as above, at the position where the span stops settling it.
+    Choosing the right primary left the other edit at the identical range.
 
     `SELECT ⌶` is the commonest trigger there is, and the select list ends there,
-    so the column and its FROM clause are both edits starting at offset 7.
-    `_split_edits` matched on `span[0]` from the front of a tuple `plan_insertion`
-    orders latest-first, so it took the clause — handing the client an item whose
-    `text_edit` was ` FROM auth_user` and demoting the column to an additional
-    edit at the identical range, which the spec leaves undefined.
+    so the column and its FROM clause are both zero-width edits at offset 7.
+    `_split_edits` used to match from the front of a tuple `plan_insertion` orders
+    latest-first and so took the clause, putting ` FROM auth_user` in `text_edit`;
+    searching from the back fixed *which* edit leads, and left the other one a
+    zero-width `additionalTextEdit` at the same position as the primary.
+
+    The specification requires additional edits not to overlap the main one, and
+    two insertions at one point have no defined order: a client is free to write
+    ` FROM auth_userauth_user.id`. One edit has no order to get wrong.
+
+    `$0` is what keeps the caret where `apply_suggestion` puts it — after the
+    column, not after the clause — which is also where it lands today on a client
+    that happens to apply the pair in the helpful order.
     """
     offered = suggestion('auth_user.id', Kind.COLUMN, (7, 7), relation=('auth_user',))
     result = item('SELECT ', offered)
-    assert edit_of(result).new_text == 'auth_user.id'
-    assert result.additional_text_edits is not None
-    assert [extra.new_text for extra in result.additional_text_edits] == [' FROM auth_user']
+    assert not result.additional_text_edits
+    assert edit_of(result).new_text == 'auth_user.id$0 FROM auth_user'
+    assert result.insert_text_format is InsertTextFormat.Snippet
+
+
+def test_a_client_without_snippets_is_given_none() -> None:
+    """
+    Folding made the commonest completion a template, which not every client reads.
+
+    `completionItem.snippetSupport` is absent by default and eglot reports it
+    false whenever yasnippet is not loaded — an ordinary configuration, not an
+    exotic one. Such a client writes the placeholder verbatim, so a `$0` added to
+    hold the caret would put `auth_user.id$0 FROM auth_user` in the document:
+    certain corruption on the hottest path, in place of an ordering the spec
+    merely leaves undefined.
+
+    Without snippets the fold still happens — one edit is the point — and the
+    caret simply lands after the clause instead of after the column.
+    """
+    offered = suggestion('auth_user.id', Kind.COLUMN, (7, 7), relation=('auth_user',))
+    result = to_item('SELECT ', 0, line_starts('SELECT '), offered, 0, POSTGRES, snippets=False)
+    assert not result.additional_text_edits
+    assert edit_of(result).new_text == 'auth_user.id FROM auth_user'
+    assert result.insert_text_format is InsertTextFormat.PlainText
+
+
+def test_a_client_without_snippets_gets_a_template_as_plain_text() -> None:
+    """
+    The same capability, one line away, and it was already being ignored there.
+
+    A statement template is the first item at every empty-statement caret, so
+    such a client has been inserting a literal `SELECT $1 FROM $2 AS $3` since
+    templates existed. Checking the capability for the fold and not for the stops
+    would leave that standing while looking like it had been considered.
+    """
+    offered = suggestion('SELECT  FROM  AS ', Kind.SNIPPET, (0, 0), stops=(13, 17, 7, 17))
+    result = to_item('', 0, line_starts(''), offered, 0, POSTGRES, snippets=False)
+    assert edit_of(result).new_text == 'SELECT  FROM  AS '
+    assert result.insert_text_format is InsertTextFormat.PlainText
+
+
+def test_no_extra_edit_ever_shares_the_primary_range() -> None:
+    """
+    The invariant, over the engine's own output rather than a hand-built suggestion.
+
+    A single fixed case would not have caught this: the collision needs a select
+    list that ends exactly at the caret, which is what `SELECT ⌶` and a trailing
+    comma both produce and what a written prefix does not.
+    """
+    from pysqlsuggestions.api import complete
+    from pysqlsuggestions.catalogs.memory import MemoryCatalog
+
+    catalog = MemoryCatalog({('public', 'auth_user'): [('id', 'bigint')], ('public', 'orders'): [('id', 'bigint')]})
+    for sql in ('SELECT ', 'SELECT id, ', 'SELECT na', 'SELECT (na', 'SELECT count(na', 'WITH c AS (SELECT '):
+        for index, offered in enumerate(complete(sql, len(sql), POSTGRES, catalog)):
+            result = to_item(sql, 0, line_starts(sql), offered, index, POSTGRES)
+            primary = edit_of(result).range
+            for extra in result.additional_text_edits or []:
+                assert extra.range != primary, (sql, offered.text, primary)
 
 
 def test_a_template_whose_stops_are_not_in_text_order_expands_correctly() -> None:

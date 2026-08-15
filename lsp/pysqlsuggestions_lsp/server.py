@@ -38,6 +38,7 @@ from typing import Any
 from lsprotocol.types import (
     INITIALIZE,
     TEXT_DOCUMENT_COMPLETION,
+    ClientCapabilities,
     CompletionItem,
     CompletionList,
     CompletionOptions,
@@ -70,6 +71,27 @@ Outside the LSP specification because LSP has no shape for it. A client that
 ignores it loses nothing; one that listens can stop claiming the list in front
 of the user is schema-aware when it is not.
 """
+
+
+def snippet_support(capabilities: ClientCapabilities | None) -> bool:
+    """
+    Whether the client expands `$1`, from what it advertised.
+
+    Absent means unsupported: the protocol states the default, and a client that
+    cannot expand a placeholder writes it into the document verbatim. So the
+    permissive reading corrupts text while the strict one costs only where the
+    caret lands, and the two are not the same size of mistake.
+
+    `None` is a different thing from a client that said nothing — it means there
+    was no handshake to read, which happens only where there is no client to
+    corrupt. That answers True, so nothing has to stand up an `initialize` to get
+    the behaviour the protocol's own clients get.
+    """
+    if capabilities is None:
+        return True
+    completion = capabilities.text_document.completion if capabilities.text_document else None
+    item = completion.completion_item if completion else None
+    return bool(item and item.snippet_support)
 
 
 @dataclass
@@ -164,11 +186,22 @@ class Session:
                 self._announced = True
                 self.on_degrade(why)
 
-    def suggest(self, text: str, offset: int, units: Callable[[str], int] | None = None) -> list[CompletionItem]:
+    def suggest(
+        self,
+        text: str,
+        offset: int,
+        units: Callable[[str], int] | None = None,
+        snippets: bool = True,
+    ) -> list[CompletionItem]:
         """
         Items for a caret at `offset` in `text`. Never raises.
 
         `text` is the whole document; the engine sees one statement of it.
+
+        `snippets` is the client's `completionItem.snippetSupport`, carried here
+        rather than read here for the reason the whole class is pygls-free: it
+        arrives from the handler as a plain bool, so every case is reachable
+        without a handshake.
         """
         caret = max(0, min(offset, len(text)))
         dialect = self.dialect
@@ -180,7 +213,10 @@ class Session:
             # Outside the lock, deliberately: a read that failed must not hold
             # it while answering without one.
             suggestions = complete(statement, within, dialect)
-        return [to_item(statement, base, starts, s, index, dialect) for index, s in enumerate(suggestions)]
+        return [
+            to_item(statement, base, starts, s, index, dialect, snippets=snippets)
+            for index, s in enumerate(suggestions)
+        ]
 
     def _from_catalog(self, statement: str, within: int, dialect: Dialect) -> list[Suggestion] | None:
         """
@@ -273,7 +309,15 @@ def create_server(connect: Connect | None = None) -> SqlServer:
         # with this and the range has to be measured with the same one.
         codec = server.workspace.position_codec
         units = UNIT_COUNTERS.get(str(codec.encoding), codec.client_num_units)
-        return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset, units))
+        # `client_capabilities` raises AttributeError until a client has
+        # initialized, which is the same rule `workspace` follows and the same
+        # answer: this handler does not fail, it answers with less.
+        try:
+            capabilities: ClientCapabilities | None = server.client_capabilities
+        except AttributeError:
+            capabilities = None
+        snippets = snippet_support(capabilities)
+        return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset, units, snippets))
 
     del initialize, completion
     return server

@@ -324,3 +324,53 @@ def test_a_degraded_session_reduces_the_driver_error_to_its_sentence() -> None:
     session = Session(profile=Profile(dialect='postgres', host='db'), connect=rejecting, on_degrade=told.append)
     session.suggest('SELECT * FROM ', 14)
     assert told == ['password authentication failed for user "report"']
+
+
+def test_the_snippet_capability_is_read_from_what_the_client_sent() -> None:
+    """
+    Absent means unsupported, which is the protocol's own default and not a guess.
+
+    A client that cannot expand `$1` writes it verbatim, so reading this wrong in
+    the permissive direction puts a placeholder in the document. Reading it wrong
+    in the strict direction costs a caret position.
+    """
+    from lsprotocol.types import (
+        ClientCapabilities,
+        ClientCompletionItemOptions,
+        CompletionClientCapabilities,
+        TextDocumentClientCapabilities,
+    )
+
+    from pysqlsuggestions_lsp.server import snippet_support
+
+    def capabilities(support: bool | None) -> ClientCapabilities:
+        """What a client advertises, with `snippetSupport` set or left out."""
+        return ClientCapabilities(
+            text_document=TextDocumentClientCapabilities(
+                completion=CompletionClientCapabilities(
+                    completion_item=ClientCompletionItemOptions(snippet_support=support)
+                )
+            )
+        )
+
+    assert snippet_support(capabilities(True)) is True
+    assert snippet_support(capabilities(False)) is False
+    assert snippet_support(capabilities(None)) is False, 'absent is unsupported'
+    assert snippet_support(ClientCapabilities()) is False, 'a client that said nothing about completion'
+    assert snippet_support(None) is True, 'no handshake at all is not a client saying no'
+
+
+def test_a_session_told_there_are_no_snippets_emits_none() -> None:
+    """The capability has to reach `to_item`, which is the only place it is used."""
+    from lsprotocol.types import InsertTextFormat
+
+    from pysqlsuggestions.catalogs.memory import MemoryCatalog
+
+    session = Session()
+    session._catalog = MemoryCatalog({('public', 'auth_user'): [('id', 'bigint')]})
+    session._tried = True
+    for snippets, expected in ((True, InsertTextFormat.Snippet), (False, InsertTextFormat.PlainText)):
+        items = session.suggest('SELECT ', 7, snippets=snippets)
+        folded = [item for item in items if item.label == 'auth_user.id']
+        assert folded, snippets
+        assert folded[0].insert_text_format is expected, snippets

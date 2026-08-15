@@ -150,9 +150,17 @@ def to_item(
     suggestion: Suggestion,
     index: int,
     dialect: Dialect,
+    *,
+    snippets: bool = True,
 ) -> CompletionItem:
     """
     One suggestion, as an item.
+
+    `snippets` is the client's `completionItem.snippetSupport`. It is absent by
+    default in the protocol, and eglot reports it false whenever yasnippet is not
+    loaded, so a client that writes `$1` verbatim is an ordinary configuration
+    rather than an exotic one. Everything a placeholder buys here is given up
+    when it is false: the caret lands at the end of what was inserted.
 
     `index` is its place in the engine's ranking and becomes `sort_text`,
     zero-padded so that string order and numeric order agree — unpadded, '10'
@@ -170,7 +178,34 @@ def to_item(
     """
     plan = plan_insertion(statement, suggestion, dialect=dialect)
     primary, extra = _split_edits(plan.edits, suggestion.replace_span)
-    text = _snippet(primary.text, suggestion.stops) if suggestion.stops else primary.text
+    # Edits at the primary's own range are folded into it rather than sent
+    # beside it. Choosing the right primary was only half of that problem: at
+    # `SELECT ⌶` the column and its FROM clause are both zero-width edits at
+    # offset 7, so whichever leads, the other is an `additionalTextEdit` at the
+    # identical range — which the specification forbids and which has no defined
+    # order, leaving a client free to write ` FROM auth_userauth_user.id`.
+    #
+    # `plan_insertion` orders latest-first and a client applies in that order, so
+    # insertions sharing a point come out in reverse: the primary is the last of
+    # any tie, and the text reads primary-first. `$0` then holds the caret where
+    # `apply_suggestion` puts it — after the column, not after the clause it
+    # dragged in.
+    folded = [edit for edit in extra if edit.span == primary.span]
+    extra = [edit for edit in extra if edit.span != primary.span]
+    # The fold happens either way — one edit is the whole point — and only the
+    # caret depends on the capability. Checking it for the stops as well is not
+    # scope: a statement template is the first item at every empty-statement
+    # caret, so a client that cannot read `$1` has been inserting one literally
+    # since templates existed, and gating one of these two lines and not the
+    # other would leave that standing while looking considered.
+    templated = snippets and bool(suggestion.stops or folded)
+    if templated:
+        # Escaped whether or not the suggestion had stops: unescaped, a column
+        # Postgres spells `a$b` would arrive as a placeholder.
+        text = _snippet(primary.text, suggestion.stops)
+        text += ('$0' if folded else '') + ''.join(_snippet(edit.text, ()) for edit in reversed(folded))
+    else:
+        text = primary.text + ''.join(edit.text for edit in reversed(folded))
     return CompletionItem(
         label=suggestion.label or suggestion.text,
         kind=ITEM_KINDS.get(suggestion.kind, CompletionItemKind.Text),
@@ -180,5 +215,5 @@ def to_item(
         filter_text=match_term(suggestion),
         text_edit=TextEdit(range=_range(base, lines, primary.span), new_text=text),
         additional_text_edits=[TextEdit(range=_range(base, lines, edit.span), new_text=edit.text) for edit in extra],
-        insert_text_format=InsertTextFormat.Snippet if suggestion.stops else InsertTextFormat.PlainText,
+        insert_text_format=InsertTextFormat.Snippet if templated else InsertTextFormat.PlainText,
     )
