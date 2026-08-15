@@ -330,8 +330,19 @@ class ClauseModel:
         not. ClickHouse has no `CALL` — its parser lists every form it accepts
         and CALL is not among them — and inheriting one would offer a word whose
         statement the server rejects outright.
+
+        Raises on a name that is not here, which is the same argument
+        `postgres._ansi` makes in the other direction: a name that is not in the
+        model is a typo, and dropping it silently leaves the word being offered
+        with nothing to say so. Nothing downstream can recover it either — the
+        request is gone the moment this returns, so `DialectConformance` sees a
+        model that simply has the clause and no reason to doubt it.
         """
         dropped = set(names)
+        missing = sorted(dropped - {clause.name for clause in self.clauses})
+        if missing:
+            message = f'not clauses of this model: {missing}'
+            raise KeyError(message)
         return ClauseModel(clauses=tuple(clause for clause in self.clauses if clause.name not in dropped))
 
     def get(self, name: str) -> Clause | None:
