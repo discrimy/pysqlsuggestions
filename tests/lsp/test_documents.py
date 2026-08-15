@@ -132,3 +132,37 @@ def test_a_lone_carriage_return_starts_a_line() -> None:
     back naming a line above it, at a column longer than that line.
     """
     assert line_starts('a\rbb\r\nc\nd').starts == [0, 2, 6, 8]
+
+
+def test_an_undecodable_document_answers_with_nothing() -> None:
+    """
+    `UnicodeDecodeError` is a `ValueError`, so the `OSError` guard walked past it.
+
+    A latin-1 or cp1252 `.sql` dump is an ordinary thing to have on disk, and
+    pygls invents a document pointing at one for any URI the client never opened
+    — so this arrived at the editor as JSON-RPC -32603 on a keystroke, which the
+    module's one rule forbids.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from lsprotocol.types import CompletionParams, Position, TextDocumentIdentifier
+
+    from pysqlsuggestions_lsp.server import create_server
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / 'latin.sql'
+        path.write_bytes('SELECT * FROM café'.encode('latin-1'))
+        from pygls.workspace import Workspace
+
+        server = create_server()
+        # The workspace does not exist until a client has initialized, and the
+        # module this tests is deliberately reachable without one — so it is
+        # supplied directly rather than by standing up a handshake.
+        server.protocol._workspace = Workspace(str(Path(directory).as_uri()))
+        handler = server.protocol.fm.features['textDocument/completion']
+        params = CompletionParams(
+            text_document=TextDocumentIdentifier(uri=path.as_uri()),
+            position=Position(line=0, character=3),
+        )
+        assert handler(params).items == []

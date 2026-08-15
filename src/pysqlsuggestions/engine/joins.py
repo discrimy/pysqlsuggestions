@@ -159,7 +159,17 @@ def _links(source: tuple[str, str], edges: Sequence[ForeignKey]) -> list[_Link]:
     forward: list[_Link] = []
     reverse: list[_Link] = []
     for edge in edges:
-        pairs = tuple(zip(edge.columns, edge.ref_columns, strict=False))
+        # An edge with no pairs, or with sides of different lengths, is refused
+        # rather than truncated. `ForeignKey` states that the two correspond
+        # positionally and nothing enforces it, so a third-party adapter can send
+        # either — and `zip(strict=False)` turned the one shape that cannot be
+        # answered into the one failure this module exists to prevent: a
+        # half-composite condition is legal SQL that fans out rows the constraint
+        # says are unrelated. Empty sides were worse still, raising IndexError
+        # out of `complete` from the two callers that index `pairs[0]`.
+        if not edge.columns or len(edge.columns) != len(edge.ref_columns):
+            continue
+        pairs = tuple(zip(edge.columns, edge.ref_columns, strict=True))
         if edge.table == table and _same_schema(schema, edge.schema):
             forward.append((edge.schema, edge.ref_schema, edge.ref_table, pairs, _FORWARD))
         elif edge.ref_table == table and _same_schema(schema, edge.ref_schema):
@@ -186,7 +196,11 @@ def _clause_candidate(
     alias = _free_alias(target_table, taken)
     reference = _reference(source[0], source_schema, target_schema, target_table, dialect)
     condition = _condition(relation.label, alias, pairs, dialect)
-    snippet = f'{reference} {alias} ON {condition}'
+    # Quoted like the three identifiers around it. `_condition` already spells
+    # the alias through `quote_if_needed`, and this slot did not — so a table
+    # whose initials make a reserved word produced `order_note on ON r.x =
+    # "on".id`, which is a syntax error and disagrees with itself besides.
+    snippet = f'{reference} {quote_if_needed(alias, dialect)} ON {condition}'
     withheld = (target_schema, target_table) in restricted
     return Candidate(
         text=snippet,

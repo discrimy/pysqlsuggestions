@@ -7,6 +7,12 @@ from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.types import Function, Kind, Suggestion
 
+
+def suggestion(text: str, kind: Kind, span: tuple[int, int], **extra: object) -> Suggestion:
+    """A suggestion as rank would emit it."""
+    return Suggestion(text=text, kind=kind, replace_span=span, score=1.0, **extra)  # type: ignore[arg-type]
+
+
 SNAPSHOT = {
     ('public', 'auth_user'): [('id', 'bigint'), ('username', 'varchar'), ('email', 'varchar')],
     ('public', 'orders'): [('id', 'bigint'), ('user_id', 'bigint'), ('created_at', 'date')],
@@ -211,3 +217,27 @@ def test_a_namespace_already_followed_by_a_dot_gains_no_second_one() -> None:
     sql = 'SELECT * FROM pub.orders'
     schema = Suggestion(text='public', kind=Kind.SCHEMA, replace_span=(14, 17), score=1.0)
     assert apply_suggestion(sql, schema) == ('SELECT * FROM public.orders', 21)
+
+
+def test_a_suggestion_is_separated_from_what_follows_it_too() -> None:
+    """
+    `_separated` only ever looked at the character before the insertion.
+
+    A caret before an existing word is the ordinary way to add a column to a
+    written statement — click after `id`, type a comma, ask. Accepting there
+    spliced straight into the next word: `SELECT id ASFROM flight`, which
+    Postgres answers with `syntax error at or near "flight"`. The rule is the
+    same one the leading side already applies, read in the other direction.
+    """
+    sql = 'SELECT id FROM flight'
+    assert apply_suggestion(sql, suggestion('AS', Kind.KEYWORD, (10, 10)), dialect=POSTGRES)[0] == (
+        'SELECT id AS FROM flight'
+    )
+    assert (
+        apply_suggestion('SELECT id, FROM flight', suggestion('name', Kind.COLUMN, (11, 11)), dialect=POSTGRES)[0]
+        == 'SELECT id, name FROM flight'
+    )
+    # A separator already present is not doubled, and a replacement is untouched.
+    assert apply_suggestion('SELECT id , FROM t', suggestion('x', Kind.COLUMN, (10, 10)), dialect=POSTGRES)[0] == (
+        'SELECT id x, FROM t'
+    )
