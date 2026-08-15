@@ -75,8 +75,8 @@ def test_unclosed_nesting_does_not_cost_its_square() -> None:
     Depth eighty rather than something rounder because it is the point the old
     cost crossed this budget: the assertion is meant to fail if either fix is
     undone, not to leave headroom for a third. What it does *not* cover is
-    `clause_at`'s outward widening, which is still quadratic on a run of bare
-    unclosed parens — a separate mechanism and a far less realistic input.
+    `clause_at`'s outward widening, a separate mechanism on a separate shape —
+    `test_a_run_of_bare_parens_does_not_cost_its_square` has that one.
     """
     sql = 'SELECT * FROM ' + '(SELECT * FROM ' * 80 + 't'
     started = time.perf_counter()
@@ -169,3 +169,31 @@ def test_the_memo_does_not_grow_with_the_square_of_a_relation_list() -> None:
     finally:
         tracemalloc.stop()
     assert peak < 8 * 1024 * 1024, f'{peak / 1048576:.1f} MiB for {len(sql)} characters'
+
+
+def test_a_run_of_bare_parens_does_not_cost_its_square() -> None:
+    """
+    The other half of finding 17, and the mechanism `clause_at` owns rather than the memo.
+
+    `clause_at` widens outward once per paren depth, and a run of bare `(`
+    makes the depth the length of the input — so it called the O(n)
+    `_group_start` and `_scan_for_clause` once per token. Cleanly quadratic:
+    3.9x per doubling, a second at four thousand and about four at eight.
+
+    A word cannot be found at a depth that holds no words, so the depths worth
+    scanning are counted once instead of assumed. On this shape there are none
+    at all, which takes both O(n) helpers out of the loop entirely.
+
+    Nobody types four thousand parentheses. A generator emitting a half-written
+    statement does, and this is the shape where the cost was worst rather than
+    where it was likeliest.
+    """
+
+    def cost(count: int) -> float:
+        sql = '(' * count
+        started = time.perf_counter()
+        derive_request(sql, len(sql), POSTGRES)
+        return time.perf_counter() - started
+
+    small = max(cost(1000), 1e-4)
+    assert cost(4000) / small < 8, 'four times the parens should not be sixteen times the work'

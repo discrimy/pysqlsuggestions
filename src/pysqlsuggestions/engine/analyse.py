@@ -967,12 +967,46 @@ def clause_at(
     if not clauses.clauses:
         return None
     depth = depth_at(tokens, caret)
+    # A clause name is a word, so a depth holding no word can hold no clause.
+    # Asked once, because both helpers below are O(n) and the loop runs once per
+    # paren depth: on a run of bare `(` the depth *is* the length of the input,
+    # which made the widening quadratic. Skipping the empty levels leaves this
+    # linear on that shape without changing what is found on any other.
+    levels = _depths_holding_a_word(tokens, lo, hi, caret)
     while depth >= 0:
-        found = _scan_for_clause(tokens, max(lo, _group_start(tokens, caret, depth)), hi, caret, clauses, depth)
-        if found is not None:
-            return found
+        if depth in levels:
+            found = _scan_for_clause(tokens, max(lo, _group_start(tokens, caret, depth)), hi, caret, clauses, depth)
+            if found is not None:
+                return found
         depth -= 1
     return None
+
+
+def _depths_holding_a_word(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> frozenset[int]:
+    """
+    Paren depths with an unquoted word left of the caret, memoised against the token stream.
+
+    Deliberately a superset of the depths that could answer: it repeats
+    `_scan_for_clause`'s own filter as far as "is this token even eligible" and
+    stops before asking whether the words spell a clause. Widening it any
+    further than that would start deciding what the scan decides, in a second
+    place, and the two would drift.
+
+    Memoised for the same reason `_clause_starting_at` is — the scope walk
+    descends a level at a time and asks about ranges the level above already
+    scanned, so an unmemoised pass per `clause_at` would trade a quadratic on
+    one shape for a quadratic on another.
+    """
+    return _remembered(tokens, ('wordy', lo, hi, caret), lambda: _scan_for_words(tokens, lo, hi, caret))
+
+
+def _scan_for_words(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> frozenset[int]:
+    """One pass for `_depths_holding_a_word`, which holds the reasoning."""
+    return frozenset(
+        tokens[index].depth
+        for index in range(lo, hi)
+        if tokens[index].type is TokenType.IDENT and not tokens[index].quoted and tokens[index].end < caret
+    )
 
 
 def _group_start(tokens: Sequence[Token], caret: int, depth: int) -> int:
