@@ -28,9 +28,9 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-**37 findings closed and one substantially improved**, across fourteen commits, each fix carrying a
+**38 findings closed and one substantially improved**, across fifteen commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1847 passed** (from 1700), and with
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1848 passed** (from 1700), and with
 the docker backends up the integration suite passes too.
 
 | Commit | Closes |
@@ -49,6 +49,7 @@ the docker backends up the integration suite passes too.
 | `6424ce6` quote a name this engine could not read back | 7 |
 | `d274806` a capability that only answers to its name is not one | 11 |
 | `6f61ef1` a marker inside a literal is text, not a parameter | 20 |
+| `df2cf00` the scope walk stops re-asking the same question | 29 |
 
 ### Measurement changed three of the six decisions
 
@@ -69,7 +70,7 @@ not a formality:
 
 | # | Finding | Why it is still here |
 | --- | --- | --- |
-| 29, 34 | Cubic nesting cost; per-keystroke LSP cost | Constants and caching, not correctness. |
+| 34 | The language server re-lexes the document per keystroke | Not a caching problem, which is worth stating because it reads like one. The document changes with every keystroke, so a content-keyed cache never hits — five consecutive keystrokes are five distinct texts. Measured cost on a 15.8 KB statement is 2 lex calls and 90 ms; the 10 s figure is a 10 MB document. Fixing it means lexing incrementally against `didChange` ranges, or tracking statement boundaries per document version — structurally larger than anything on this branch. |
 
 ### One reason that did not survive being tested
 
