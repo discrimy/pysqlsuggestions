@@ -28,9 +28,9 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-**35 findings closed and one substantially improved**, across twelve commits, each fix carrying a
+**36 findings closed and one substantially improved**, across thirteen commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1842 passed** (from 1700), and with
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1843 passed** (from 1700), and with
 the docker backends up the integration suite passes too.
 
 | Commit | Closes |
@@ -47,6 +47,7 @@ the docker backends up the integration suite passes too.
 | `fe01ae7` a dialect name claimed twice says so | 14 |
 | `6e196cf` an empty argument list keeps the caret it opened | U1 |
 | `6424ce6` quote a name this engine could not read back | 7 |
+| `d274806` a capability that only answers to its name is not one | 11 |
 
 ### Measurement changed three of the six decisions
 
@@ -67,9 +68,18 @@ not a formality:
 
 | # | Finding | Why it is still here |
 | --- | --- | --- |
-| 11 | Capability detection differs on 3.10 vs 3.12 | Left deliberately. Matching 3.12 means `inspect.getattr_static`, which stops seeing `classmethod` capabilities that work today — a live regression traded for a proxy-catalog edge case. |
 | 20 | Markers rewritten inside strings and comments | Latent; no shipped query trips it. Needs a real scanner in `render`, not a regex. |
 | 29, 34 | Cubic nesting cost; per-keystroke LSP cost | Constants and caching, not correctness. |
+
+### One reason that did not survive being tested
+
+Finding 11 sat open with a stated rationale — that matching 3.12 would need
+`inspect.getattr_static` and so stop seeing `classmethod` capabilities. That was
+wrong, and only measuring showed it: the concern applies to
+`callable(getattr_static(...))`, and only *presence* is needed. `getattr_static`
+finds a plain method, a `classmethod`, a `staticmethod`, an inherited one and one
+assigned in `__init__`, identically on 3.10 and 3.12. It declines exactly the
+invented kind. Fixed in `d274806`, verified on all three supported interpreters.
 
 ### Found while fixing, not in the original sweep
 
