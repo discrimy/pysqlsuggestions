@@ -1356,6 +1356,7 @@ def _relations_in(
 ) -> list[Relation]:
     """Every table reference introduced between `lo` and `hi`."""
     relations: list[Relation] = []
+    written_to: list[Relation] = []
     shelter = _unclosed_call_depth(tokens, lo, hi, dialect)
     index = lo
     while index < hi:
@@ -1372,8 +1373,61 @@ def _relations_in(
         if matched is None or not _introduces_relations(tokens, matched, hi):
             index += 1
             continue
-        index = _read_relation_list(tokens, matched[1], hi, caret, dialect, relations, matched[0])
-    return relations
+        # An INSERT target is kept apart from the rest. It is a relation of the
+        # statement but not of every clause in it, which no other entry in
+        # `_RELATION_CLAUSES` has to distinguish.
+        found = written_to if matched[0] == 'INSERT INTO' else relations
+        index = _read_relation_list(tokens, matched[1], hi, caret, dialect, found, matched[0])
+    if not written_to:
+        return relations
+    return _around_an_insert_target(tokens, lo, hi, caret, dialect, written_to, relations)
+
+
+def _around_an_insert_target(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+    written_to: list[Relation],
+    relations: list[Relation],
+) -> list[Relation]:
+    """
+    Which relations an INSERT's three positions can see.
+
+    Measured on all three backends, which agree. The target is *not* in scope
+    for the source query: `INSERT INTO auth_group (id, name) SELECT id, name
+    FROM auth_user` is `column "name" does not exist` on Postgres, `Column
+    'name' cannot be resolved` on Trino and `Missing columns: 'name'` on
+    ClickHouse, and the qualified form is refused by all three as well.
+
+    `RETURNING` is the mirror: it names the row that was written, so the target
+    is all it resolves — `RETURNING username`, against a source called
+    `auth_user`, is `column "username" does not exist`. Postgres is the only one
+    of the three that has the clause; the other two do not parse the word.
+
+    Which leaves the column list, where the target is the whole answer and is
+    why it stays in `_RELATION_CLAUSES` at all.
+    """
+    base = tokens[lo].depth
+    opens_source: int | None = None
+    opens_returning: int | None = None
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type in _SKIP or token.depth != base:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
+        if matched is None:
+            continue
+        if matched[0] == 'SELECT' and opens_source is None:
+            opens_source = token.start
+        elif matched[0] == 'RETURNING' and opens_returning is None:
+            opens_returning = token.start
+    if opens_returning is not None and caret >= opens_returning:
+        return written_to
+    if opens_source is not None and caret >= opens_source:
+        return relations
+    return [*written_to, *relations]
 
 
 def clauses_written(
