@@ -14,7 +14,14 @@ from importlib import import_module
 from typing import Any
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
-from pysqlsuggestions_lsp.connections import DRIVERS, Profile, _connect, open_catalog
+from pysqlsuggestions_lsp.connections import (
+    CONNECT_TIMEOUT,
+    DRIVERS,
+    READ_TIMEOUT,
+    Profile,
+    _connect,
+    open_catalog,
+)
 
 PROFILE = Profile(dialect='postgres', host='localhost', port=5432, database='app', user='ana', password='secret')
 
@@ -307,3 +314,78 @@ def test_verify_is_withheld_from_a_driver_that_never_heard_of_it() -> None:
 
     _connect(Profile(dialect='postgres', host='h', secure=True, verify=False), opener=fake_connect)
     assert 'verify' not in seen
+
+
+class SocketBearingConnection:
+    """
+    What pg8000 hands back: a connection holding the socket it opened.
+
+    `_usock` is the raw socket in `pg8000.core.CoreConnection`, and
+    `socket.create_connection` leaves the connect timeout on it, so the driver
+    arrives in exactly this state without anything here arranging it.
+    """
+
+    def __init__(self, timeout: float | None) -> None:
+        self._usock = FakeSocket(timeout)
+
+
+class FakeSocket:
+    """A socket that only remembers what it was last told to bound itself by."""
+
+    def __init__(self, timeout: float | None) -> None:
+        self.timeout = timeout
+
+    def settimeout(self, value: float | None) -> None:
+        """Record the new bound, as `socket.settimeout` would apply it."""
+        self.timeout = value
+
+    def gettimeout(self) -> float | None:
+        """The bound currently in force."""
+        return self.timeout
+
+
+def test_the_connect_bound_does_not_stay_on_the_socket() -> None:
+    """
+    `CONNECT_TIMEOUT` is what establishing the connection may cost, not what reading may.
+
+    `socket.create_connection(address, timeout)` leaves the timeout on the
+    socket, so pg8000 arrives with every later `recv` bounded by the same five
+    seconds. A catalog read on a database large enough to be slow then raises,
+    and `Session.suggest` catches it into `degrade()` — which drops the catalog
+    for the rest of the session. The databases slow enough to trip it are the
+    ones worth completing against.
+    """
+    seen: dict[str, Any] = {}
+
+    def fake_connect(**arguments: Any) -> object:
+        seen.update(arguments)
+        return SocketBearingConnection(arguments['timeout'])
+
+    connection = _connect(Profile(dialect='postgres', host='h'), opener=fake_connect)
+    assert seen['timeout'] == CONNECT_TIMEOUT, 'the connect itself stays bounded'
+    assert connection._usock.gettimeout() == READ_TIMEOUT, 'the read is not bounded by the connect'
+
+
+def test_a_reader_keeps_its_own_request_bound() -> None:
+    """
+    The readers' `timeout` is a whole request, not a connect, so the connect bound is wrong for it.
+
+    `_http.request` hands it to `urlopen`, where it governs the round trip.
+    Passing `CONNECT_TIMEOUT` there cut every introspection query at five
+    seconds — the same defect as the socket above, reached by a different
+    route. `_http.DEFAULT_TIMEOUT` is that module's own answer to this
+    question and is the one that should stand.
+    """
+
+    def arguments_for(dialect: str) -> dict[str, Any]:
+        seen: dict[str, Any] = {}
+
+        def fake_connect(**arguments: Any) -> object:
+            seen.update(arguments)
+            return object()
+
+        _connect(Profile(dialect=dialect, host='h'), opener=fake_connect)
+        return seen
+
+    for dialect in ('clickhouse', 'trino'):
+        assert 'timeout' not in arguments_for(dialect), f'{dialect} was handed a connect bound for a request'

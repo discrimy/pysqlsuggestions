@@ -34,6 +34,27 @@ this is the one they share: a driver that gives up can say *why*, where a caller
 that kills the process only ever reports that it was killed. The live path went
 without it and inherited the OS timeout instead — 21 seconds on Windows, about
 130 on Linux — while holding the session lock every other caret waits on.
+
+Bounds establishing the connection and nothing after it. See `READ_TIMEOUT`.
+"""
+
+READ_TIMEOUT = 30
+"""
+Seconds a catalog read may take on a connection already up.
+
+Separate from `CONNECT_TIMEOUT` because the two answer different questions and
+one number answered both by accident. `socket.create_connection(address,
+timeout)` leaves the timeout *on the socket*, so the bound written for the
+connect went on governing every later `recv` — and a read that overran it
+raised into the `except Exception` in `Session.suggest`, which calls
+`degrade()` and drops the catalog for the rest of the session. Five seconds is
+right for reaching a host and wrong for reading a catalog out of it: the
+databases with enough tables to be slow are the ones worth completing against,
+so the bound meant for an unreachable host was disabling the feature on the
+healthiest ones.
+
+Thirty rather than none. A read that never returns still has to end, and a
+completion nobody is waiting for any more is what the timeout is for.
 """
 
 Connect = Callable[['Profile'], Any]
@@ -135,20 +156,30 @@ def _connect(profile: Profile, opener: Callable[..., Any] | None = None) -> Any:
     """
     module, _ = DRIVERS[profile.dialect]
     connect_to = opener or import_module(module).connect
-    # Bounded for the reason `check._timed_connect` states and this path did not
-    # honour: a host that drops packets rather than refusing them leaves the
-    # driver in the OS connect timeout — 21 seconds on Windows, about 130 on
-    # Linux — and `Session._lock` covers this call, so every caret arriving
-    # meanwhile waits with it. "Test connection" gave up in five seconds while
-    # the completion behind it hung, against the same unreachable host.
-    arguments: dict[str, Any] = {'host': profile.host, 'timeout': CONNECT_TIMEOUT}
+    arguments: dict[str, Any] = {'host': profile.host}
     # pg8000 takes `ssl_context`, not `secure`; only the readers understand this
     # flag. Passing it to a driver that has never heard of it is a TypeError
     # raised on the first catalog read, which degrades to a catalog-free list —
     # so the user sees fewer suggestions and no reason for it.
-    if module.startswith('pysqlsuggestions.'):
+    over_http = module.startswith('pysqlsuggestions.')
+    if over_http:
         arguments['secure'] = profile.secure
         arguments['verify'] = profile.verify
+    else:
+        # Bounded for the reason `check._timed_connect` states and this path did
+        # not honour: a host that drops packets rather than refusing them leaves
+        # the driver in the OS connect timeout — 21 seconds on Windows, about
+        # 130 on Linux — and `Session._lock` covers this call, so every caret
+        # arriving meanwhile waits with it. "Test connection" gave up in five
+        # seconds while the completion behind it hung, against the same
+        # unreachable host.
+        #
+        # The readers are left out because their `timeout` is a different
+        # quantity: `_http.request` hands it to `urlopen`, where it bounds a
+        # whole round trip rather than the reaching of a host. Passing this one
+        # cut every introspection query at five seconds. `_http.DEFAULT_TIMEOUT`
+        # is that module's own answer and is the one that should stand.
+        arguments['timeout'] = CONNECT_TIMEOUT
     for name, value in (
         ('port', profile.port),
         ('database', profile.database),
@@ -157,7 +188,34 @@ def _connect(profile: Profile, opener: Callable[..., Any] | None = None) -> Any:
     ):
         if value is not None:
             arguments[name] = value
-    return connect_to(**arguments)
+    connection = connect_to(**arguments)
+    if not over_http:
+        _lift_the_connect_bound(connection)
+    return connection
+
+
+def _lift_the_connect_bound(connection: Any) -> None:
+    """
+    Move the socket off the connect bound and on to the read one.
+
+    `CONNECT_TIMEOUT` reaches pg8000 as `socket.create_connection`'s timeout,
+    and that call leaves the timeout *on* the socket — so without this every
+    later `recv` is bounded by the number written for reaching the host, and a
+    catalog read on a database with enough tables to be slow raises into
+    `Session.suggest`'s `except Exception`, which degrades the session.
+
+    Reached through the driver's private attribute because DB-API declares no
+    way to ask. There is no public socket on a connection, and the alternative
+    to reaching for this one is to leave a bound in place that is known to be
+    the wrong one.
+
+    Silent when the connection holds no socket under that name. A driver this
+    cannot correct is still a driver that connected, and refusing to use it
+    would trade a timeout that is too tight for no completions at all.
+    """
+    socket = getattr(connection, '_usock', None)
+    if socket is not None and hasattr(socket, 'settimeout'):
+        socket.settimeout(READ_TIMEOUT)
 
 
 def open_catalog(profile: Profile, connect: Connect | None = None) -> DbapiCatalog | None:
