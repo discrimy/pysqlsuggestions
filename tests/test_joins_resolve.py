@@ -297,3 +297,69 @@ def test_matching_still_runs_against_the_relation_name() -> None:
     )
     sql, caret = split_caret('SELECT * FROM booking b JOIN ref⌶')
     assert displayed(complete(sql, caret, POSTGRES, catalog)[0]) == 'revenue.refund r ON b.id = r.booking_id'
+
+
+def test_two_constraints_on_one_column_both_reach_the_proposals() -> None:
+    """
+    `_edges` deduped on `(schema, table, *columns)`, which is not what identifies an edge.
+
+    A column may be the referencing end of more than one constraint — the shape
+    a polymorphic reference takes, and legal wherever the targets differ. With
+    the referenced side left out of the key the two collapsed into one entry and
+    the last one read won, so a declared join silently had no proposal. Not a
+    duplicate, which is what this was filed as: a deletion.
+    """
+    catalog = MemoryCatalog(
+        {
+            ('public', 'orders'): [('id', 'bigint'), ('party_id', 'bigint')],
+            ('public', 'users'): [('id', 'bigint')],
+            ('public', 'companies'): [('id', 'bigint')],
+        },
+        foreign_keys=(
+            ForeignKey('public', 'orders', ('party_id',), 'public', 'users', ('id',)),
+            ForeignKey('public', 'orders', ('party_id',), 'public', 'companies', ('id',)),
+        ),
+        search_path=('public',),
+    )
+    sql = 'SELECT * FROM orders JOIN '
+    # Whole clauses only. A bare relation name is offered at this caret too, and
+    # matching on the name alone would pass on the suggestion the proposal was
+    # lost from.
+    proposals = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=20) if ' ON ' in s.text]
+    assert [text for text in proposals if 'users' in text], proposals
+    assert [text for text in proposals if 'companies' in text], proposals
+
+
+def test_qualifying_a_relation_does_not_cost_it_a_proposal() -> None:
+    """
+    Writing more of a name must not return less.
+
+    `_edges` fetched constraints for the schemas the statement *names*, and the
+    port returns those whose *referencing* side lives there — so `FROM
+    public.users` asked for `public` alone and never saw the edge declared in
+    `sales` that points at it, while bare `FROM users` reached it through the
+    default namespace and did.
+
+    The default namespace is now always asked for, so the qualified form offers
+    at least what the bare one does. What this does not reach is a referencing
+    side in a schema that is neither named nor on the search path: the port is
+    schema-scoped deliberately — `Catalog.foreign_keys` says why, and no
+    per-relation call could find those without walking the database — so that
+    one needs a capability rather than a fix here.
+    """
+    catalog = MemoryCatalog(
+        {
+            ('public', 'users'): [('id', 'bigint')],
+            ('sales', 'orders'): [('id', 'bigint'), ('user_id', 'bigint')],
+        },
+        foreign_keys=(ForeignKey('sales', 'orders', ('user_id',), 'public', 'users', ('id',)),),
+        search_path=('public',),
+    )
+
+    def proposals(sql: str) -> list[str]:
+        return [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=20) if ' ON ' in s.text]
+
+    bare = proposals('SELECT * FROM users JOIN ')
+    qualified = proposals('SELECT * FROM public.users JOIN ')
+    assert [text for text in bare if 'orders' in text], bare
+    assert [text for text in qualified if 'orders' in text], qualified

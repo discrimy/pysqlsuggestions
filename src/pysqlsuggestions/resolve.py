@@ -180,12 +180,31 @@ def _edges(scope: Scope | None, reader: _Reader) -> Sequence[ForeignKey]:
     if scope is None:
         return ()
     wanted = {_split_path(r.path)[0] for r in scope.relations if r.projection is None and r.path}
+    # The default namespace is always asked for, not only when the statement
+    # left a name unqualified. The port returns the constraints whose
+    # *referencing* side lives in the schema asked for, and a join is
+    # undirected — so `FROM public.users` asked for `public` alone and never saw
+    # the edge declared in `sales` that points at it, while bare `FROM users`
+    # reached it through the search path and did. Writing more of a name
+    # returned less, which is the wrong direction for it to fail in.
+    #
+    # What this still does not reach is a referencing side in a schema neither
+    # named nor on the search path. That one is the port's shape rather than
+    # this function's: `Catalog.foreign_keys` is schema-scoped deliberately,
+    # since no per-relation call could find those without walking the database,
+    # so answering it needs a capability of its own.
+    wanted.add(None)
     found: dict[tuple[str, ...], ForeignKey] = {}
     for schema in sorted(wanted, key=lambda name: (name is not None, name or '')):
         for edge in reader.foreign_keys(schema):
-            # Built as a tuple first: a star expression directly inside a
-            # subscript is 3.11 syntax, and this package supports 3.10.
-            key = (edge.schema, edge.table, *edge.columns)
+            # Both sides, because neither identifies an edge alone. A column may
+            # be the referencing end of more than one constraint — a polymorphic
+            # reference is exactly that shape — and keying on the referencing
+            # side dropped every one of them but the last, so a declared join
+            # had no proposal at all. Built as a tuple first: a star expression
+            # directly inside a subscript is 3.11 syntax, and this package
+            # supports 3.10.
+            key = (edge.schema, edge.table, *edge.columns, edge.ref_schema, edge.ref_table, *edge.ref_columns)
             found[key] = edge
     return list(found.values())
 
