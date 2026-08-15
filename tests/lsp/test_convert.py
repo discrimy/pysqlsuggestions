@@ -288,3 +288,22 @@ def test_the_edit_at_the_caret_is_the_primary_one_at_an_empty_prefix() -> None:
     assert edit_of(result).new_text == 'auth_user.id'
     assert result.additional_text_edits is not None
     assert [extra.new_text for extra in result.additional_text_edits] == [' FROM auth_user']
+
+
+def test_a_template_whose_stops_are_not_in_text_order_expands_correctly() -> None:
+    """
+    `expand_snippet` documents its offsets as being in *visiting* order — `$1`,
+    `$2`, then `$0` last — and `_snippet` walked them as if they were in text
+    order, advancing a single cut. The shipped statement template's stops are
+    `(13, 17, 7, 17)`, so the cut passed 17 and then met 7: `text[17:7]` is
+    empty, the tail was emitted twice, and the tab order was scrambled.
+
+    `sort_text` makes this the first item at every empty-statement caret, so it
+    is what a new `.sql` file offers on the first keystroke.
+    """
+    offered = suggestion('SELECT  FROM  AS ', Kind.SNIPPET, (0, 0), stops=(13, 17, 7, 17))
+    written = edit_of(item('', offered)).new_text
+    assert written.count('FROM') == 1, written
+    assert written.count('AS') == 1, written
+    for placeholder in ('$1', '$2', '$3'):
+        assert placeholder in written, written

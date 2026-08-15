@@ -282,3 +282,19 @@ def test_the_relation_is_not_written_inside_a_function_call() -> None:
         written = applied(sql, plan_insertion(sql, pick))
         assert 'FROM auth_user)' not in written, written
         assert written.endswith('FROM auth_user'), written
+
+
+def test_the_relation_never_lands_before_the_column_it_accompanies() -> None:
+    """
+    The clamp was applied to one of the two returns.
+
+    With an empty select list and a clause after it, the clause-found path walks
+    back over the whitespace *before* the caret, so the FROM was ordered ahead of
+    the column and `Insertion.edits` stopped being latest-first: the two spliced
+    in sequence gave `SELECT auth_user.idFROM auth_user  ORDER BY 1`.
+    """
+    sql = 'SELECT  ORDER BY 1'
+    pick = suggestion('auth_user.id', Kind.COLUMN, (7, 7), relation=('auth_user',))
+    plan = plan_insertion(sql, pick)
+    assert [edit.span[0] for edit in plan.edits] == sorted((edit.span[0] for edit in plan.edits), reverse=True)
+    assert applied(sql, plan) == 'SELECT auth_user.id FROM auth_user ORDER BY 1'

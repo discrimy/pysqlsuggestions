@@ -1485,7 +1485,14 @@ def _around_an_insert_target(
         return written_to
     if opens_source is not None and caret >= opens_source:
         return relations
-    return [*written_to, *relations]
+    # Before the source query: the target, and only the target. This used to
+    # return both, so `INSERT INTO groups (⌶) SELECT ... FROM users` offered the
+    # source's columns in the list of columns being written to — `INSERT INTO
+    # groups (username)` is `column "username" of relation "groups" does not
+    # exist`. The commit that split these three positions left this one as it
+    # found it; the test it shipped used a statement with no source `SELECT`,
+    # which is the one shape where target and source agree.
+    return written_to if opens_source is not None else [*written_to, *relations]
 
 
 def clauses_written(
@@ -1588,7 +1595,11 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is not None and matched[0] != 'SELECT':
-            return _skip_back_over_space(tokens, index)
+            # Clamped like the fallback below, which was the only one that got
+            # it: with an empty select list this walks back over the whitespace
+            # *before* the caret, ordering the clause ahead of the column and
+            # inverting `Insertion.edits`.
+            return max(_skip_back_over_space(tokens, index), caret)
     # Back over trailing trivia, not merely to the last token. A comment closing
     # the buffer is in `_SKIP` for the scan above and was still the answer here,
     # so the clause landed *inside* it and the statement ran with no FROM at all.
@@ -1599,6 +1610,11 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
     # Never before the caret, though. At `SELECT ⌶` the select list ends exactly
     # there, and an offset behind it would put the clause in front of the column
     # it was fetched for, breaking `Insertion.edits`' latest-first ordering.
+    # A literal nobody has closed is deliberately *not* stepped over. It runs to
+    # end of input, so there is no offset after it to use — every candidate is
+    # inside the quote — and putting the clause before it instead only trades
+    # that for `, FROM`. The statement cannot be valid until the quote is closed,
+    # so neither reading is an answer and this leaves the simpler one.
     last = _skip_back(tokens, hi - 1)
     return max(tokens[last].end, caret) if last >= lo else caret
 
