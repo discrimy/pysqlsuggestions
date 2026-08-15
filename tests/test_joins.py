@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pysqlsuggestions import ForeignKey
+from pysqlsuggestions.api import complete
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.joins import condition_columns, join_conditions, relation_joins
 from pysqlsuggestions.types import Candidate, Kind, Projection, Relation, Scope, Suggestion
@@ -242,3 +244,65 @@ def test_each_proposal_is_an_alternative_and_may_reuse_an_alias() -> None:
         'airline a ON f.airline_id = a.id',
         'airport a ON f.origin = a.code',
     ]
+
+
+def test_an_edge_with_no_column_pairs_proposes_nothing() -> None:
+    """
+    `ForeignKey` is a public record with no validation, and an empty side crashed.
+
+    `_fk_column` and `condition_columns` both index `pairs[0]`, so an edge whose
+    `columns` or `references` is empty raised IndexError out of `complete` — the
+    one thing this library says it never does. Postgres cannot emit such an edge,
+    but `SupportsForeignKeys` is a port and a third-party adapter can.
+    """
+    catalog = MemoryCatalog(
+        {('public', 'usage'): [('a', 'bigint')], ('public', 'links'): [('id', 'bigint')]},
+        foreign_keys=[
+            ForeignKey('public', 'usage', (), 'public', 'links', ('id',)),
+            ForeignKey('public', 'usage', ('a',), 'public', 'links', ()),
+        ],
+    )
+    for tail in ('JOIN ', 'JOIN links l ON ', 'JOIN links l ON u.'):
+        sql = f'SELECT * FROM usage u {tail}'
+        assert complete(sql, len(sql), POSTGRES, catalog) is not None, tail
+
+
+def test_an_edge_whose_sides_disagree_in_length_proposes_nothing() -> None:
+    """
+    `zip(strict=False)` turned the one shape that cannot be answered into the one
+    failure this module exists to refuse.
+
+    `types.ForeignKey` states the invariant — "both sides are tuples and
+    correspond positionally" — and nothing enforced it, so a two-column
+    referencing side against a one-column referenced side silently dropped the
+    second pair and produced a half-composite condition. That is legal SQL which
+    fans out rows the constraint says are unrelated: the `docs/gaps.md` case for
+    refusing name-inferred joins, arrived at from the other direction.
+    """
+    catalog = MemoryCatalog(
+        {('public', 'usage'): [('q', 'bigint'), ('d', 'bigint')], ('public', 'links'): [('q', 'bigint')]},
+        foreign_keys=[ForeignKey('public', 'usage', ('q', 'd'), 'public', 'links', ('q',))],
+    )
+    sql = 'SELECT * FROM usage u JOIN '
+    assert not [s for s in complete(sql, len(sql), POSTGRES, catalog) if s.kind is Kind.JOIN]
+
+
+def test_a_generated_alias_that_is_a_reserved_word_is_quoted() -> None:
+    """
+    Three of the snippet's four identifier slots went through `quote_if_needed`.
+
+    The alias is written bare into `f'{reference} {alias} ON {condition}'` while
+    the condition already spells it quoted, so a table whose initials make a
+    reserved word produced `order_note on ON r.note_id = "on".id` — which
+    Postgres answers with `syntax error at or near "ON"`. The plain ALIAS
+    position quotes the same word correctly, so the two disagreed.
+    """
+    catalog = MemoryCatalog(
+        {('public', 'report'): [('note_id', 'bigint')], ('public', 'order_note'): [('id', 'bigint')]},
+        foreign_keys=[ForeignKey('public', 'report', ('note_id',), 'public', 'order_note', ('id',))],
+    )
+    sql = 'SELECT * FROM report r JOIN '
+    for offered in complete(sql, len(sql), POSTGRES, catalog):
+        if offered.kind is Kind.JOIN:
+            assert ' on ON ' not in offered.text, offered.text
+            assert '"on"' not in offered.text or ' "on" ON ' in offered.text, offered.text

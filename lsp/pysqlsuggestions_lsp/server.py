@@ -256,12 +256,19 @@ def create_server(connect: Connect | None = None) -> SqlServer:
         # That last one is the reason this returns empty rather than falling back
         # to `document.source`: answering from an unrelated file is worse than
         # answering with nothing.
+        # `OSError` alone was not enough. A latin-1 or cp1252 `.sql` dump — an
+        # ordinary thing to have — raises `UnicodeDecodeError`, which is a
+        # `ValueError`, and it came back to the editor as JSON-RPC -32603 on a
+        # keystroke. And `offset_at_position` reaches `.source` again through
+        # `.lines`, so two of the three reads used to sit outside the guard: a
+        # file that vanished between them escaped the same way, which is exactly
+        # the didClose race this is here for.
         document = server.workspace.get_text_document(params.text_document.uri)
         try:
             text = document.source
-        except OSError:
+            offset = document.offset_at_position(params.position)
+        except (OSError, UnicodeDecodeError):
             return CompletionList(is_incomplete=False, items=[])
-        offset = document.offset_at_position(params.position)
         return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset))
 
     del initialize, completion

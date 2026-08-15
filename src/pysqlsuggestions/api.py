@@ -245,11 +245,30 @@ def _separated(sql: str, start: int, end: int, text: str) -> str:
     junk after a numeric literal. A span that *does* cover something ends where
     its own token ends, and a dot, a paren or a space already separates.
     """
-    if start != end or start == 0 or not text:
+    if start != end or not text:
         return text
-    before = sql[start - 1]
-    merges = (before.isalnum() or before in '_$"`\'') and (text[0].isalnum() or text[0] in '_$"`')
-    return f' {text}' if merges else text
+    if start and _fuses(sql[start - 1], text[0]):
+        text = f' {text}'
+    if end < len(sql) and _fuses(text[-1], sql[end]):
+        # The same rule read forwards, which it was not. A caret before an
+        # existing word is how a column gets added to a statement already
+        # written — click after `id`, type a comma, ask — and accepting there
+        # spliced into the next word: `SELECT id ASFROM flight`, which the
+        # server refuses just as it refuses `1AND`.
+        text = f'{text} '
+    return text
+
+
+_CLOSES_A_NAME = '_$"`\''
+"""Characters a name can end with, so that writing a name straight after one merges the two."""
+
+_OPENS_A_NAME = '_$"`'
+"""The same, for what a name can begin with. No apostrophe: a literal opens with its own quote."""
+
+
+def _fuses(before: str, after: str) -> bool:
+    """Whether writing `after` hard against `before` would read back as one token."""
+    return (before.isalnum() or before in _CLOSES_A_NAME) and (after.isalnum() or after in _OPENS_A_NAME)
 
 
 __all__ = ['DEFAULT_LIMIT', 'apply_suggestion', 'complete', 'derive_request', 'plan_insertion']
