@@ -18,7 +18,8 @@ import re
 from collections.abc import Callable, Sequence
 from typing import Any, Protocol
 
-from pysqlsuggestions.dialects.base import Dialect, Query
+from pysqlsuggestions.dialects.base import Dialect, Query, Syntax
+from pysqlsuggestions.engine.lex import TokenType, lex
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
 _MARKER = re.compile(r'\$(\d+)')
@@ -37,14 +38,49 @@ class Cursor(Protocol):
         ...
 
 
-def render(sql: str, values: Sequence[str], paramstyle: str) -> tuple[str, Any]:
+def _quoted_spans(sql: str, syntax: Syntax | None) -> tuple[tuple[int, int], ...]:
+    """Where `sql` holds a literal or a comment, so a marker inside one is text."""
+    if syntax is None:
+        return ()
+    return tuple(
+        (token.start, token.end)
+        for token in lex(sql, syntax)
+        if token.type in (TokenType.STRING, TokenType.COMMENT) or (token.type is TokenType.IDENT and token.quoted)
+    )
+
+
+def _within(offset: int, spans: tuple[tuple[int, int], ...]) -> bool:
+    """Whether `offset` falls inside one of `spans`."""
+    return any(start <= offset < end for start, end in spans)
+
+
+def _markers(sql: str, protected: tuple[tuple[int, int], ...]) -> list[re.Match[str]]:
+    """Every `$N` that is a marker rather than text."""
+    return [found for found in _MARKER.finditer(sql) if not _within(found.start(), protected)]
+
+
+def render(sql: str, values: Sequence[str], paramstyle: str, syntax: Syntax | None = None) -> tuple[str, Any]:
     """
     Rewrite `$1`-style markers for `paramstyle`, returning (sql, parameters).
 
     A marker may repeat, and positional styles care about the order of
     occurrence rather than the order of `values`, so both are handled here
     rather than left to each dialect to remember.
+
+    `syntax` says where the SQL's literals and comments are, so a `$1` written
+    inside one is left as the text it is. Without it the rewrite is a
+    context-free regex, which is a lexer's job done badly: `SELECT '$1 is text'`
+    had its literal rewritten and bound a value the query never asked for.
+    Optional because the shipped queries hold no such marker and every caller in
+    this package passes it — a third-party dialect that omits it gets the old
+    behaviour rather than an error.
+
+    The engine's own scanner answers the question rather than a second one
+    written here: it is dialect-driven, so `$$ ... $$` is a literal on Postgres
+    and two operators on Trino, and a hand-rolled version would have to be told
+    that separately and then kept in step.
     """
+    protected = _quoted_spans(sql, syntax)
     order: list[int] = []
 
     # Checked once, for every paramstyle, because `$0` is malformed in the
@@ -54,13 +90,20 @@ def render(sql: str, values: Sequence[str], paramstyle: str) -> tuple[str, Any]:
     # other out-of-range marker raises. `Template.snippet` in this package
     # spells `$0` with its own meaning ("last"), which is exactly the confusion
     # that puts one in a `Query.sql` by mistake.
-    if any(int(found) == 0 for found in _MARKER.findall(sql)):
+    if any(int(found.group(1)) == 0 for found in _markers(sql, protected)):
         message = f'markers are one-based, so $0 is not a parameter: {sql!r}'
         raise ValueError(message)
 
     def positional(match: re.Match[str], token: str) -> str:
+        if _within(match.start(), protected):
+            return match.group(0)
         order.append(int(match.group(1)) - 1)
         return token
+
+    def named(match: re.Match[str], template: str) -> str:
+        if _within(match.start(), protected):
+            return match.group(0)
+        return template.format(match.group(1))
 
     # The %-based styles read `%` as the start of a placeholder, so a literal one
     # in the query text has to be doubled. Introspection SQL is full of them —
@@ -79,14 +122,15 @@ def render(sql: str, values: Sequence[str], paramstyle: str) -> tuple[str, Any]:
     # Trino's `SHOW FUNCTIONS` takes none and got one — which a positional driver
     # rejects outright. `trino_http._prepare` already special-cased this shape,
     # which was the sign the general rule was wrong rather than that query odd.
-    wanted = sorted({int(found) for found in _MARKER.findall(sql)})
+    wanted = sorted({int(found.group(1)) for found in _markers(sql, protected)})
 
     if paramstyle == 'numeric':
-        return _MARKER.sub(lambda m: f':{m.group(1)}', sql), tuple(values[number - 1] for number in wanted)
+        rendered = _MARKER.sub(lambda m: m.group(0) if _within(m.start(), protected) else f':{m.group(1)}', sql)
+        return rendered, tuple(values[number - 1] for number in wanted)
 
     if paramstyle in ('named', 'pyformat'):
         template = ':p{}' if paramstyle == 'named' else '%(p{})s'
-        rendered = _MARKER.sub(lambda m: template.format(m.group(1)), escaped)
+        rendered = _MARKER.sub(lambda m: named(m, template), escaped)
         return rendered, {f'p{number}': values[number - 1] for number in wanted}
 
     message = f'unsupported paramstyle: {paramstyle!r}'
@@ -115,7 +159,7 @@ class DbapiCatalog:
     def _rows(self, query: Query | None, *values: str) -> list[Any]:
         if query is None:
             return []
-        sql, parameters = render(query.sql, values, self._paramstyle)
+        sql, parameters = render(query.sql, values, self._paramstyle, self._dialect.syntax)
         cursor = self._open_cursor()
         cursor.execute(sql, parameters)
         return [query.row(tuple(row)) for row in cursor.fetchall()]

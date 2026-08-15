@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog, render
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
 
@@ -186,3 +187,58 @@ def test_a_query_with_no_markers_binds_no_parameters_in_any_style() -> None:
     for style in ('qmark', 'format', 'numeric', 'named', 'pyformat'):
         _, parameters = render(functions.sql, ('public',), style)
         assert not parameters, style
+
+
+def test_a_marker_inside_a_literal_or_a_comment_is_left_alone() -> None:
+    """
+    The rewrite was a context-free regex over SQL, which is a lexer's job.
+
+    A `$1` inside a string, a comment or a dollar-quoted body is text, not a
+    parameter — but it was replaced all the same, and bound a value the query
+    never asked for. Latent today, since no shipped introspection query holds
+    one. Postgres is where it would land first: it is the dialect with dollar
+    quoting, and the one whose catalog SQL is most likely to grow a `$$` body.
+    """
+    cases = [
+        ("SELECT '$1 is text' WHERE s = $1", "SELECT '$1 is text' WHERE s = %s"),
+        ('SELECT 1 -- costs $1\nWHERE s = $1', 'SELECT 1 -- costs $1\nWHERE s = %s'),
+        ('SELECT $$ body $1 $$ WHERE s = $1', 'SELECT $$ body $1 $$ WHERE s = %s'),
+        ('SELECT /* $1 */ x WHERE s = $1', 'SELECT /* $1 */ x WHERE s = %s'),
+        ('SELECT "$1" WHERE s = $1', 'SELECT "$1" WHERE s = %s'),
+    ]
+    for sql, expected in cases:
+        rendered, parameters = render(sql, ('a',), 'format', POSTGRES.syntax)
+        assert rendered == expected, sql
+        assert parameters == ('a',), sql
+
+
+def test_a_marker_inside_a_literal_is_left_alone_for_every_style() -> None:
+    """The named styles build their parameters from the markers too, so they agree."""
+    sql = "SELECT '$2 is text' WHERE s = $1"
+    for style in ('qmark', 'format', 'numeric', 'named', 'pyformat'):
+        _, parameters = render(sql, ('a', 'b'), style, POSTGRES.syntax)
+        assert len(parameters) == 1, style
+
+
+def test_dollar_quoting_is_read_per_dialect() -> None:
+    """
+    Only Postgres has it, and a dialect without it must not gain it here.
+
+    Trino reads `$$` as two operators, so a `$1` between them is an ordinary
+    marker there and rewriting it is right.
+    """
+    sql = 'SELECT $$ body $2 $$ WHERE s = $1'
+    assert render(sql, ('a', 'b'), 'format', POSTGRES.syntax)[1] == ('a',), 'the body is a literal'
+    assert render(sql, ('a', 'b'), 'format', TRINO.syntax)[1] == ('b', 'a'), 'two operators, so both are markers'
+
+
+def test_the_shipped_queries_are_unaffected() -> None:
+    """No introspection query holds a marker in a literal, and this pins that."""
+    for dialect in (POSTGRES, TRINO, CLICKHOUSE):
+        for name in ('schemas', 'tables', 'columns', 'functions', 'foreign_keys', 'values'):
+            query = getattr(dialect.catalog_queries, name, None)
+            if query is None:
+                continue
+            plain = render(query.sql, ('a', 'b', 'c'), 'format')
+            aware = render(query.sql, ('a', 'b', 'c'), 'format', dialect.syntax)
+            assert plain == aware, (dialect.name, name)
