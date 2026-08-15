@@ -243,3 +243,57 @@ def test_the_insert_column_list_names_only_the_target() -> None:
     offered = [s.text for s in complete(sql, sql.index('()') + 1, POSTGRES, catalog, limit=20)]
     assert offered, 'the target still answers'
     assert not [text for text in offered if 'username' in text], offered
+
+
+def test_the_target_is_invisible_to_a_parenthesised_source_query() -> None:
+    """
+    `INSERT INTO t (a) (SELECT ...)` is the same statement with the source in parens.
+
+    All three backends accept the parentheses and all three refuse the target
+    inside them, exactly as they do without — the brackets change how the
+    statement is written, not what the source query may read.
+
+    `_around_an_insert_target` located the source by looking for a `SELECT`
+    clause at the statement's own depth, so parenthesising it hid the clause a
+    level down. `opens_source` stayed None, the caret never counted as being in
+    the source, and the target stayed in scope for the whole statement — where
+    the subquery then read it as an enclosing scope, the way a correlated
+    subquery is meant to read one.
+
+    The bare form of this is `test_the_insert_source_does_not_see_the_target`;
+    the commit that fixed it left this one, which is the same shape the column
+    list was left in one commit before that.
+    """
+    catalog = MemoryCatalog(
+        {
+            ('public', 'users'): [('id', 'bigint'), ('name', 'text'), ('email', 'text')],
+            ('public', 'orders'): [('id', 'bigint'), ('user_id', 'bigint'), ('total', 'numeric')],
+        }
+    )
+    for sql, caret in (
+        ('INSERT INTO users (id) (SELECT  FROM orders)', 31),
+        ('INSERT INTO users (id) (SELECT id FROM orders WHERE )', 52),
+    ):
+        offered = [s.text for s in complete(sql, caret, POSTGRES, catalog, limit=20)]
+        assert offered, sql
+        assert not [text for text in offered if text.startswith('users.')], (sql, offered)
+        assert [text for text in offered if text.startswith('orders.')], (sql, offered)
+
+
+def test_a_scalar_subquery_in_values_does_not_open_the_source() -> None:
+    """
+    The control for the fix above, and the reason the depth test was there.
+
+    `INSERT INTO t (a) VALUES ((SELECT 1))` holds a `SELECT` one level down that
+    is an expression, not the statement's source query. Reading it as the source
+    would take the target out of scope for a `RETURNING` that follows it, which
+    is the one clause the target exists in scope to serve.
+
+    What separates the two is what opens the group: a source query is a
+    parenthesised `SELECT`, where this is a parenthesised expression that
+    happens to contain one.
+    """
+    catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint'), ('name', 'text')]})
+    sql = 'INSERT INTO users (id) VALUES ((SELECT 1)) RETURNING '
+    offered = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=20)]
+    assert [text for text in offered if text.startswith('users.')], offered

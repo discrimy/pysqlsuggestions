@@ -1470,16 +1470,37 @@ def _around_an_insert_target(
     why it stays in `_RELATION_CLAUSES` at all.
     """
     base = tokens[lo].depth
+    opens_target: int | None = None
     opens_source: int | None = None
     opens_returning: int | None = None
     for index in range(lo, hi):
         token = tokens[index]
         if token.type in _SKIP or token.depth != base:
             continue
+        # A source query may be written in parentheses — `INSERT INTO t (a)
+        # (SELECT ...)`, which all three backends accept — and then its clause
+        # sits one level down, where the depth test above never sees it. So the
+        # group that opens it is what gets recognised, by the same test
+        # `_relations_in` uses to tell a subquery from a call.
+        #
+        # Two things it must not mistake for the source. `VALUES ((SELECT 1))`
+        # opens a group at this depth whose first token is another paren, not a
+        # query — which is why the question is asked of the group rather than of
+        # any `SELECT` below this level. And a `WITH` in front of the statement
+        # parenthesises its CTE bodies at this depth too, so nothing counts
+        # until the target has been read: that query is a different statement's,
+        # and taking it for this one would have cost the column list its target.
+        if opens_target is not None and token.text == '(' and _opens_a_query(tokens, index, hi, dialect):
+            inside = _skip_forward(tokens, index + 1, hi)
+            if opens_source is None and inside < hi:
+                opens_source = tokens[inside].start
+            continue
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is None:
             continue
-        if matched[0] == 'SELECT' and opens_source is None:
+        if matched[0] == 'INSERT INTO' and opens_target is None:
+            opens_target = token.start
+        elif matched[0] == 'SELECT' and opens_source is None:
             opens_source = token.start
         elif matched[0] == 'RETURNING' and opens_returning is None:
             opens_returning = token.start
