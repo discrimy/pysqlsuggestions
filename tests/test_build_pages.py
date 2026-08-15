@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import build_pages
 from scripts.build_pages import RUNTIME_BYTES, external_references
 
 
@@ -81,3 +82,32 @@ def test_a_transport_without_the_placeholder_fails_the_build() -> None:
     """
     assert RUNTIME_BYTES.search('const RUNTIME_BYTES = 0;') is not None
     assert RUNTIME_BYTES.search('const RUNTIME_TOTAL = 0;') is None
+
+
+def test_the_newest_wheel_is_chosen_by_version_not_by_spelling() -> None:
+    """
+    `sorted()` over filenames orders `0.10.0` before `0.9.0`, because `1` sorts before `9`.
+
+    The first two-digit minor would have shipped the previous release's wheel
+    into `site/`, and the staleness check above would not catch it: an older
+    wheel built after the last source edit is newer by mtime and older by
+    version. The page would then run the wrong library with nothing to say so.
+    """
+    names = [
+        'pysqlsuggestions-0.9.0-py3-none-any.whl',
+        'pysqlsuggestions-0.10.0-py3-none-any.whl',
+        'pysqlsuggestions-0.2.0-py3-none-any.whl',
+    ]
+    chosen = build_pages.newest([Path(name) for name in names])
+    assert chosen.name == 'pysqlsuggestions-0.10.0-py3-none-any.whl'
+
+
+def test_a_wheel_whose_version_does_not_parse_still_orders() -> None:
+    """A local or pre-release suffix must not raise on the way to a comparison."""
+    names = [
+        'pysqlsuggestions-0.9.0-py3-none-any.whl',
+        'pysqlsuggestions-0.10.0rc1-py3-none-any.whl',
+        'pysqlsuggestions-weird-py3-none-any.whl',
+    ]
+    chosen = build_pages.newest([Path(name) for name in names])
+    assert chosen.name.startswith('pysqlsuggestions-0.10.0')

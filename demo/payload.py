@@ -22,6 +22,28 @@ from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.ports import Catalog
 from pysqlsuggestions.types import Kind, Relation, Request, Scope, Suggestion
 
+MAX_SQL_LENGTH = 20_000
+"""
+The longest statement either demo will answer.
+
+Here rather than in `app.py`, which is where it was and where only the server
+could see it. Both demos run the same pipeline and the page cannot tell which
+answered, so a bound on one and not the other is the two of them disagreeing
+about what they are — and the browser build is the half that needed it more,
+having no process boundary and no request timeout around a statement large
+enough to be slow.
+"""
+
+MAX_PENDING = 64
+"""
+How many template blanks a request may still have outstanding.
+
+`plan_insertion` takes these from the caller and the library is total over
+them, so this is not a correctness guard — it is a public HTTP surface
+declining to allocate a list the size of whatever was posted. Sixty-four is far
+past any template this library ships, the longest of which has four.
+"""
+
 
 def respond(
     sql: str,

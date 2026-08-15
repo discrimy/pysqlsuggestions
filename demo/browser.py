@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 
 from demo import schema
-from demo.payload import backend_entry, respond
+from demo.payload import MAX_PENDING, MAX_SQL_LENGTH, backend_entry, respond
 
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
@@ -95,13 +95,20 @@ class Demo:
         catalog = self._catalogs.get(backend)
         if dialect is None or catalog is None:
             return json.dumps({'error': f'unknown backend {backend!r}'})
+        sql = str(request.get('sql', ''))
+        # The same bound the server route declares, from the same constant. This
+        # runs on the page's own thread, so a statement long enough to be slow
+        # freezes the tab it was typed into — there is no process boundary here
+        # to absorb it and no request timeout to end it.
+        if len(sql) > MAX_SQL_LENGTH:
+            return json.dumps({'error': f'statement longer than {MAX_SQL_LENGTH} characters'})
         found = respond(
-            str(request.get('sql', '')),
+            sql,
             int(request.get('caret', 0)),
             dialect,
             catalog,
             cache=self._caches[backend],
             limit=int(request.get('limit', 25)),
-            pending=tuple(request.get('pending') or ()),
+            pending=tuple(request.get('pending') or ())[:MAX_PENDING],
         )
         return json.dumps(found)

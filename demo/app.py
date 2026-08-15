@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from demo.payload import backend_entry, respond
+from demo.payload import MAX_PENDING, MAX_SQL_LENGTH, backend_entry, respond
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -37,8 +37,15 @@ from pysqlsuggestions.dialects.trino import TRINO
 from pysqlsuggestions.types import Availability
 
 HERE = Path(__file__).parent
-MAX_SQL_LENGTH = 20_000
 DEFAULT_LIMIT = 25
+MAX_LIMIT = 200
+"""
+The most suggestions a request may ask for.
+
+`complete` forwards `limit * 5` to `resolve`, so an unbounded field here is an
+unbounded read there — and the page shows a list, which nobody scrolls two
+hundred of.
+"""
 
 
 @dataclass(frozen=True)
@@ -172,11 +179,19 @@ class SuggestRequest(BaseModel):
     """What the editor sends on each keystroke."""
 
     sql: str = Field(default='', max_length=MAX_SQL_LENGTH)
-    caret: int = 0
+    caret: int = Field(default=0, ge=0, le=MAX_SQL_LENGTH)
     backend: str = 'postgres'
-    limit: int = DEFAULT_LIMIT
-    pending: list[int] = Field(default_factory=list)
-    """Template blanks still outstanding, as the last insertion handed them back."""
+    limit: int = Field(default=DEFAULT_LIMIT, ge=0, le=MAX_LIMIT)
+    pending: list[int] = Field(default_factory=list, max_length=MAX_PENDING)
+    """
+    Template blanks still outstanding, as the last insertion handed them back.
+
+    Bounded like the rest of them. The library is total over these — a caret
+    past the end clamps, a negative limit now clamps too, and a nonsense blank
+    is ignored — so none of this is a correctness guard. It is a public HTTP
+    surface declining to allocate whatever was posted to it, which is a
+    different question and one the route has to answer for itself.
+    """
 
 
 def _warm(key: str) -> None:

@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 import shutil
 import sys
+from itertools import takewhile
 from pathlib import Path
 
 from scripts.vendor_pyodide import PYODIDE_VERSION, vendor
@@ -42,6 +43,9 @@ STATIC = ROOT / 'demo' / 'static'
 # page would still name last version's wheel, and the failure arrives as a
 # 404 inside Pyodide's installer rather than from anything here.
 WHEEL_NAME = re.compile(r'pysqlsuggestions-[^/\\\'"]+?-py3-none-any\.whl')
+
+WHEEL_VERSION = re.compile(r'^pysqlsuggestions-(.+?)-py3-none-any\.whl$')
+"""The version out of a wheel name, for ordering two of them by it."""
 
 RUNTIME_BYTES = re.compile(r'const RUNTIME_BYTES = (\d+);')
 """
@@ -89,17 +93,57 @@ def external_references(directory: Path) -> list[str]:
     return found
 
 
+def newest(wheels: list[Path]) -> Path:
+    """
+    The highest-versioned wheel, by version rather than by spelling.
+
+    `sorted()` over the filenames put `0.10.0` before `0.9.0`, because `1` sorts
+    before `9` — so the first two-digit minor would have copied the previous
+    release into `site/`. The staleness check below would not have caught it
+    either: an older wheel built after the last source edit is newer by mtime
+    and older by version, so the page would have run the wrong library with
+    nothing anywhere to say so.
+
+    Numeric where the parts are numeric and a string otherwise, which orders a
+    release ahead of its own release candidate and never raises on a version
+    this does not recognise. Ordering something odd imperfectly is the job here;
+    refusing to build over it is not.
+    """
+    return max(wheels, key=lambda path: _version_key(WHEEL_VERSION.sub(r'\1', path.name)))
+
+
+def _version_key(version: str) -> tuple[bool, tuple[tuple[int, bool, str], ...]]:
+    """
+    `0.10.0` above `0.9.0`, and `0.10.0` above `0.10.0rc1`, without a parser.
+
+    The leading flag is whether this looks like a version at all, so anything
+    unrecognisable sorts *below* everything that does rather than above it —
+    which is what a bare `max` over the parts did, and it would have picked the
+    one wheel nobody meant.
+
+    Within a part, an empty suffix outranks a non-empty one, because `rc1` is
+    what a release candidate carries and the release itself carries nothing.
+    """
+    parts = []
+    for part in version.split('.'):
+        digits = ''.join(takewhile(str.isdigit, part))
+        suffix = part[len(digits) :]
+        parts.append((int(digits) if digits else 0, not suffix, suffix))
+    return version[:1].isdigit(), tuple(parts)
+
+
 def main() -> int:
     """Build `site/`. Returns a process exit status."""
-    wheels = sorted((ROOT / 'dist').glob('pysqlsuggestions-*.whl'))
-    if not wheels:
+    found = list((ROOT / 'dist').glob('pysqlsuggestions-*.whl'))
+    if not found:
         print('no wheel in dist/ — run `uv build --wheel` first', file=sys.stderr)  # noqa: T201
         return 1
+    wheel = newest(found)
 
     # The site is only as fresh as dist/. A wheel older than the library it was
     # built from produces a page that runs yesterday's code, and the symptom is
     # a TypeError from inside Pyodide rather than anything pointing here.
-    built = wheels[-1].stat().st_mtime
+    built = wheel.stat().st_mtime
     stale = [f for f in (ROOT / 'src').rglob('*.py') if f.stat().st_mtime > built]
     if stale:
         names = ', '.join(sorted(f.name for f in stale)[:3])
@@ -116,7 +160,7 @@ def main() -> int:
             print(f'missing {source}', file=sys.stderr)  # noqa: T201
             return 1
         shutil.copy2(source, SITE / name)
-    shutil.copy2(wheels[-1], SITE / wheels[-1].name)
+    shutil.copy2(wheel, SITE / wheel.name)
     vendor(SITE / 'pyodide')
 
     # Both are modules, so document order decides: the transport is installed
@@ -128,12 +172,12 @@ def main() -> int:
             print('index.html has no module script to precede', file=sys.stderr)  # noqa: T201
             return 1
         page = page.replace(marker, f'{BOOTSTRAP}\n{marker}', 1)
-    page = WHEEL_NAME.sub(wheels[-1].name, page)
+    page = WHEEL_NAME.sub(wheel.name, page)
     (SITE / 'index.html').write_text(page)
 
     # browser.js names the wheel too, and the version moves.
     driver = (SITE / 'browser.js').read_text()
-    named = WHEEL_NAME.subn(wheels[-1].name, driver)
+    named = WHEEL_NAME.subn(wheel.name, driver)
     if not named[1]:
         print('browser.js names no wheel to install', file=sys.stderr)  # noqa: T201
         return 1

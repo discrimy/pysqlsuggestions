@@ -115,6 +115,16 @@ quote-style = 'single'
 strict = true
 files = ['src', 'tests', 'lsp']
 
+[[tool.mypy.overrides]]
+module = ['demo.app']
+follow_imports = 'skip'
+# The demo is not in `files`, so it is not type-checked — but a test that
+# imports it drags it in anyway, and this is the one demo module needing the
+# web framework and the three real drivers. None of psycopg2, clickhouse_driver
+# or trino ships stubs, so following it fails the gate over dependencies the
+# library itself does not have. `demo/browser.py` and `demo/payload.py` import
+# nothing outside the library and are still followed.
+
 [tool.pytest.ini_options]
 testpaths = ['tests']
 markers = ['integration: needs the docker backends (docker/docker-compose.yml)']

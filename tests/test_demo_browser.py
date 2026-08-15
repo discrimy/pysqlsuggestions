@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from demo import browser, payload
 from demo.browser import Demo
 
 DRIVER = Path(__file__).resolve().parents[1] / 'demo' / 'static' / 'browser.js'
@@ -141,3 +142,56 @@ def test_the_transport_declares_a_runtime_total_for_the_build_to_fill() -> None:
     source = DRIVER.read_text()
     assert 'const RUNTIME_BYTES = 0;' in source, 'the build has no placeholder to fill in'
     assert 'response.body.getReader()' in source, 'progress needs a streaming read'
+
+
+def test_the_browser_build_caps_the_statement_it_will_answer() -> None:
+    """
+    The server route bounds `sql` with `max_length`; the browser build bounded nothing.
+
+    Both run the same pipeline, and the page cannot tell which answered — so a
+    limit on one and not the other is the two demos disagreeing about what they
+    are. It matters more here, not less: the server has a process boundary and a
+    request timeout around it, while this runs on the page's own thread and a
+    statement large enough to be slow freezes the tab it is typed into.
+    """
+    oversized = 'SELECT ' + 'x' * (payload.MAX_SQL_LENGTH + 1)
+    answer = json.loads(browser.Demo().suggest(json.dumps({'backend': 'postgres', 'sql': oversized, 'caret': 7})))
+    assert 'error' in answer, answer
+
+
+def test_the_browser_build_answers_a_statement_at_the_cap() -> None:
+    """The bound is a bound, not an off-by-one: what fits is still answered."""
+    sized = 'SELECT ' + 'x' * (payload.MAX_SQL_LENGTH - 7)
+    answer = json.loads(browser.Demo().suggest(json.dumps({'backend': 'postgres', 'sql': sized, 'caret': 7})))
+    assert 'error' not in answer, answer
+
+
+def test_every_demo_paramstyle_is_one_render_can_produce() -> None:
+    """
+    The guard `tests/lsp/test_connections.py` puts on `DRIVERS`, which the demo's own table lacked.
+
+    A paramstyle that `render` does not know is not a loud failure. It rewrites
+    the markers into a spelling the driver cannot parse and the catalog read
+    raises from inside the driver, so the demo degrades to a catalog-free list
+    and reads as a connection problem.
+
+    Against `render` rather than against `DRIVERS`, which was the first thing
+    tried and was wrong: the two name different drivers for the same backend —
+    pg8000 and the HTTP readers on the server, psycopg2 and `clickhouse_driver`
+    here — and a paramstyle belongs to a driver, not to a backend. Nor against
+    each driver's declared `paramstyle`, because psycopg2 declares `pyformat`
+    and accepts `format` besides, so equality there would fail a configuration
+    that works.
+    """
+    from demo.app import PARAMSTYLE
+
+    known = ('qmark', 'format', 'numeric', 'named', 'pyformat')
+    for backend, style in PARAMSTYLE.items():
+        assert style in known, f'{backend} declares {style!r}, which render would raise on'
+
+
+def test_every_demo_backend_has_a_paramstyle() -> None:
+    """A backend the table forgets is a KeyError on the first completion against it."""
+    from demo.app import BACKENDS, PARAMSTYLE
+
+    assert set(BACKENDS) == set(PARAMSTYLE), 'a backend and its paramstyle are declared apart'
