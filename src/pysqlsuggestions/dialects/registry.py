@@ -12,6 +12,7 @@ nothing until someone asks for one by name.
 
 from __future__ import annotations
 
+import warnings
 from functools import cache
 from importlib.metadata import entry_points
 
@@ -21,7 +22,7 @@ GROUP = 'pysqlsuggestions.dialects'
 
 
 @cache
-def available() -> dict[str, Dialect]:
+def _scan() -> dict[str, Dialect]:
     """
     Every registered dialect, keyed by its entry-point name.
 
@@ -34,14 +35,65 @@ def available() -> dict[str, Dialect]:
     consumer makes.
     """
     found: dict[str, Dialect] = {}
+    providers: dict[str, str] = {}
     for entry in entry_points(group=GROUP):
         try:
             loaded = entry.load()
         except Exception:  # noqa: BLE001, S112
             continue
-        if isinstance(loaded, Dialect):
-            found[entry.name] = loaded
+        if not isinstance(loaded, Dialect):
+            continue
+        provider = getattr(getattr(entry, 'dist', None), 'name', None) or 'an unnamed distribution'
+        if entry.name in found:
+            _announce_collision(entry.name, providers[entry.name], provider)
+        found[entry.name] = loaded
+        providers[entry.name] = provider
     return found
+
+
+_BUILT_IN = 'pysqlsuggestions'
+"""
+The distribution the four shipped dialects register from.
+
+They come through the same entry-point group as anybody else's, so they hold no
+privilege here — the name is only how a collision is described.
+"""
+
+
+def _announce_collision(name: str, previous: str, winner: str) -> None:
+    """
+    Say that two distributions claim one dialect name, and which one won.
+
+    Last-wins is kept rather than made to favour the built-ins, because
+    overriding one is a real thing to want: a fork of a backend, or a fix
+    carried locally ahead of a release. What was wrong was the silence. The
+    winner is whichever distribution `importlib.metadata` enumerates last, which
+    is not an order anything documents, so a shadowed dialect could otherwise
+    change under an environment that merely got rebuilt.
+
+    Worth hearing because `lsp/connections.py` resolves a dialect by name and
+    hands it to `DbapiCatalog`: the winner's introspection SQL is what reaches
+    the user's database, while the paramstyle still comes from a table keyed on
+    that same name.
+    """
+    shadowed = f'the built-in dialect {name!r}' if previous == _BUILT_IN else f'dialect {name!r} from {previous!r}'
+    warnings.warn(
+        f'distribution {winner!r} overrides {shadowed}; {winner!r} is what `named({name!r})` will return',
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def available() -> dict[str, Dialect]:
+    """
+    Every registered dialect, keyed by its entry-point name.
+
+    A copy per call. The scan behind it is cached, and handing that same dict
+    back meant a caller editing what looked like its own mapping poisoned the
+    registry for the whole process — defeating the `isinstance` check above,
+    which is the only thing keeping a non-`Dialect` out of `named`.
+    """
+    return dict(_scan())
 
 
 def named(name: str) -> Dialect | None:

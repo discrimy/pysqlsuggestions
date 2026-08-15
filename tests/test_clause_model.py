@@ -14,7 +14,7 @@ import pytest
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.ansi import ANSI
-from pysqlsuggestions.dialects.base import Clause, Dialect
+from pysqlsuggestions.dialects.base import Clause, ClauseModel, Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
@@ -115,3 +115,31 @@ def test_extending_with_a_known_name_refines_it_rather_than_shadowing_it() -> No
     found = refined.get('WHERE')
     assert found is not None
     assert found.operators == ('~',)
+
+
+def test_without_refuses_a_name_the_model_does_not_have() -> None:
+    """
+    A name that is not there is a typo, and the mirror already says so.
+
+    `postgres._ansi` raises on an unknown name because "a silently absent clause
+    would drop the refinement without a word". `without` is the same hazard
+    pointing the other way: `clickhouse.py` drops CALL and TABLE because its
+    parser rejects both, and a typo there left the word being offered with
+    nothing to signal it. Nothing else can catch it afterwards — the request is
+    gone the moment this returns, so `DialectConformance` sees a model that
+    simply has the clause and no reason to doubt it.
+    """
+    model = ClauseModel(clauses=(Clause(name='WHERE'), Clause(name='CALL')))
+    assert [clause.name for clause in model.without('CALL').clauses] == ['WHERE']
+    with pytest.raises(KeyError, match='FORM'):
+        model.without('FORM')
+    with pytest.raises(KeyError, match='FORM'):
+        model.without('CALL', 'FORM')
+
+
+def test_the_shipped_dialects_only_drop_clauses_they_have() -> None:
+    """The one call site in the library, pinned so the stricter rule stays satisfiable."""
+    assert CLICKHOUSE.clauses.get('CALL') is None
+    assert CLICKHOUSE.clauses.get('TABLE') is None
+    assert ANSI.clauses.get('CALL') is not None
+    assert ANSI.clauses.get('TABLE') is not None

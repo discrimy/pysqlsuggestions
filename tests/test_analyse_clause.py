@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from pysqlsuggestions.api import complete
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.analyse import clause_at, statement_at
 from pysqlsuggestions.engine.lex import lex
@@ -80,3 +82,32 @@ def test_a_quoted_name_is_never_a_clause_word() -> None:
     assert clause('SELECT * FROM "limit" ⌶') == 'FROM'
     assert clause('SELECT ⌶ FROM "limit"') == 'SELECT'
     assert clause('SELECT * FROM "values" v ⌶') == 'FROM'
+
+
+def test_an_unclosed_paren_does_not_merge_two_statements() -> None:
+    """
+    A `;` token at depth greater than zero only ever means a dangling paren.
+
+    The rule used to require depth zero, for a reason that does not hold: a
+    semicolon inside a string, a comment, a quoted identifier or a dollar-quoted
+    function body is swallowed by that token and never reaches the scan as
+    punctuation at all. So the depth test guarded nothing reachable, while one
+    missing `)` above the caret merged the statements and leaked the earlier
+    one's relations into the later one's scope.
+
+    `lsp/documents.py` has always split on any semicolon, so this is also the
+    two layers agreeing on where a statement ends.
+    """
+    catalog = MemoryCatalog({('public', 'users'): [('uname', 'varchar')], ('public', 'orders'): [('total', 'numeric')]})
+    for head in ('SELECT count(*) FROM users;', 'SELECT count(* FROM users;'):
+        sql = head + '\nSELECT  FROM orders'
+        caret = len(head) + len('\nSELECT ')
+        assert [s.text for s in complete(sql, caret, POSTGRES, catalog, limit=10)] == ['orders.total'], head
+
+
+def test_a_semicolon_inside_a_literal_still_does_not_split() -> None:
+    """The half of the old rule that was real, and is done by the lexer."""
+    catalog = MemoryCatalog({('public', 'users'): [('uname', 'varchar')]})
+    sql = "SELECT 'a;b' AS x, ⌶ FROM users"
+    caret = sql.index('⌶')
+    assert 'uname' in ' '.join(s.text for s in complete(sql.replace('⌶', ''), caret, POSTGRES, catalog, limit=10))

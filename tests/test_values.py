@@ -192,3 +192,62 @@ def test_a_value_the_type_listed_claims_no_share() -> None:
     sql, caret = split_caret('SELECT * FROM reports_database d WHERE d.is_archived = ⌶')
     found = complete(sql, caret, POSTGRES, MemoryCatalog(SNAPSHOT))
     assert found[0].detail == 'value of reports_database.is_archived'
+
+
+def test_an_escape_string_prefix_is_not_part_of_the_typed_value() -> None:
+    """
+    `E'an` and `'an` are the same literal half-written.
+
+    The prefix was sliced with `text[1:]`, which assumes `text[0]` is the quote.
+    A Postgres escape string puts the quote one character in, so the derived
+    prefix kept it — `'an` — and matched only on the substring tier, silently
+    dropping every candidate that did not happen to contain the quote.
+    """
+    catalog = MemoryCatalog(
+        {('public', 'users'): [('name', 'varchar')]},
+        values={('public', 'users', 'name'): ['ann', 'bann']},
+    )
+    plain = "SELECT * FROM users WHERE name = 'an"
+    escaped = "SELECT * FROM users WHERE name = E'an"
+    assert derive_request(escaped, len(escaped), POSTGRES).prefix == 'an'
+    assert [s.text for s in complete(escaped, len(escaped), POSTGRES, catalog)] == [
+        s.text for s in complete(plain, len(plain), POSTGRES, catalog)
+    ]
+
+
+def test_a_dollar_quoted_body_is_not_read_as_a_quote() -> None:
+    """
+    `$$` opens a literal and doubles nothing, so neither half of the old rule held.
+
+    `text[0]` gave `$`, the body was sliced from index one, and the prefix came
+    out `$clic` — which matches nothing at all, so the position went silent
+    rather than merely losing candidates.
+    """
+    catalog = MemoryCatalog(
+        {('public', 'd'): [('type', 'varchar')]},
+        values={('public', 'd', 'type'): ['clickhouse', 'postgres']},
+    )
+    sql = 'SELECT * FROM d WHERE type = $$clic'
+    assert derive_request(sql, len(sql), POSTGRES).prefix == 'clic'
+    assert [s.text for s in complete(sql, len(sql), POSTGRES, catalog)] == ["'clickhouse'"]
+
+
+def test_a_value_containing_a_quote_keeps_matching_as_it_is_typed() -> None:
+    """
+    Typing the next character of the engine's own suggestion must not lose it.
+
+    The prefix is un-doubled — `o''b` read back as `o'b` — while the candidate is
+    the doubled, SQL-quoted form it will be inserted as. Comparing the two forms
+    against each other, `o'b` does not occur in `'o''brien'`, so the suggestion
+    the engine had just offered vanished on the next keystroke.
+    """
+    catalog = MemoryCatalog(
+        {('public', 'users'): [('name', 'varchar')]},
+        values={('public', 'users', 'name'): ["o'brien"]},
+    )
+    for sql in (
+        "SELECT * FROM users WHERE name = 'o",
+        "SELECT * FROM users WHERE name = 'o''",
+        "SELECT * FROM users WHERE name = 'o''b",
+    ):
+        assert [s.text for s in complete(sql, len(sql), POSTGRES, catalog)] == ["'o''brien'"], sql

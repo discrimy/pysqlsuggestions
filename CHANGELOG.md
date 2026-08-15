@@ -4,6 +4,48 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## Unreleased
+
+### Accepting a suggestion no longer breaks the statement
+
+A column offered before any `FROM` exists writes the clause with it, and that
+clause now lands in the query that needs it. `SELECT na⌶ -- note` used to splice
+it inside the comment, leaving a statement with no `FROM` at all; `SELECT na⌶
+UNION SELECT 1` produced `FROM public.auth_userUNION`, one identifier with the
+set operation gone; and a caret in a CTE body or a derived table put the clause
+in the *enclosing* statement, which then had two while the subquery that asked
+for one still had none. All three were one offset, computed without regard to
+the caret's parentheses or to what trailing trivia the statement ended with.
+
+At `SELECT ⌶` — the commonest trigger there is — the language server was handing
+the editor a completion whose main edit was the `FROM` clause, with the column
+demoted beside it. Both edits legitimately start at the caret there, and the one
+at the caret is the later of the two.
+
+### Positions that answer where they used to go quiet, or wrong
+
+`GROUP BY ROLLUP ⌶` on Postgres offers the grouping items. The dialect offered
+`ROLLUP` and then could not read it back, so the word registered as the clause's
+own item and the caret after it proposed `HAVING` — which the server refuses.
+`CUBE` and `GROUPING SETS` were the same. No other dialect was affected.
+
+Typing `SELECT "".⌶` no longer empties the relation list for the rest of the
+session. A quoted empty identifier reaches the catalog as both "every relation"
+and "the relations in a schema named nothing", and the two shared a cache key.
+
+### Statements that used to crash or hang
+
+A document of deeply nested `WITH` bodies, or a long chain of CTEs each selecting
+from the last, raised `RecursionError` out of `complete` and out of the language
+server's completion handler. Three walks descended without a bound; all three
+have one now, and a query too deep to follow loses the tail of its answer rather
+than the whole request.
+
+A half-typed query of nested subqueries — parentheses opened and not yet closed,
+which is what an editor holds on most keystrokes — took thirty-five seconds at
+2.4 KB and now takes under one. A run of bare unclosed parentheses is still
+quadratic; that is a different mechanism and a much less likely input.
+
 ## 0.7.0
 
 ### Positions that had no answer

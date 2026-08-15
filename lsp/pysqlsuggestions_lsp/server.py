@@ -52,6 +52,7 @@ from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.registry import named
 from pysqlsuggestions.types import Suggestion
 from pysqlsuggestions_lsp import __version__
+from pysqlsuggestions_lsp.check import describe
 from pysqlsuggestions_lsp.connections import Connect, Profile, open_catalog
 from pysqlsuggestions_lsp.convert import to_item
 from pysqlsuggestions_lsp.documents import line_starts, statement_at
@@ -142,7 +143,7 @@ class Session:
                 self._catalog = open_catalog(self.profile, connect=self.connect)
             except Exception as error:  # noqa: BLE001
                 log.exception('could not build a catalog; completing from the statement alone')
-                self.degrade(str(error) or error.__class__.__name__)
+                self.degrade(describe(error, self.profile.password if self.profile else None))
             return self._catalog
 
     def degrade(self, why: str) -> None:
@@ -205,7 +206,7 @@ class Session:
                 )
             except Exception as error:  # noqa: BLE001
                 log.exception('the catalog failed; completing from the statement alone')
-                self.degrade(str(error) or error.__class__.__name__)
+                self.degrade(describe(error, self.profile.password if self.profile else None))
                 return None
 
 
@@ -245,9 +246,23 @@ def create_server(connect: Connect | None = None) -> SqlServer:
         introspection query would stop the server answering anything — the
         session's lock is what makes that concurrency safe.
         """
+        # `get_text_document` invents one pointing at disk for a URI the client
+        # never opened, and reading `.source` then raises OSError out of the
+        # handler as a JSON-RPC error — which this module's one rule forbids.
+        # Three ordinary routes reach it: a `didClose` racing a completion
+        # already dispatched to this pool, one Windows path spelled two ways,
+        # and an `untitled:` document, whose URI resolves to a *relative* path
+        # and so reads whatever sits at that name in the server's own directory.
+        # That last one is the reason this returns empty rather than falling back
+        # to `document.source`: answering from an unrelated file is worse than
+        # answering with nothing.
         document = server.workspace.get_text_document(params.text_document.uri)
+        try:
+            text = document.source
+        except OSError:
+            return CompletionList(is_incomplete=False, items=[])
         offset = document.offset_at_position(params.position)
-        return CompletionList(is_incomplete=False, items=server.session.suggest(document.source, offset))
+        return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset))
 
     del initialize, completion
     return server

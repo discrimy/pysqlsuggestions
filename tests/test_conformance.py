@@ -17,6 +17,8 @@ from dataclasses import replace
 import pytest
 
 from pysqlsuggestions.api import complete
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects import registry
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import (
     Clause,
@@ -25,12 +27,14 @@ from pysqlsuggestions.dialects.base import (
     LiteralArgument,
     Namespace,
     Placeholder,
+    Query,
     Syntax,
 )
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.registry import available, named
 from pysqlsuggestions.dialects.trino import TRINO
+from pysqlsuggestions.engine.lex import lex
 from pysqlsuggestions.testing import DialectConformance
 from pysqlsuggestions.types import Kind
 
@@ -298,3 +302,163 @@ def test_the_corpus_asks_a_dialect_about_the_kinds_it_narrows_to() -> None:
         narrowed = [c for c in dialect.clauses.clauses if c.relation_kinds]
         cases = [case for case in DialectConformance.cases(dialect) if 'kinds' in case.name]
         assert bool(cases) == bool(narrowed), dialect.name
+
+
+def test_a_clause_with_a_blank_name_is_reported_rather_than_crashing() -> None:
+    """
+    Reached through documented composition, and worse than inert.
+
+    `_by_first_word` groups clause names by `name.split()[0]`, which raises on a
+    name with no words in it — so a dialect built with `extend(Clause(name=''))`
+    took `complete` down with an IndexError, and took `check` down with the same
+    one before it could report anything. `structure` said nothing at all, and a
+    blank name is exactly the sort of declaration it exists to name.
+    """
+    broken = replace(ANSI, clauses=ANSI.clauses.extend(Clause(name='')))
+    assert any('blank' in problem for problem in DialectConformance.structure(broken))
+    assert complete('SELECT ', 7, broken, MemoryCatalog({('public', 'events'): [('id', 'bigint')]})) is not None
+    assert DialectConformance.check(broken)
+
+
+def test_a_zero_length_placeholder_opener_is_reported_rather_than_hanging() -> None:
+    """
+    `lex` is documented total, and non-termination is worse than raising.
+
+    A placeholder whose `opens` is empty put the scanner's position where it
+    already was, so it appended a zero-width token and never advanced. `check`
+    inherited the hang, because it runs `complete` over its own corpus — the
+    shipped self-test never returning rather than reporting the declaration.
+    """
+    syntax = Syntax(placeholders=(Placeholder(opens='', body='none'),))
+    broken = replace(ANSI, name='broken', syntax=syntax)
+    assert any('empty' in problem for problem in DialectConformance.structure(broken))
+    assert lex('a', syntax) is not None
+
+
+def test_a_catalog_query_wanting_more_values_than_it_gets_is_reported() -> None:
+    """
+    A `$N` typo is the mistake this harness ships to catch and did not.
+
+    `DbapiCatalog` fixes each query's arity — `columns` is given two values, the
+    searches one — so a marker beyond that is a static contradiction of exactly
+    the kind reported here, needing neither a server nor a consistent dialect to
+    see. Left unchecked it surfaced as an IndexError on the first catalog read.
+    """
+    broken = replace(
+        POSTGRES,
+        catalog_queries=replace(
+            POSTGRES.catalog_queries,
+            columns=Query(sql='SELECT 1 WHERE s = $1 AND t = $2 AND x = $3', row=lambda row: row),
+        ),
+    )
+    assert any('$3' in problem for problem in DialectConformance.structure(broken))
+
+
+def test_the_registry_does_not_hand_out_the_dictionary_it_caches() -> None:
+    """
+    One caller's mutation must not become every later caller's registry.
+
+    `available` is cached, so it returned the same dict object every time and a
+    caller editing what looked like its own copy poisoned the lookup
+    process-wide — defeating the `isinstance` guard that is the only thing
+    keeping a non-Dialect out of `named`.
+    """
+    first = available()
+    first['postgres'] = 'not a dialect at all'  # type: ignore[assignment]
+    assert named('postgres') is POSTGRES
+    assert available()['postgres'] is POSTGRES
+
+
+class _FakeDistribution:
+    """Just the attribute the registry reads off a real one."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeEntry:
+    """An entry point, as `importlib.metadata` hands them over."""
+
+    def __init__(self, name: str, dialect: Dialect, distribution: str) -> None:
+        self.name = name
+        self.dist = _FakeDistribution(distribution)
+        self._dialect = dialect
+
+    def load(self) -> Dialect:
+        """The registered object."""
+        return self._dialect
+
+
+def test_a_plugin_overriding_a_built_in_dialect_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Overriding stays possible — a fork, or a fix ahead of a release — but audibly.
+
+    The four built-ins register through the same entry-point group as anyone
+    else, so they carry no privilege and the winner was whichever distribution
+    `importlib.metadata` enumerated last. That is not a documented order. It
+    matters because `lsp/connections.py` resolves the dialect by name and hands
+    it to `DbapiCatalog`, so the winner's introspection SQL is what reaches the
+    user's database.
+    """
+    shadow = replace(POSTGRES, name='shadow-of-postgres')
+    entries = [
+        _FakeEntry('postgres', POSTGRES, 'pysqlsuggestions'),
+        _FakeEntry('postgres', shadow, 'somebody-elses-package'),
+    ]
+    monkeypatch.setattr(registry, 'entry_points', lambda group: entries)
+    registry._scan.cache_clear()
+    try:
+        with pytest.warns(UserWarning, match='somebody-elses-package'):
+            found = registry.named('postgres')
+        assert found is shadow, 'the plugin still wins; only the silence is fixed'
+    finally:
+        registry._scan.cache_clear()
+
+
+def test_two_plugins_claiming_one_name_also_say_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same collision without a built-in involved, which was equally silent."""
+    first = replace(POSTGRES, name='first')
+    second = replace(POSTGRES, name='second')
+    entries = [_FakeEntry('duckdb', first, 'pkg-a'), _FakeEntry('duckdb', second, 'pkg-b')]
+    monkeypatch.setattr(registry, 'entry_points', lambda group: entries)
+    registry._scan.cache_clear()
+    try:
+        with pytest.warns(UserWarning, match='pkg-b'):
+            assert registry.named('duckdb') is second
+    finally:
+        registry._scan.cache_clear()
+
+
+def test_conformance_reads_markers_the_way_render_does() -> None:
+    """
+    A `$N` inside a literal is text to `render` and was a parameter to the check.
+
+    Trino spells regexp backreferences `$1`, `$2` inside the replacement string,
+    so a perfectly good `schemas` query was reported as binding more values than
+    it is given. The arity check has to count what `render` counts, or it rejects
+    dialects that work.
+    """
+    sql = "SELECT regexp_replace(s, '(.*)_(.*)', '$2_$1') AS name FROM system.jdbc.schemas WHERE table_catalog = $1"
+    dialect = replace(
+        TRINO,
+        catalog_queries=replace(TRINO.catalog_queries, schemas=Query(sql=sql, row=lambda row: str(row[0]))),
+    )
+    assert DialectConformance.structure(dialect) == []
+
+
+def test_conformance_names_a_zero_marker() -> None:
+    """
+    The one `$N` the arity test cannot see, and the one `render` refuses outright.
+
+    `max(marker) <= arity` holds for `$0`, so a dialect carrying one passed every
+    check and then raised on its first catalog read — which is the mistake this
+    harness exists to catch rather than to forward.
+    """
+    dialect = replace(
+        POSTGRES,
+        catalog_queries=replace(
+            POSTGRES.catalog_queries,
+            schemas=Query(sql='SELECT nspname FROM pg_namespace WHERE $0 = $0', row=lambda row: str(row[0])),
+        ),
+    )
+    assert any('$0' in problem for problem in DialectConformance.structure(dialect))

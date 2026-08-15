@@ -14,6 +14,7 @@ consults the dialect's vocabulary. That keeps this module dependent on dialect
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -70,6 +71,23 @@ def _is_ident_char(ch: str) -> bool:
     # `café` typed on macOS arrives as `cafe` plus U+0301, and splitting there
     # loses the half of the name the user has typed.
     return ch.isalnum() or ch in '_$' or unicodedata.combining(ch) != 0
+
+
+def reads_as_one_identifier(text: str) -> bool:
+    """
+    Whether this scanner would read `text`, written bare, back as a single name.
+
+    The other half of the quoting decision, and the half that was missing.
+    `Syntax` says what the *server* accepts unquoted; this says what the engine
+    can parse back. Postgres accepts far more than is read here — its scanner is
+    byte-based, so nearly everything above ASCII goes bare — and a name left
+    unquoted on the server's authority alone came back as two identifiers, after
+    which every completion in that statement worked from the wrong prefix.
+
+    Exposed rather than duplicated in `rank`, because a second copy of these
+    predicates is a second thing to keep in step with the scan below.
+    """
+    return bool(text) and _is_ident_start(text[0]) and all(_is_ident_char(ch) for ch in text[1:])
 
 
 def _fold(value: str, syntax: Syntax) -> str:
@@ -201,6 +219,19 @@ def _scan_body(src: str, pos: int, body: str) -> int:
     return i
 
 
+def _placeholder_openers(syntax: Syntax) -> tuple[Placeholder, ...]:
+    """
+    The declared placeholders that can actually begin one.
+
+    An empty `opens` matches at every position and consumes nothing, so the
+    scanner emitted a zero-width token and left `pos` where it was — a total
+    function that never returns, which is worse than one that raises. Dropped
+    here rather than guarded at the call site because a placeholder that opens
+    with nothing is not a placeholder; `DialectConformance.structure` reports it.
+    """
+    return tuple(placeholder for placeholder in syntax.placeholders if placeholder.opens)
+
+
 def _scan_placeholder(src: str, pos: int, syntax: Syntax) -> tuple[int, bool] | None:
     """
     Scan a bound parameter at `pos`. Returns (end, terminated), or None for no match.
@@ -215,7 +246,7 @@ def _scan_placeholder(src: str, pos: int, syntax: Syntax) -> tuple[int, bool] | 
     the difference between `= ?<caret>`, which wants a connective, and
     `= :us<caret>`, which wants nothing at all.
     """
-    for placeholder in sorted(syntax.placeholders, key=_opener_length, reverse=True):
+    for placeholder in sorted(_placeholder_openers(syntax), key=_opener_length, reverse=True):
         if not src.startswith(placeholder.opens, pos):
             continue
         start = pos + len(placeholder.opens)
@@ -235,6 +266,40 @@ def _scan_placeholder(src: str, pos: int, syntax: Syntax) -> tuple[int, bool] | 
 def _opener_length(placeholder: Placeholder) -> int:
     """How long this spelling's opener is. Sort key, named so the sort reads as one."""
     return len(placeholder.opens)
+
+
+class Tokens(tuple):  # type: ignore[type-arg]
+    """
+    A scanned statement, carrying room for what gets derived from it.
+
+    A tuple, so every existing caller is unaffected — and a subclass of one, so
+    it can hold a memo. The analysis above `lex` asks the same question of the
+    same tokens over and over: the scope walk descends a level at a time and each
+    level rescans ranges the level above already scanned, which for a query of
+    nested derived tables meant 235,245 clause lookups answering 324 distinct
+    questions.
+
+    The memo lives here rather than in a module-level cache because that is what
+    makes its lifetime right. A token stream is derived from one text and is
+    immutable, so an entry can never go stale; a new keystroke produces new
+    tokens and, with them, an empty memo. Nothing has to decide when to clear it,
+    nothing is shared between threads, and a slice — which is an ordinary tuple —
+    simply has none.
+    """
+
+    memo: dict[object, object]
+    """
+    Answers already derived from these tokens.
+
+    No `__slots__`: a tuple subclass cannot have a non-empty one, so the instance
+    carries a `__dict__` — one per scan, which is the granularity this is for.
+    """
+
+    def __new__(cls, tokens: Iterable[Token]) -> Tokens:
+        """A token stream with an empty memo."""
+        found = super().__new__(cls, tokens)
+        found.memo = {}
+        return found
 
 
 def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
@@ -350,4 +415,4 @@ def lex(src: str, syntax: Syntax) -> tuple[Token, ...]:
         tokens.append(Token(TokenType.UNKNOWN, pos, pos + 1, ch, ch, depth=depth))
         pos += 1
 
-    return tuple(tokens)
+    return Tokens(tokens)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 
 from pysqlsuggestions.api import complete, derive_request
@@ -11,7 +13,7 @@ from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
-from pysqlsuggestions.types import Kind
+from pysqlsuggestions.types import Column, Function, Kind, Table
 from tests.corpus.cases import split_caret
 
 SNAPSHOT = {
@@ -560,3 +562,209 @@ def test_a_table_of_unknown_size_says_nothing_about_it() -> None:
     """A backend that cannot estimate must not be made to look like it did."""
     found = {s.text: s.detail for s in complete('SELECT * FROM reports_rep', 25, POSTGRES, catalog())}
     assert found['reports_report'] == 'public.reports_report (table)'
+
+
+def test_an_empty_qualifier_does_not_evict_the_relation_list() -> None:
+    """
+    `tables` and `columns` shared a cache key when the table name was empty.
+
+    Every reader sharing the four-tuple key shape carries a NUL sentinel in
+    its last slot to keep it clear of a column read — except `tables`, which
+    used the bare empty string, so `tables(None)` and `columns(None, '')` were
+    one key. `SELECT "".⌶` is a quoted empty identifier and reaches the second,
+    which meant one such caret either crashed the next relation read or silently
+    emptied it for as long as the cache lived.
+    """
+    cache: dict[tuple[object, ...], object] = {}
+    warm = catalog()
+    complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')
+    complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
+    after = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')]
+    cold = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, catalog(), identity='analyst')]
+    assert after == cold
+
+
+def test_an_empty_namespace_does_not_empty_the_relation_list() -> None:
+    """
+    The other order, and the other half of the same conflation.
+
+    `_key` folded None and the empty string together with `schema or ''`, so
+    `tables(None)` — every relation the search path reaches — shared a key with
+    `tables('')` — the relations in a schema actually named '', which is none at
+    all. `SELECT "".` reads the quoted empty identifier as a namespace, so one
+    such caret cached the empty answer over the real one, silently, for as long
+    as the cache lived. A sentinel on `tables` does not help: both calls are
+    `tables`, and it is the argument that was lost.
+    """
+    cache: dict[tuple[object, ...], object] = {}
+    warm = catalog()
+    complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
+    after = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')]
+    cold = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, catalog(), identity='analyst')]
+    assert after == cold
+
+
+def test_a_bare_reserved_word_is_not_an_output_column() -> None:
+    """
+    `SELECT NULL` names no column; Postgres calls the result `?column?`.
+
+    `_output_of` took any single-token identifier as an output name, where its
+    two neighbouring branches both guard with `reserved_upper` first. So `null`
+    became a select-list name — then `rank` quoted it, *because* it is reserved,
+    and the local-origin bonus put `"null"` above every real column. In a CTE it
+    was the only suggestion offered, and `SELECT c."null"` is an error.
+    """
+    snapshot = MemoryCatalog({('public', 't'): [('id', 'int'), ('name', 'text')]})
+    for word in ('NULL', 'TRUE', 'FALSE', 'CURRENT_USER'):
+        sql = f'SELECT {word} FROM t GROUP BY '
+        assert '"' not in ' '.join(s.text for s in complete(sql, len(sql), POSTGRES, snapshot)), word
+
+    cte = 'WITH c AS (SELECT NULL FROM t) SELECT  FROM c'
+    assert [s.text for s in complete(cte, cte.index('SELECT  FROM c') + 7, POSTGRES, snapshot)] == []
+
+
+def test_a_negative_limit_offers_nothing_rather_than_slicing_from_the_end() -> None:
+    """
+    A negative limit reached `ordered[:limit]` and dropped the *last* N.
+
+    Nothing documents a negative limit, and the two layers disagreed about what
+    had happened: `complete` forwards `limit * 5` to `resolve`, which ignores it.
+    Zero already answers with nothing, so that is the boundary to meet.
+    """
+    snapshot = MemoryCatalog({('public', 'w'): [(f'col{index}', 'int') for index in range(12)]})
+    for limit in (0, -1, -3, -100):
+        assert complete('SELECT  FROM w', 7, POSTGRES, snapshot, limit=limit) == []
+
+
+class _InventsEverything:
+    """
+    A catalog whose extras exist only because `__getattr__` answers for them.
+
+    A lazy wrapper looks like this, and so does any `MagicMock` standing in for a
+    catalog in a downstream test suite.
+    """
+
+    def schemas(self, catalog: str | None = None) -> Sequence[str]:
+        """No namespaces."""
+        del catalog
+        return []
+
+    def tables(self, schema: str | None = None) -> Sequence[Table]:
+        """No relations."""
+        del schema
+        return []
+
+    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
+        """No columns."""
+        del schema, table
+        return []
+
+    def functions(self, schema: str | None = None) -> Sequence[Function]:
+        """No functions."""
+        del schema
+        return []
+
+    def __getattr__(self, name: str) -> object:
+        """Anything else, as something that is not what the port promises."""
+        del name
+        return lambda *args, **kwargs: object()
+
+
+def test_a_capability_that_only_answers_to_its_name_is_not_one() -> None:
+    """
+    `isinstance` against a runtime-checkable Protocol changed meaning in 3.12.
+
+    Before it the check is `hasattr`, which the class above satisfies for every
+    name asked of it, so the engine claimed each capability and then failed on
+    the first call with `TypeError: object is not iterable`. From 3.12 the check
+    uses `inspect.getattr_static` and the same adapter degrades. Both are
+    supported — `requires-python` is `>=3.10` and CI runs three — so the engine
+    asks the static question itself and answers the same on all of them.
+
+    This regression guards 3.10 and 3.11 specifically: on 3.12 the interpreter
+    already refuses the proxy, so the assertion holds there with or without the
+    fix. Kept because those are the versions the project ships for.
+    """
+    catalog = _InventsEverything()
+    for sql, caret in (('SELECT sta', 10), ("SELECT * FROM t WHERE s = 'a", 28), ('SELECT * FROM t JOIN ', 21)):
+        assert complete(sql, caret, POSTGRES, catalog) is not None, sql
+
+
+def test_a_qualifier_naming_a_relation_out_of_scope_offers_nothing() -> None:
+    """
+    Measured on Postgres: `SELECT auth_user.id FROM auth_group` is `missing
+    FROM-clause entry for table "auth_user"`, and so is the shape `resolve.py`
+    cited to justify offering these — `WITH a AS (...) SELECT * FROM a WHERE
+    auth_user.<caret>`. A relation the catalog knows is not thereby a relation
+    this statement may reference.
+
+    The unqualified path already answers this way: `SELECT ema<caret> FROM
+    orders` offers nothing from a relation the query does not name, while with
+    no FROM at all it offers the column *and* the clause to go with it. The
+    qualified path disagreed with it, and with all three servers.
+    """
+    for sql, marker in (
+        ('SELECT auth_user. FROM reports_report', 'auth_user.'),
+        ('SELECT * FROM reports_report WHERE auth_user.', 'auth_user.'),
+        ('WITH a AS (SELECT 1 AS x) SELECT * FROM a WHERE auth_user.', 'WHERE auth_user.'),
+    ):
+        caret = sql.index(marker) + len(marker)
+        assert complete(sql, caret, POSTGRES, catalog()) == [], sql
+
+
+def test_a_qualifier_still_reaches_a_relation_the_statement_does_name() -> None:
+    """The readings that were always right, and must survive the narrowing."""
+    cases = {
+        'SELECT auth_user. FROM auth_user': 'auth_user.',
+        'SELECT u. FROM auth_user u': 'u.',
+        'SELECT * FROM public.': 'public.',
+        'SELECT public.auth_user. FROM auth_user': 'public.auth_user.',
+    }
+    for sql, marker in cases.items():
+        caret = sql.index(marker) + len(marker)
+        assert complete(sql, caret, POSTGRES, catalog()), sql
+
+
+def test_a_qualifier_before_any_from_still_names_its_relation() -> None:
+    """
+    With nothing in scope the author has not written the FROM yet, so the
+    qualifier is a reasonable guess at what they are about to name rather than a
+    reference to something absent.
+    """
+    sql = 'SELECT auth_user.'
+    assert [s.text for s in complete(sql, len(sql), POSTGRES, catalog(), limit=3)]
+
+
+def test_a_search_capability_is_checked_on_the_method_it_calls() -> None:
+    """
+    `SupportsColumnSearch` names two methods, and the guard checked the wrong one.
+
+    `all_columns` returns None by design for every DB-API catalog — that is how it
+    says "too many to enumerate" — so `search_columns` is what actually answers,
+    and it was the one not verified. An adapter declaring `all_columns` while
+    inventing `search_columns` through `__getattr__` therefore passed the guard on
+    3.10 and returned None where a sequence was promised.
+    """
+
+    class DeclaresOneInventsTheOther(_InventsEverything):
+        def all_columns(self) -> None:
+            """Too many to enumerate, which is what None means here."""
+            return
+
+    assert complete('SELECT sta', 10, POSTGRES, DeclaresOneInventsTheOther()) is not None
+
+
+def test_a_multi_part_qualifier_reaches_its_relation_on_a_three_level_namespace() -> None:
+    """
+    Trino has three namespace levels, so `schema.table.` is not "deep enough" for
+    the branch that answers a fully qualified column, and fell through to the
+    catalog fallback — which the out-of-scope gate then closed. The statement
+    names the relation; `public.auth_user.id` is exactly what Trino accepts.
+    """
+    for sql in (
+        'SELECT public.auth_user. FROM public.auth_user',
+        'SELECT * FROM public.auth_user WHERE public.auth_user.',
+    ):
+        caret = sql.index('public.auth_user.') + len('public.auth_user.')
+        assert complete(sql, caret, TRINO, catalog()), sql
+        assert complete(sql, caret, POSTGRES, catalog()), sql

@@ -17,6 +17,7 @@ from collections.abc import Iterable, Sequence
 from functools import cache
 
 from pysqlsuggestions.dialects.base import Dialect, Syntax
+from pysqlsuggestions.engine.lex import reads_as_one_identifier
 from pysqlsuggestions.types import Availability, Candidate, Kind, Request, Suggestion
 
 _EXACT_PREFIX = 100.0
@@ -144,7 +145,12 @@ def rank(
         seen.add(key)
         ordered.append(suggestion)
 
-    return ordered[:limit] if limit is not None else ordered
+    # Clamped, because a negative limit is a Python slice from the *end* — it
+    # quietly dropped the last N suggestions instead of the first N, and
+    # `api.complete` forwards `limit * 5` to `resolve`, which ignores a negative
+    # value entirely, so the two layers disagreed about what had happened. Zero
+    # already answers with nothing, which is the boundary this meets.
+    return ordered[: max(limit, 0)] if limit is not None else ordered
 
 
 def expand_snippet(snippet: str) -> tuple[str, tuple[int, ...]]:
@@ -310,6 +316,14 @@ def _needs_quoting(name: str, dialect: Dialect) -> bool:
     if not name:
         return True
     if name.lower() in dialect.reserved:
+        return True
+    # Two different questions, and only the first was being asked. `Syntax`
+    # describes what the *server* reads bare; this asks whether the engine can
+    # read its own output back. Postgres's scanner is byte-based, so
+    # `unquoted_non_ascii` let through the whole basic plane — spaces,
+    # punctuation, format characters, private use — and a column named with a
+    # non-breaking space was inserted bare and re-read as two identifiers.
+    if not reads_as_one_identifier(name):
         return True
     case = dialect.syntax.unquoted_case
     plain = _plain_identifier(dialect.syntax, first_case='lower' if case == 'lower' else 'any')

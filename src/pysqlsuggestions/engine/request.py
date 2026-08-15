@@ -26,6 +26,7 @@ from pysqlsuggestions.engine.analyse import (
     depth_at,
     in_literal,
     in_placeholder,
+    in_set_operation_tail,
     inside_a_cast_awaiting_as,
     literal_argument_call,
     opens_a_name_list,
@@ -128,6 +129,17 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         + _values_first(comparand, expecting, qualifier)
         + _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
     )
+    if in_set_operation_tail(tokens, lo, hi, caret, dialect):
+        # Names only. Which *column* resolves against a set operation's result is
+        # what the three backends disagree about — Postgres and Trino bind the
+        # tail to the result, ClickHouse to the last branch, and it then does not
+        # sort the union at all — so no name offered here is right everywhere.
+        # The clause's own vocabulary is not in that argument: `DESC`, `NULLS
+        # LAST` and the six words finishing `FETCH FIRST n ROWS ONLY` carry no
+        # reference, and all three servers take them. Suppressing those too left
+        # the engine unable to complete a clause it had just suggested.
+        kinds = tuple(kind for kind in kinds if kind is Kind.KEYWORD)
+
     if clause is None and not continues and statement_has_begun(tokens, lo, hi, caret):
         # No clause matched and yet the statement has begun: this is a form the
         # engine does not model, and the empty-editor answer would propose the
@@ -185,9 +197,9 @@ def _inside_a_literal(
     written = string_under(tokens, caret)
     if written is None:
         return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
-    quote = written.text[0]
-    typed = written.text[1 : caret - written.start]
-    prefix = typed.replace(quote * 2, quote)
+    opens, quote = _literal_opening(written)
+    typed = written.text[opens : caret - written.start]
+    prefix = typed.replace(quote * 2, quote) if quote else typed
     span = (written.start, written.end if written.terminated else caret)
 
     named = _literal_argument_kinds(tokens, caret, dialect)
@@ -264,6 +276,29 @@ def _defining_a_column(
                 continues=unspent,
             )
     return Request(kinds=(), prefix=prefix, replace_span=span, clause=clause, scope=scope)
+
+
+def _literal_opening(token: Token) -> tuple[int, str]:
+    """
+    Where a literal's body starts inside its token, and the character it doubles.
+
+    `text[0]` is the quote for only two of the four spellings this lexer emits.
+    A Postgres escape string is `E'...'`, whose quote is one character in, so
+    slicing from index one kept the quote in the prefix: `E'an` derived `'an`,
+    which survived on the substring tier alone and silently dropped every
+    candidate not containing a quote. A dollar-quoted body opens with `$$` or
+    `$tag$` and has no doubling rule at all — `$$clic` derived `$clic`, which
+    matches nothing, so the position went quiet rather than merely thinning out.
+
+    The empty quote says "nothing is doubled here", which is the truthful answer
+    for dollar quoting rather than a stand-in for one.
+    """
+    text = token.text
+    if text.startswith('$'):
+        close = text.find('$', 1)
+        return (close + 1, '') if close != -1 else (1, '')
+    quote = text.find("'")
+    return (quote + 1, "'") if quote != -1 else (1, text[:1])
 
 
 def _literal_argument_kinds(tokens: Sequence[Token], caret: int, dialect: Dialect) -> tuple[Kind, ...]:

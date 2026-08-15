@@ -26,8 +26,17 @@ which is what makes `-- note ⌶` suppress suggestions.
 
 `engine/analyse.py` is four pure functions over the token stream:
 
-- `statement_at` isolates the statement containing the caret, splitting on
-  depth-0 semicolons so a `;` inside a string or parens does not divide.
+- `statement_at` isolates the statement containing the caret, splitting on every
+  semicolon *token*. A `;` inside a string, a comment, a quoted identifier or a
+  dollar-quoted function body never reaches it as punctuation, because the lexer
+  swallowed it — which is the whole of what "a semicolon inside a literal does
+  not divide" means, and it costs no rule here to get.
+
+  It used to also require depth 0, which read as the same guarantee for
+  parentheses and was not one: no dialect here admits a bare `;` between parens,
+  so a semicolon token at depth greater than zero is always a paren the author
+  has not closed yet. Declining to split there merged the two statements and put
+  the earlier one's relations into the later one's scope.
 - `qualifier_and_prefix` reads the dotted path and half-typed word to its left,
   tolerating whitespace around the dots. `replace_span` always ends at the
   caret, so accepting a suggestion replaces what was typed and nothing more.

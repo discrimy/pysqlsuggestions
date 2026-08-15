@@ -31,7 +31,7 @@ from lsprotocol.types import (
 from pysqlsuggestions import plan_insertion
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.types import Availability, Edit, Kind, Suggestion
-from pysqlsuggestions_lsp.documents import to_position
+from pysqlsuggestions_lsp.documents import Lines, to_position
 
 ITEM_KINDS: dict[Kind, CompletionItemKind] = {
     Kind.COLUMN: CompletionItemKind.Field,
@@ -78,10 +78,10 @@ def match_term(suggestion: Suggestion) -> str:
     return suggestion.text.rsplit('.', 1)[-1]
 
 
-def _range(base: int, starts: Sequence[int], span: tuple[int, int]) -> Range:
+def _range(base: int, lines: Lines, span: tuple[int, int]) -> Range:
     """A span within the statement, as a range within the document."""
-    start_line, start_character = to_position(starts, base + span[0])
-    end_line, end_character = to_position(starts, base + span[1])
+    start_line, start_character = to_position(lines, base + span[0])
+    end_line, end_character = to_position(lines, base + span[1])
     return Range(
         start=Position(line=start_line, character=start_character),
         end=Position(line=end_line, character=end_character),
@@ -126,15 +126,22 @@ def _split_edits(edits: Sequence[Edit], span: tuple[int, int]) -> tuple[Edit, li
     suggestion's own span may be the item's `text_edit` — a client applies that
     one at the caret and the rest wherever they say. `plan_insertion` orders them
     latest-first, so the caret's edit is not reliably either end of the tuple.
+
+    Searched from the back because the span does not always settle it. At
+    `SELECT ⌶` the select list ends exactly at the caret, so the column and its
+    FROM clause both start there and matching from the front took the clause —
+    putting it in `text_edit` and demoting the column to an additional edit at
+    the identical range, which the specification leaves undefined. Latest-first
+    ordering means the caret's edit is the *last* of any that tie.
     """
-    primary = next((edit for edit in edits if edit.span[0] == span[0]), edits[0])
+    primary = next((edit for edit in reversed(edits) if edit.span[0] == span[0]), edits[0])
     return primary, [edit for edit in edits if edit is not primary]
 
 
 def to_item(
     statement: str,
     base: int,
-    starts: Sequence[int],
+    lines: Lines,
     suggestion: Suggestion,
     index: int,
     dialect: Dialect,
@@ -166,7 +173,7 @@ def to_item(
         tags=[CompletionItemTag.Deprecated] if suggestion.availability is Availability.RESTRICTED else None,
         sort_text=f'{index:04d}',
         filter_text=match_term(suggestion),
-        text_edit=TextEdit(range=_range(base, starts, primary.span), new_text=text),
-        additional_text_edits=[TextEdit(range=_range(base, starts, edit.span), new_text=edit.text) for edit in extra],
+        text_edit=TextEdit(range=_range(base, lines, primary.span), new_text=text),
+        additional_text_edits=[TextEdit(range=_range(base, lines, edit.span), new_text=edit.text) for edit in extra],
         insert_text_format=InsertTextFormat.Snippet if suggestion.stops else InsertTextFormat.PlainText,
     )

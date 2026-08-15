@@ -13,6 +13,7 @@ implements what its backend actually supports.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from inspect import getattr_static
 from typing import Any, TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
@@ -45,6 +46,17 @@ from pysqlsuggestions.types import (
 _DEFAULT_SEARCH_LIMIT = 200
 _MAX_VALUES = 30
 """How many frequent values are worth offering. `pg_stats` keeps up to a hundred."""
+
+_MAX_STAR_DEPTH = 64
+"""
+How many stars the projection walk will follow through to their sources.
+
+`analyse._MAX_NESTING` is the same number for the same reason, and deliberately
+not imported: `engine/` may not import this module, and a shared constant would
+have to live in one of them. They bound different walks — that one descends the
+scope chain, this one follows `Projection.stars` from a CTE to whatever it
+selected from — and a chain of CTEs is flat to the first and deep to the second.
+"""
 
 _SEQUENCE = 'sequence'
 """
@@ -177,6 +189,36 @@ def _edges(scope: Scope | None, reader: _Reader) -> Sequence[ForeignKey]:
     return list(found.values())
 
 
+def _declared(catalog: object, method: str) -> bool:
+    """
+    Whether `catalog` really implements `protocol`, rather than merely answering to it.
+
+    `isinstance` against a runtime-checkable Protocol asks a different question on
+    either side of Python 3.12. Before it, the check is `hasattr`, which a
+    `__getattr__` proxy satisfies for every name it is ever asked about — so a
+    lazy wrapper, or any `MagicMock` in a downstream test suite, claimed every
+    capability here and then failed on the first call with `TypeError: 'object'
+    object is not iterable`. From 3.12 the check uses `inspect.getattr_static`
+    and the same adapter degrades cleanly.
+
+    Both are supported: `requires-python` is `>=3.10` and CI runs three. So the
+    static half is asked here as well, which makes the answer the same on all of
+    them — and makes it the honest one, since a capability that exists only when
+    something asks for it is not a capability this can call.
+
+    Presence, not callability. `getattr_static` finds a plain method, a
+    `classmethod`, a `staticmethod`, an inherited one and one assigned in
+    `__init__`, on 3.10 and 3.12 alike; it declines only the invented kind.
+    Testing that the result is callable would reject `classmethod`, whose
+    descriptor is not, and that is a shape an adapter is entitled to use.
+    """
+    try:
+        getattr_static(catalog, method)
+    except AttributeError:
+        return False
+    return True
+
+
 class _Reader:
     """Catalog access with caching and capability detection in one place."""
 
@@ -195,8 +237,18 @@ class _Reader:
         and with no cache supplied that would be two round trips for one answer.
         """
 
-    def _key(self, *parts: str) -> tuple[str | None, ...]:
-        """The documented cache key: (role, dialect, schema, table)."""
+    def _key(self, *parts: str | None) -> tuple[str | None, ...]:
+        """
+        The documented cache key: (role, dialect, schema, table).
+
+        `None` is carried through rather than folded to `''`, because to every
+        one of these readers the two mean different things: `None` is "wherever
+        the search path reaches" and `''` is a namespace actually named that.
+        `SELECT "".` reads a quoted empty identifier as a namespace, so the two
+        calls really do both happen — and while `tables('')` correctly answers
+        with nothing, writing that nothing under `tables(None)`'s key silently
+        emptied the relation list for as long as the cache lived.
+        """
         return (self._identity, self._dialect.name, *parts)
 
     def _read(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
@@ -221,15 +273,26 @@ class _Reader:
 
     def schemas(self, catalog: str | None = None) -> Sequence[str]:
         """Namespace names one level below `catalog`."""
-        return self._read(self._key(catalog or '', '\x00schemas'), lambda: self._catalog.schemas(catalog))
+        return self._read(self._key(catalog, '\x00schemas'), lambda: self._catalog.schemas(catalog))
 
     def tables(self, schema: str | None) -> Sequence[Table]:
-        """Relations in `schema`, or the default namespace."""
-        return self._read(self._key(schema or '', ''), lambda: self._catalog.tables(schema))
+        """
+        Relations in `schema`, or the default namespace.
+
+        The sentinel is what keeps this clear of `columns`, and it is not
+        decoration: a relation named `''` is reachable from ordinary text.
+        `SELECT "".⌶` is a quoted empty identifier, so `columns(None, '')` used
+        to compute the very key the relation list occupies — which either handed
+        a `Table` to the column renderer or, in the other order, cached an empty
+        column list as the answer to "what relations are there". The second is
+        silent, and `lsp/` holds one cache per session, so a single such caret
+        emptied the relation list for the rest of it.
+        """
+        return self._read(self._key(schema, '\x00tables'), lambda: self._catalog.tables(schema))
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
-        return self._read(self._key(schema or '', table), lambda: self._catalog.columns(schema, table))
+        return self._read(self._key(schema, table), lambda: self._catalog.columns(schema, table))
 
     def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
         """
@@ -244,7 +307,7 @@ class _Reader:
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
         """Functions in `schema`, or everywhere."""
-        return self._read(self._key(schema or '', '\x00functions'), lambda: self._catalog.functions(schema))
+        return self._read(self._key(schema, '\x00functions'), lambda: self._catalog.functions(schema))
 
     def loose_columns(self, prefix: str, limit: int) -> Sequence[Column]:
         """
@@ -253,7 +316,13 @@ class _Reader:
         Degrades to nothing when the catalog cannot answer, which is the
         documented behaviour when SupportsColumnSearch is absent.
         """
+        # Both methods, because `all_columns` returning None is how a DB-API
+        # catalog says "too many to enumerate" — so `search_columns` is what
+        # actually answers, and checking only the other one let an adapter that
+        # invents it through `__getattr__` past the guard on 3.10.
         if not isinstance(self._catalog, SupportsColumnSearch):
+            return ()
+        if not _declared(self._catalog, 'all_columns') or not _declared(self._catalog, 'search_columns'):
             return ()
         everything = self._catalog.all_columns()
         if everything is not None:
@@ -270,6 +339,8 @@ class _Reader:
         """
         if not prefix or not isinstance(self._catalog, SupportsRelationSearch):
             return ()
+        if not _declared(self._catalog, 'search_relations'):
+            return ()
         return self._catalog.search_relations(prefix, limit)
 
     def common_values(self, schema: str | None, table: str, column: str) -> Sequence[ColumnValue]:
@@ -282,9 +353,9 @@ class _Reader:
         runs, not between keystrokes.
         """
         catalog = self._catalog
-        if not isinstance(catalog, SupportsColumnValues):
+        if not isinstance(catalog, SupportsColumnValues) or not _declared(catalog, 'common_values'):
             return ()
-        key = self._key(schema or '', table, f'\x00values:{column}')
+        key = self._key(schema, table, f'\x00values:{column}')
         return self._read(key, lambda: catalog.common_values(schema, table, column, _MAX_VALUES))
 
     def foreign_keys(self, schema: str | None) -> Sequence[ForeignKey]:
@@ -296,15 +367,35 @@ class _Reader:
         constraints change when someone runs DDL, not between keystrokes.
         """
         catalog = self._catalog
-        if not isinstance(catalog, SupportsForeignKeys):
+        if not isinstance(catalog, SupportsForeignKeys) or not _declared(catalog, 'foreign_keys'):
             return ()
-        return self._read(self._key(schema or '', '\x00fk'), lambda: catalog.foreign_keys(schema))
+        return self._read(self._key(schema, '\x00fk'), lambda: catalog.foreign_keys(schema))
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords when available, otherwise the dialect's shipped set."""
-        if isinstance(self._catalog, SupportsKeywords):
+        if isinstance(self._catalog, SupportsKeywords) and _declared(self._catalog, 'keywords'):
             return self._catalog.keywords()
         return [(word, '') for word in sorted(self._dialect.keywords)]
+
+
+def _names_a_relation(scope: Scope | None, qualifier: tuple[str, ...]) -> bool:
+    """
+    Whether the statement says what it reads from, without naming `qualifier`.
+
+    False when the qualifier is one of the relations already in scope, even
+    though it did not resolve through `_find_relation` — which matches only the
+    first segment against a label, so a multi-part `schema.table.` never reaches
+    it. On a three-level namespace that is not the deepest reading either, so
+    Trino's `SELECT public.auth_user.<caret> FROM public.auth_user` fell through
+    to the catalog fallback and this gate then closed it — a reference Trino
+    accepts, answering nothing.
+    """
+    if scope is None:
+        return False
+    visible = list(scope.visible())
+    if qualifier and any(relation.label == qualifier[-1] for relation in visible):
+        return False
+    return bool(visible)
 
 
 def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
@@ -348,10 +439,22 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         return [_column_candidate(column) for column in reader.columns(schema, table)]
 
     candidates: list[Candidate] = []
-    if Kind.COLUMN in request.kinds:
-        # A name that is not in scope may still be a relation the catalog knows:
-        # `WITH a AS (...) SELECT * FROM a WHERE auth_user.<caret>` reads as the
-        # table. Nothing comes back when it is only a schema name.
+    if Kind.COLUMN in request.kinds and not _names_a_relation(scope, request.qualifier):
+        # A name that is not in scope may still be the relation the author is
+        # about to write, so long as the statement names none yet: `SELECT
+        # auth_user.<caret>` has no FROM and the qualifier is a fair guess at
+        # what it will be. Nothing comes back when it is only a schema name.
+        #
+        # Once the statement *does* name relations, a qualifier that is not among
+        # them cannot resolve on any backend here — Postgres answers `missing
+        # FROM-clause entry for table "auth_user"` — so offering that table's
+        # columns is offering a reference the server will refuse. This used to
+        # cite `WITH a AS (...) SELECT * FROM a WHERE auth_user.<caret>` as the
+        # case it served; that statement is refused too, which is what settled it.
+        #
+        # The unqualified path has always answered this way, which is the other
+        # half of the argument: `SELECT ema<caret> FROM orders` offers nothing
+        # from a relation the query does not name.
         candidates += [_column_candidate(column) for column in reader.columns(None, request.qualifier[-1])]
     if Kind.TABLE in request.kinds:
         candidates += [
@@ -879,6 +982,12 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
                 position=index,
                 origin='catalog',
                 literal=True,
+                # Matched against the value as it reads, not as it is written.
+                # The prefix arrives un-doubled — `'o''b` is read back as `o'b` —
+                # while `text` is the doubled, quoted form it will be inserted
+                # as, so comparing the two dropped the suggestion the engine had
+                # just offered the moment its quote was typed.
+                match_text=value.text,
             )
             for index, value in enumerate(values)
         ]
@@ -951,6 +1060,7 @@ def _columns_of(
     seen: set[tuple[str, ...]],
     label: str | None = None,
     qualify: tuple[str, ...] = (),
+    remaining: int = _MAX_STAR_DEPTH,
 ) -> list[Candidate]:
     """
     The columns a relation offers.
@@ -968,8 +1078,15 @@ def _columns_of(
     columns of `WITH a AS (SELECT * FROM auth_user)` describe as `a.email`, not
     `auth_user.email`, because `a` is what that relation is.
     """
+    # `seen` stops a relation referring to *itself*; it does nothing for a chain
+    # of distinct relations, and a WITH is a list of siblings rather than nested
+    # scopes, so `analyse`'s `_MAX_NESTING` never reaches this walk either. 495
+    # links of `aN AS (SELECT * FROM aN-1)` was enough to raise, with no catalog
+    # involved at all. Truncating loses the tail of an absurd chain; raising
+    # loses the whole request, and `lsp/` re-enters this same path in the
+    # fallback it uses after a failure.
     key = (relation.label, *relation.path)
-    if key in seen:
+    if key in seen or remaining <= 0:
         return []
     seen.add(key)
     shown = label or relation.declared_name
@@ -980,7 +1097,7 @@ def _columns_of(
             return []
         return [_column_candidate(column, shown, qualify) for column in reader.columns(schema, table)]
 
-    return _from_projection(relation.projection, shown, reader, seen, qualify)
+    return _from_projection(relation.projection, shown, reader, seen, qualify, remaining)
 
 
 def _from_projection(
@@ -989,6 +1106,7 @@ def _from_projection(
     reader: _Reader,
     seen: set[tuple[str, ...]],
     qualify: tuple[str, ...] = (),
+    remaining: int = _MAX_STAR_DEPTH,
 ) -> list[Candidate]:
     """Named outputs need no fetch; unresolved stars are expanded against their sources."""
     candidates = [
@@ -1003,7 +1121,7 @@ def _from_projection(
         for index, name in enumerate(projection.columns)
     ]
     for star in projection.stars:
-        candidates += _columns_of(star, reader, seen, label=label, qualify=qualify)
+        candidates += _columns_of(star, reader, seen, label=label, qualify=qualify, remaining=remaining - 1)
     return candidates
 
 

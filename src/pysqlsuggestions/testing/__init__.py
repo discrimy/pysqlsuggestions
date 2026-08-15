@@ -26,9 +26,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pysqlsuggestions.api import complete
+from pysqlsuggestions.catalogs.dbapi import _markers, _quoted_spans
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.types import Function, Kind
+
+_QUERY_ARITY = {
+    'schemas': 1,
+    'tables': 1,
+    'columns': 2,
+    'functions': 1,
+    'column_search': 1,
+    'relation_search': 1,
+    'foreign_keys': 1,
+    'values': 3,
+}
+"""
+How many values `DbapiCatalog` passes each introspection query.
+
+Duplicated from that module rather than derived from it, deliberately: this
+package is shipped so a third-party dialect can check itself, and a table that
+silently followed a refactor of the caller would stop catching the mistake it
+exists for. A change to either has to be a change to both, which is the point.
+"""
 
 __all__ = ['Case', 'DialectConformance']
 
@@ -357,6 +377,14 @@ class DialectConformance:
             problems.append('no identifier quote character, so no name that needs quoting can be inserted')
 
         for clause in dialect.clauses.clauses:
+            # Before the uppercase test, which a blank name passes: `''.upper()`
+            # is `''` and so is `'   '.upper()`. A name with no words has no
+            # first word to be indexed by, so it can never match anything — and
+            # it used to raise out of `complete` rather than merely doing
+            # nothing, which is the sharper reason to name it here.
+            if not clause.name.split():
+                problems.append('a clause has a blank name, which no text can match')
+                continue
             if clause.name != clause.name.upper():
                 problems.append(f'clause {clause.name!r} is not uppercase, and is compared against uppercased text')
             unknown = sorted(name for name in clause.follows if name not in names)
@@ -373,10 +401,41 @@ class DialectConformance:
                 problems.append(f'statement may start with {phrase!r}, which no clause here declares')
 
         for placeholder in dialect.syntax.placeholders:
+            if not placeholder.opens:
+                problems.append(
+                    'a placeholder has an empty opening delimiter, so it would match at every '
+                    'position and consume nothing',
+                )
             if placeholder.body == 'any' and not placeholder.closes:
                 problems.append(
                     f'placeholder {placeholder.opens!r} has an "any" body and no closing delimiter, '
                     f'so it can never end and is never lexed',
+                )
+
+        # `DbapiCatalog` fixes each query's arity, so a marker beyond it is a
+        # static contradiction — the same class as a `follows` naming a clause
+        # that is not there, and needing neither a server nor a self-consistent
+        # dialect to see. Unchecked, a `$N` typo surfaced as an IndexError from
+        # inside `render` on the first catalog read, which is precisely the
+        # mistake a third-party dialect ships this harness to catch.
+        for name, given in _QUERY_ARITY.items():
+            query = getattr(dialect.catalog_queries, name, None)
+            if query is None:
+                continue
+            # Counted the way `render` counts, not with a bare regex: a `$N`
+            # inside a literal is text to it, and Trino spells regexp
+            # backreferences that way — so a working `schemas` query was
+            # reported as binding more values than it is given.
+            found = [int(marker.group(1)) for marker in _markers(query.sql, _quoted_spans(query.sql, dialect.syntax))]
+            if 0 in found:
+                # The one `$N` the arity test below cannot see, and the one
+                # `render` refuses outright — so a dialect carrying it passed
+                # every check here and raised on its first catalog read.
+                problems.append(f'catalog query {name!r} uses $0, and markers are one-based')
+            wanted = max(found, default=0)
+            if wanted > given:
+                problems.append(
+                    f'catalog query {name!r} binds ${wanted} but is only ever given {given} value(s)',
                 )
 
         for declared in dialect.literal_arguments:

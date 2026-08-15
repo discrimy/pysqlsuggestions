@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog, render
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
 
@@ -154,3 +155,130 @@ def test_search_relations_maps_rows_through_the_dialect() -> None:
     catalog = DbapiCatalog(lambda: cursor, POSTGRES, paramstyle='format')
     [found] = catalog.search_relations('invo', 10)
     assert (found.schema, found.name, found.kind) == ('billing', 'invoices', 'table')
+
+
+def test_a_zero_marker_is_rejected_rather_than_binding_the_last_value() -> None:
+    """
+    `$0` is the one index that failed silently.
+
+    Markers are one-based, so `positional` subtracts one — which turns `$0` into
+    Python's `-1` and binds the *last* value to it, producing valid SQL bound to
+    the wrong parameter. Every other out-of-range marker raises. `Template.snippet`
+    in this same package spells `$0` with a different meaning, so writing one into
+    a `Query.sql` is a mistake a dialect author can plausibly make.
+    """
+    with pytest.raises(ValueError, match=r'\$0'):
+        render('SELECT $0, $1', ('first', 'second'), 'format')
+
+
+def test_a_query_with_no_markers_binds_no_parameters_in_any_style() -> None:
+    """
+    Trino's `SHOW FUNCTIONS` takes none, and three styles bound one anyway.
+
+    `qmark` and `format` build their parameter list from the markers that occur;
+    `numeric` returned every value it was handed and `named`/`pyformat` enumerated
+    them, so all three described a parameter the SQL never asks for. A positional
+    driver rejects that outright — sqlite3 answers `Incorrect number of bindings
+    supplied` — and `trino_http._prepare` already special-cases the same shape,
+    which is the sign the general rule was wrong rather than the query unusual.
+    """
+    functions = TRINO.catalog_queries.functions
+    assert functions is not None
+    for style in ('qmark', 'format', 'numeric', 'named', 'pyformat'):
+        _, parameters = render(functions.sql, ('public',), style)
+        assert not parameters, style
+
+
+def test_a_marker_inside_a_literal_or_a_comment_is_left_alone() -> None:
+    """
+    The rewrite was a context-free regex over SQL, which is a lexer's job.
+
+    A `$1` inside a string, a comment or a dollar-quoted body is text, not a
+    parameter — but it was replaced all the same, and bound a value the query
+    never asked for. Latent today, since no shipped introspection query holds
+    one. Postgres is where it would land first: it is the dialect with dollar
+    quoting, and the one whose catalog SQL is most likely to grow a `$$` body.
+    """
+    cases = [
+        ("SELECT '$1 is text' WHERE s = $1", "SELECT '$1 is text' WHERE s = %s"),
+        ('SELECT 1 -- costs $1\nWHERE s = $1', 'SELECT 1 -- costs $1\nWHERE s = %s'),
+        ('SELECT $$ body $1 $$ WHERE s = $1', 'SELECT $$ body $1 $$ WHERE s = %s'),
+        ('SELECT /* $1 */ x WHERE s = $1', 'SELECT /* $1 */ x WHERE s = %s'),
+        ('SELECT "$1" WHERE s = $1', 'SELECT "$1" WHERE s = %s'),
+    ]
+    for sql, expected in cases:
+        rendered, parameters = render(sql, ('a',), 'format', POSTGRES.syntax)
+        assert rendered == expected, sql
+        assert parameters == ('a',), sql
+
+
+def test_a_marker_inside_a_literal_is_left_alone_for_every_style() -> None:
+    """The named styles build their parameters from the markers too, so they agree."""
+    sql = "SELECT '$2 is text' WHERE s = $1"
+    for style in ('qmark', 'format', 'numeric', 'named', 'pyformat'):
+        _, parameters = render(sql, ('a', 'b'), style, POSTGRES.syntax)
+        assert len(parameters) == 1, style
+
+
+def test_dollar_quoting_is_read_per_dialect() -> None:
+    """
+    Only Postgres has it, and a dialect without it must not gain it here.
+
+    Trino reads `$$` as two operators, so a `$1` between them is an ordinary
+    marker there and rewriting it is right.
+    """
+    sql = 'SELECT $$ body $2 $$ WHERE s = $1'
+    assert render(sql, ('a', 'b'), 'format', POSTGRES.syntax)[1] == ('a',), 'the body is a literal'
+    assert render(sql, ('a', 'b'), 'format', TRINO.syntax)[1] == ('b', 'a'), 'two operators, so both are markers'
+
+
+def test_the_shipped_queries_are_unaffected() -> None:
+    """No introspection query holds a marker in a literal, and this pins that."""
+    for dialect in (POSTGRES, TRINO, CLICKHOUSE):
+        for name in ('schemas', 'tables', 'columns', 'functions', 'foreign_keys', 'values'):
+            query = getattr(dialect.catalog_queries, name, None)
+            if query is None:
+                continue
+            plain = render(query.sql, ('a', 'b', 'c'), 'format')
+            aware = render(query.sql, ('a', 'b', 'c'), 'format', dialect.syntax)
+            assert plain == aware, (dialect.name, name)
+
+
+def test_a_percent_before_a_marker_does_not_shift_the_literal_spans() -> None:
+    """
+    The spans were computed on `sql` and consulted against the escaped copy.
+
+    `format` and `pyformat` double every `%` before substituting, which moves
+    every later offset. So a marker's position in the escaped text no longer
+    matched the literal spans measured on the original, and the protection
+    slipped by one place per `%` ahead of it: a `$1` that is text got rewritten,
+    and `pyformat` then bound nothing while its SQL asked for `p1` — a KeyError
+    from inside the driver.
+    """
+    sql = "SELECT '%%%%', 'zz$1'"
+    assert render(sql, ('A',), 'format', POSTGRES.syntax) == ("SELECT '%%%%%%%%', 'zz$1'", ())
+    assert render(sql, ('A',), 'pyformat', POSTGRES.syntax) == ("SELECT '%%%%%%%%', 'zz$1'", {})
+    live = "SELECT '%%' , x WHERE a = $1"
+    rendered, parameters = render(live, ('A',), 'format', POSTGRES.syntax)
+    assert rendered == "SELECT '%%%%' , x WHERE a = %s"
+    assert parameters == ('A',)
+
+
+def test_numeric_binds_positionally_because_that_is_what_the_marker_means() -> None:
+    """
+    `:N` in PEP 249's numeric style indexes the sequence, so it cannot be compacted.
+
+    Cutting the tuple down to the markers that occur is right for `named` and
+    `pyformat`, which bind by key, and wrong here: `:3` went on saying "the third
+    value" while the third value had been removed. Enough of the sequence to
+    reach the highest marker is the answer, which still binds nothing when the
+    query holds no marker at all.
+    """
+    assert render('SELECT * FROM t WHERE a = $1 AND c = $3', ('A', 'B', 'C'), 'numeric') == (
+        'SELECT * FROM t WHERE a = :1 AND c = :3',
+        ('A', 'B', 'C'),
+    )
+    assert render('SELECT * FROM t WHERE name = $2', ('A', 'B', 'C'), 'numeric')[1] == ('A', 'B')
+    functions = TRINO.catalog_queries.functions
+    assert functions is not None
+    assert render(functions.sql, ('public',), 'numeric')[1] == ()

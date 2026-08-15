@@ -25,6 +25,17 @@ from typing import Any
 from pysqlsuggestions.catalogs.dbapi import Cursor, DbapiCatalog
 from pysqlsuggestions.dialects.registry import named
 
+CONNECT_TIMEOUT = 5
+"""
+Seconds a connection attempt may take before the driver gives up.
+
+Lives here rather than beside the check tooling because both paths need it and
+this is the one they share: a driver that gives up can say *why*, where a caller
+that kills the process only ever reports that it was killed. The live path went
+without it and inherited the OS timeout instead — 21 seconds on Windows, about
+130 on Linux — while holding the session lock every other caret waits on.
+"""
+
 Connect = Callable[['Profile'], Any]
 
 DRIVERS: dict[str, tuple[str, str]] = {
@@ -124,7 +135,13 @@ def _connect(profile: Profile, opener: Callable[..., Any] | None = None) -> Any:
     """
     module, _ = DRIVERS[profile.dialect]
     connect_to = opener or import_module(module).connect
-    arguments: dict[str, Any] = {'host': profile.host}
+    # Bounded for the reason `check._timed_connect` states and this path did not
+    # honour: a host that drops packets rather than refusing them leaves the
+    # driver in the OS connect timeout — 21 seconds on Windows, about 130 on
+    # Linux — and `Session._lock` covers this call, so every caret arriving
+    # meanwhile waits with it. "Test connection" gave up in five seconds while
+    # the completion behind it hung, against the same unreachable host.
+    arguments: dict[str, Any] = {'host': profile.host, 'timeout': CONNECT_TIMEOUT}
     # pg8000 takes `ssl_context`, not `secure`; only the readers understand this
     # flag. Passing it to a driver that has never heard of it is a TypeError
     # raised on the first catalog read, which degrades to a catalog-free list —

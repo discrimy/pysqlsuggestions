@@ -106,3 +106,42 @@ def test_a_table_sharing_a_name_with_no_cte_stays_a_table() -> None:
     relation = next(r for r in result.visible() if r.label == 'recent')
     assert relation.source == 'table'
     assert relation.projection is None
+
+
+def test_a_cte_declared_inside_a_subquery_does_not_leak_out() -> None:
+    """
+    `iq` belongs to the derived table that declares it, and to nothing else.
+
+    `_read_ctes` was the one caller of `_after_clause` that passed no depth, so
+    it found the first WITH at *any* level and built the statement's CTE table
+    from a subquery's. Postgres answers `relation "iq" does not exist` for the
+    reference this offered.
+    """
+    found = scope('SELECT * FROM (WITH iq AS (SELECT 1 AS aa) SELECT * FROM iq) d, ⌶')
+    assert 'iq' not in found.ctes
+
+
+def test_an_inner_cte_does_not_rebind_an_outer_table_of_the_same_name() -> None:
+    """
+    The same leak in the direction that loses answers rather than inventing them.
+
+    The outer `FROM users` is the real table. An unrelated CTE called `users`,
+    declared inside a subquery in the WHERE clause, replaced it — so the outer
+    query offered one phantom column and none of the real ones.
+    """
+    found = scope('SELECT * FROM users WHERE id IN (WITH users AS (SELECT 1 AS zz) SELECT * FROM users) AND ⌶')
+    assert [relation.source for relation in found.relations] == ['table']
+
+
+def test_a_cte_nested_in_a_cte_body_is_visible_from_inside_that_body() -> None:
+    """
+    The mirror image: a relation genuinely in scope that could not be seen.
+
+    `select_outputs` reaches `iq` from outside — its own docstring names this
+    shape — but `_scope_level` handed a CTE body the visible set computed by the
+    statement-level pass, which stopped at the outer WITH. From inside the body
+    `iq` read as a catalog table, so its columns were unreachable.
+    """
+    found = scope('WITH oq AS (WITH iq AS (SELECT 1 AS aa) SELECT ⌶ FROM iq) SELECT * FROM oq')
+    assert 'iq' in found.ctes
+    assert found.ctes['iq'].projection is not None

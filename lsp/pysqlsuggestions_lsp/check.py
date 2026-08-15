@@ -21,12 +21,9 @@ import sys
 from importlib import import_module
 from typing import Any
 
-from pysqlsuggestions_lsp.connections import DRIVERS, Connect, Profile, open_catalog
+from pysqlsuggestions_lsp.connections import CONNECT_TIMEOUT, DRIVERS, Connect, Profile, open_catalog
 
 Verdict = dict[str, Any]
-
-CONNECT_TIMEOUT = 5
-"""Seconds. The driver gives up before the caller has to kill the process."""
 
 
 def describe(error: Exception, password: str | None) -> str:
@@ -49,7 +46,12 @@ def describe(error: Exception, password: str | None) -> str:
     for argument in error.args:
         if isinstance(argument, dict) and isinstance(argument.get('M'), str):
             return str(argument['M'])
-    return ' '.join(str(error).split())
+    # The class name when there is nothing else. An exception raised bare has an
+    # empty `str`, and a bodiless non-200 HTTP answer — a proxy's 503, a 401 with
+    # no payload — produces one through `ClickHouseError('')`. A verdict of
+    # "failed", with the space for the reason left blank, is the state this
+    # module exists to end.
+    return ' '.join(str(error).split()) or type(error).__name__
 
 
 def _timed_connect(profile: Profile) -> Any:

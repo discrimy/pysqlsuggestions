@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects.postgres import POSTGRES
 from tests.queries.harness import ALL_ORDER_COLUMNS, USER_COLUMNS, kinds, texts
 
 
@@ -166,3 +168,56 @@ def test_a_select_item_that_has_an_alias_is_not_offered_another(cur: MemoryCatal
     assert 'as' not in texts(cur, 'select u.id as x ')
     assert 'as' in texts(cur, 'select u.id as x, u.email '), 'the comma starts a fresh item'
     assert 'as' in texts(cur, 'select cast(u.id as text) '), "the cast's AS belongs to the cast"
+
+
+def test_the_insert_target_is_not_in_scope_for_the_source_select() -> None:
+    """
+    Measured on all three backends, which agree for once.
+
+    `INSERT INTO auth_group (id, name) SELECT id, name FROM auth_user` is
+    `column "name" does not exist` on Postgres, `Column 'name' cannot be
+    resolved` on Trino and `Missing columns: 'name'` on ClickHouse — and the
+    qualified form is refused by all three too. The target is the thing being
+    written to, not a relation the source query may read from.
+    """
+    catalog = MemoryCatalog(
+        {
+            ('public', 'users'): [('id', 'bigint'), ('name', 'text'), ('email', 'text')],
+            ('public', 'orders'): [('id', 'bigint'), ('user_id', 'bigint'), ('total', 'numeric')],
+        }
+    )
+    for tail in ('SELECT  FROM orders', 'SELECT id FROM orders WHERE '):
+        sql = f'INSERT INTO users (id) {tail}'
+        caret = sql.index('SELECT ') + 7 if tail.startswith('SELECT ') and 'WHERE' not in tail else len(sql)
+        offered = [s.text for s in complete(sql, caret, POSTGRES, catalog, limit=20)]
+        assert offered, tail
+        assert not [text for text in offered if text.startswith('users.')], (tail, offered)
+
+
+def test_returning_sees_the_target_and_not_the_source() -> None:
+    """
+    The mirror of the same rule, and the reason the target stays in scope at all.
+
+    Postgres is the only one of the three with RETURNING — Trino and ClickHouse
+    fail to parse the word — and it resolves only the row that was written:
+    `RETURNING username` against a source called `auth_user` is `column
+    "username" does not exist`, qualified or not.
+    """
+    catalog = MemoryCatalog(
+        {
+            ('public', 'users'): [('id', 'bigint'), ('name', 'text')],
+            ('public', 'orders'): [('id', 'bigint'), ('total', 'numeric')],
+        }
+    )
+    sql = 'INSERT INTO users (id) SELECT id FROM orders RETURNING '
+    offered = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=20)]
+    assert [text for text in offered if text.startswith('users.')]
+    assert not [text for text in offered if text.startswith('orders.')], offered
+
+
+def test_the_insert_column_list_still_names_the_target() -> None:
+    """The position the target is in scope for, and the reason it stays there."""
+    catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint'), ('name', 'text')]})
+    for sql in ('INSERT INTO users (', 'INSERT INTO users (id) VALUES (1) RETURNING '):
+        offered = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=10)]
+        assert [text for text in offered if 'id' in text], sql

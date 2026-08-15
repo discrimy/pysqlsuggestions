@@ -7,13 +7,25 @@ Nothing performs I/O, and nothing knows what a catalog is.
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Callable, Mapping, Sequence
 from functools import cache
-from typing import Literal
+from typing import Literal, TypeVar
 
 from pysqlsuggestions.dialects.base import ClauseModel, Dialect
 from pysqlsuggestions.engine.lex import Token, TokenType
 from pysqlsuggestions.types import Projection, Relation, Scope
+
+_Answer = TypeVar('_Answer')
+
+_MEMO_LIMIT = 20_000
+"""
+How many answers one token stream will remember.
+
+Well above what the shapes this exists for ask — a query nested three hundred
+deep stores a few thousand — and far below the quadratic families a long
+comma-separated relation list opens. Reached, the walk simply computes.
+"""
 
 _SKIP = (TokenType.WHITESPACE, TokenType.COMMENT)
 _RELATION_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO', 'TABLE'})
@@ -92,7 +104,17 @@ def _inside(token: Token, caret: int) -> bool:
     `'ab'<caret>` is back in ordinary SQL. At the end of an unterminated one it
     is inside, because there is no delimiter to have passed. Three callers need
     the rule and it is subtle enough that three copies would drift.
+
+    A line comment is the one token whose span stops *short* of its delimiter:
+    the newline that ends it stays whitespace, deliberately, so `caret == end` is
+    the position just before it rather than just after — which is exactly where a
+    typist writing the comment sits. Reading that as "past the delimiter" offered
+    keywords at the end of a written comment, and accepting one buried it there.
+    Detected by the opener because `/*` is hardcoded in the scanner while the
+    line-comment marker varies by dialect (`--`, and `#` on ClickHouse).
     """
+    if token.type is TokenType.COMMENT and not token.text.startswith('/*'):
+        return token.covers(caret)
     return token.start < caret < token.end or (caret == token.end and not token.terminated)
 
 
@@ -141,12 +163,24 @@ def statement_at(tokens: Sequence[Token], caret: int) -> tuple[int, int]:
     """
     The index range [lo, hi) of the statement containing `caret`.
 
-    Statements are separated by semicolons at depth 0; a semicolon inside a
-    string or inside parens does not split.
+    Every semicolon *token* separates statements. The one inside a string, a
+    comment, a quoted identifier or a dollar-quoted function body never reaches
+    here as punctuation — the lexer swallowed it — which is the whole of what
+    "a semicolon inside a literal does not split" ever meant.
+
+    This used to require depth 0 as well, and that half guarded nothing: no
+    dialect here admits a bare `;` between parentheses, so a semicolon token at
+    depth greater than zero is always evidence of a paren the author has not
+    closed yet. Refusing to split there merged the two statements and leaked the
+    earlier one's relations into the later one's scope — a wrong answer bought
+    in exchange for protecting a construct that cannot occur.
+
+    `lsp/documents.statement_at` has always split on any semicolon, so this is
+    also the two of them agreeing on where a statement ends.
     """
     lo = 0
     for index, token in enumerate(tokens):
-        if token.type is TokenType.PUNCT and token.text == ';' and token.depth == 0:
+        if token.type is TokenType.PUNCT and token.text == ';':
             if token.start >= caret:
                 return lo, index
             lo = index + 1
@@ -1099,15 +1133,22 @@ def _scope_level(
             # correlated subquery in an expression sees everything.
             body_ctes = cte_scopes.get((inner_lo, inner_hi))
             opaque_here = body_ctes is not None or (inner_lo, inner_hi) in opaque
+            # A body may declare CTEs of its own, and the pass above cannot have
+            # read them: it stopped at this level's WITH. `select_outputs` reaches
+            # them from outside — `WITH oq AS (WITH iq AS (...) SELECT * FROM iq)`
+            # is the shape its docstring names — and without this the same `iq`
+            # read as a catalog table once the caret was inside the body.
+            inner_ctes, inner_bodies = _read_ctes(tokens, inner_lo, inner_hi, dialect, remaining - 1)
+            visible = ctes if body_ctes is None else body_ctes
             return _scope_level(
                 tokens,
                 inner_lo,
                 inner_hi,
                 caret,
                 dialect,
-                ctes if body_ctes is None else body_ctes,
+                {**visible, **inner_ctes},
                 parent=None if opaque_here else here,
-                cte_scopes=cte_scopes,
+                cte_scopes={**cte_scopes, **inner_bodies},
                 remaining=remaining - 1,
             )
     return here
@@ -1183,14 +1224,85 @@ def _branch_at(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> tuple[i
     return start, hi
 
 
+_SET_OPERATION_TAIL = frozenset({'ORDER BY', 'LIMIT', 'OFFSET', 'FETCH'})
+"""
+Clauses written after the last branch that govern the whole set operation.
+
+Named here rather than derived from the clause model because the model records
+what a clause *is*, not whose scope it takes. Every dialect here spells these
+four the same, and a dialect that adds a fifth gets the shared answer for it —
+nothing — which is the safe direction.
+"""
+
+
+def in_set_operation_tail(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> bool:
+    """
+    Whether the caret is in the trailing clause of a UNION, INTERSECT or EXCEPT.
+
+    The three backends do not agree on what is in scope there, and measurement
+    rather than the standard is what settled it. Postgres and Trino bind the
+    clause to the *result*: only the first branch's output names and ordinals
+    resolve, and a qualified reference is refused outright. ClickHouse binds it
+    to the *last branch* — that branch's own columns resolve, including ones the
+    select list aliased away — and the query then runs without sorting the union
+    at all, which is the "valid SQL, wrong rows" case this library refuses
+    elsewhere.
+
+    So there is no answer that is right on all three, and the engine offered the
+    last branch's columns to all three: SQL that errors on two and silently
+    mis-sorts on the third. Nothing is the one answer that is wrong nowhere, and
+    `LIMIT` in this position already said it.
+    """
+    base = _base_depth(tokens, lo, hi)
+    # A parenthesised subquery written *in* the tail is an ordinary query with
+    # its own FROM, and all three backends agree about what resolves there.
+    if depth_at(tokens, caret) != base:
+        return False
+    operators = [
+        index
+        for index in range(lo, hi)
+        if tokens[index].type is TokenType.IDENT
+        and tokens[index].depth == base
+        and tokens[index].value.upper() in _SET_OPERATORS
+    ]
+    if not operators:
+        return False
+    for index in range(operators[-1] + 1, hi):
+        token = tokens[index]
+        if token.type in _SKIP or token.depth != base:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
+        if matched is not None and matched[0] in _SET_OPERATION_TAIL:
+            # Past the clause's own keyword, not from where it starts. A caret on
+            # the `O` of ORDER, or between its letters, is completing that word —
+            # and blanking it there left `ORDER B⌶Y` unable to finish itself.
+            return caret >= tokens[matched[1] - 1].end
+    return False
+
+
 def _base_depth(tokens: Sequence[Token], lo: int, hi: int) -> int:
     """The shallowest paren depth among the significant tokens in [lo, hi)."""
-    return min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
+    return _remembered(
+        tokens,
+        ('base', lo, hi),
+        lambda: min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0),
+    )
 
 
-def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> list[tuple[int, int]]:
+def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> tuple[tuple[int, int], ...]:
     """Index ranges of parenthesised bodies that begin with SELECT, one level down."""
-    depth = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
+    return _remembered(tokens, ('bodies', lo, hi), lambda: _scan_subquery_bodies(tokens, lo, hi))
+
+
+def _scan_subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> tuple[tuple[int, int], ...]:
+    """Index ranges of parenthesised bodies that begin with SELECT, one level down."""
+    depth = _base_depth(tokens, lo, hi)
     bodies = []
     for index in range(lo, hi):
         token = tokens[index]
@@ -1202,7 +1314,7 @@ def _subquery_bodies(tokens: Sequence[Token], lo: int, hi: int) -> list[tuple[in
         if tokens[body_lo].value.upper() not in {'SELECT', 'WITH', 'VALUES', 'TABLE'}:
             continue
         bodies.append((body_lo, _matching_paren(tokens, index, hi)))
-    return bodies
+    return tuple(bodies)
 
 
 def _derived_tables(
@@ -1280,9 +1392,29 @@ def _relations_in(
     hi: int,
     caret: int,
     dialect: Dialect,
-) -> list[Relation]:
+) -> tuple[Relation, ...]:
     """Every table reference introduced between `lo` and `hi`."""
+    return _remembered(
+        tokens,
+        # `dialect` too: this scan reads its clauses and reserved words, unlike
+        # the other three, so two dialects over one stream would otherwise get
+        # each other's answer. Not reachable while every `lex` call serves a
+        # single dialect — but reusing a stream is the next thing anyone tries.
+        ('relations', lo, hi, caret, dialect.name),
+        lambda: _scan_relations_in(tokens, lo, hi, caret, dialect),
+    )
+
+
+def _scan_relations_in(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> tuple[Relation, ...]:
+    """The scan behind `_relations_in`."""
     relations: list[Relation] = []
+    written_to: list[Relation] = []
     shelter = _unclosed_call_depth(tokens, lo, hi, dialect)
     index = lo
     while index < hi:
@@ -1299,8 +1431,61 @@ def _relations_in(
         if matched is None or not _introduces_relations(tokens, matched, hi):
             index += 1
             continue
-        index = _read_relation_list(tokens, matched[1], hi, caret, dialect, relations, matched[0])
-    return relations
+        # An INSERT target is kept apart from the rest. It is a relation of the
+        # statement but not of every clause in it, which no other entry in
+        # `_RELATION_CLAUSES` has to distinguish.
+        found = written_to if matched[0] == 'INSERT INTO' else relations
+        index = _read_relation_list(tokens, matched[1], hi, caret, dialect, found, matched[0])
+    if not written_to:
+        return tuple(relations)
+    return tuple(_around_an_insert_target(tokens, lo, hi, caret, dialect, written_to, relations))
+
+
+def _around_an_insert_target(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+    written_to: list[Relation],
+    relations: list[Relation],
+) -> list[Relation]:
+    """
+    Which relations an INSERT's three positions can see.
+
+    Measured on all three backends, which agree. The target is *not* in scope
+    for the source query: `INSERT INTO auth_group (id, name) SELECT id, name
+    FROM auth_user` is `column "name" does not exist` on Postgres, `Column
+    'name' cannot be resolved` on Trino and `Missing columns: 'name'` on
+    ClickHouse, and the qualified form is refused by all three as well.
+
+    `RETURNING` is the mirror: it names the row that was written, so the target
+    is all it resolves — `RETURNING username`, against a source called
+    `auth_user`, is `column "username" does not exist`. Postgres is the only one
+    of the three that has the clause; the other two do not parse the word.
+
+    Which leaves the column list, where the target is the whole answer and is
+    why it stays in `_RELATION_CLAUSES` at all.
+    """
+    base = tokens[lo].depth
+    opens_source: int | None = None
+    opens_returning: int | None = None
+    for index in range(lo, hi):
+        token = tokens[index]
+        if token.type in _SKIP or token.depth != base:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
+        if matched is None:
+            continue
+        if matched[0] == 'SELECT' and opens_source is None:
+            opens_source = token.start
+        elif matched[0] == 'RETURNING' and opens_returning is None:
+            opens_returning = token.start
+    if opens_returning is not None and caret >= opens_returning:
+        return written_to
+    if opens_source is not None and caret >= opens_source:
+        return relations
+    return [*written_to, *relations]
 
 
 def clauses_written(
@@ -1386,6 +1571,16 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
     """
     lo, hi = statement_at(tokens, caret)
     lo, hi = _branch_at(tokens, lo, hi, caret)
+    # Neither of those clamps to the caret's own paren group, so a caret in a
+    # derived table or a CTE body used to scan straight out of it and answer with
+    # an offset in the enclosing statement — which then grew a second FROM while
+    # the subquery that needed one still had none.
+    # Only a group that opens a *query*. A call's argument list is at the same
+    # depth and is not a place a FROM clause can go — clamping to it wrote
+    # `SELECT count(auth_user.id FROM public.auth_user)`, which does not parse.
+    group = _group_start(tokens, caret, depth_at(tokens, caret))
+    if group > lo and _opens_a_query(tokens, group - 1, hi, dialect):
+        lo, hi = group, min(hi, _matching_paren(tokens, group - 1, hi))
     depth = _base_depth(tokens, lo, hi)
     for index in range(lo, hi):
         token = tokens[index]
@@ -1394,7 +1589,18 @@ def select_list_end(tokens: Sequence[Token], caret: int, dialect: Dialect) -> in
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is not None and matched[0] != 'SELECT':
             return _skip_back_over_space(tokens, index)
-    return tokens[hi - 1].end if hi > lo else caret
+    # Back over trailing trivia, not merely to the last token. A comment closing
+    # the buffer is in `_SKIP` for the scan above and was still the answer here,
+    # so the clause landed *inside* it and the statement ran with no FROM at all.
+    # Whitespace matters for the same reason one step on: `_branch_at` ends the
+    # branch at a set operator, so the last token is the space before UNION and
+    # stopping there wrote `FROM usersUNION` — one identifier, no set operation.
+    #
+    # Never before the caret, though. At `SELECT ⌶` the select list ends exactly
+    # there, and an offset behind it would put the clause in front of the column
+    # it was fetched for, breaking `Insertion.edits`' latest-first ordering.
+    last = _skip_back(tokens, hi - 1)
+    return max(tokens[last].end, caret) if last >= lo else caret
 
 
 def _skip_back_over_space(tokens: Sequence[Token], index: int) -> int:
@@ -1440,7 +1646,15 @@ def _unclosed_call_depth(
     unfinished it is, because its FROM really is private to it.
 
     Returns a lookup rather than a list so the common case, a statement with no
-    dangling paren, costs one scan and no allocation.
+    dangling paren, costs one scan and no allocation. The dangling case answers
+    by bisection rather than by counting: `_relations_in` asks once per token, so
+    a scan per ask was O(dangling x tokens) on exactly the half-typed input the
+    editor holds between a caret and its closing paren.
+
+    Worth naming what this does *not* fix, since the shape looks solved and is
+    not: a query of nested unclosed subqueries is still super-quadratic, and the
+    cost is `_by_first_word`'s `@cache` re-hashing the whole `ClauseModel` on
+    every lookup — 118 million hash calls for 1.5 KB. That is a separate change.
     """
     open_groups: list[int] = []
     for index in range(lo, hi):
@@ -1452,10 +1666,12 @@ def _unclosed_call_depth(
         elif token.text == ')' and open_groups:
             open_groups.pop()
 
+    # `open_groups` is a stack of ascending indices, so what survives the filter
+    # is ascending too and `bisect_left` is exactly "how many start before this".
     starts = tuple(index for index in open_groups if not _opens_a_query(tokens, index, hi, dialect))
     if not starts:
         return lambda _: 0
-    return lambda index: sum(1 for start in starts if start < index)
+    return lambda index: bisect.bisect_left(starts, index)
 
 
 def _opens_a_query(tokens: Sequence[Token], index: int, hi: int, dialect: Dialect) -> bool:
@@ -1479,7 +1695,58 @@ def _introduces_relations(tokens: Sequence[Token], matched: tuple[str, int], hi:
     return name in _RELATION_CLAUSES
 
 
+def _remembered(tokens: Sequence[Token], key: object, produce: Callable[[], _Answer]) -> _Answer:
+    """
+    `produce()`, asked once per key for the life of this token stream.
+
+    Every caller is a pure function of the tokens and an index range, and the
+    stream is immutable, so an answer cannot go stale. The scope walk descends a
+    level at a time and rescans ranges the level above already scanned, which is
+    what turns a generated query of nested subqueries from linear into something
+    much worse. A plain sequence — a slice, or a list a test built — has no memo
+    and is computed as before.
+    """
+    memo: dict[object, object] | None = getattr(tokens, 'memo', None)
+    if memo is None:
+        return produce()
+    if key not in memo:
+        fresh = produce()
+        # Bounded. `_inside_a_relation_list` scans back to each comma, so it asks
+        # with `hi` set to that comma, and a long comma-separated relation list
+        # opens one family of keys per comma — 323,207 entries and 41 MiB for
+        # 6.7 KB of SQL, where the memo was also *slower* than not memoising.
+        # The key cannot drop `hi`, since what it truncates is real; past this
+        # many entries the walk is not the shape this was built for.
+        if len(memo) >= _MEMO_LIMIT:
+            return fresh
+        memo[key] = fresh
+    answer: _Answer = memo[key]  # type: ignore[assignment]
+    return answer
+
+
 def _clause_starting_at(
+    tokens: Sequence[Token],
+    index: int,
+    hi: int,
+    clauses: ClauseModel,
+) -> tuple[str, int] | None:
+    """
+    The clause beginning at `index`, memoised against the token stream.
+
+    The scope walk descends a level at a time and each level rescans ranges the
+    level above already scanned, so this was asked 235,245 times for a query of
+    nested derived tables holding 324 distinct questions — a 99.9% repeat rate at
+    depth eighty, and the cubic term in what a code generator produces.
+
+    Safe because the answer is a pure function of its arguments and the stream is
+    immutable, so the memo cannot go stale; it lives on the stream, so it is
+    discarded with it. A plain sequence — a slice, or a list built by a test —
+    simply has no memo and is scanned as before.
+    """
+    return _remembered(tokens, ('clause', index, hi, clauses), lambda: _scan_clause_start(tokens, index, hi, clauses))
+
+
+def _scan_clause_start(
     tokens: Sequence[Token],
     index: int,
     hi: int,
@@ -1510,7 +1777,14 @@ def _by_first_word(clauses: ClauseModel) -> dict[str, tuple[str, ...]]:
     """Clause names grouped by their first word, longest first so `GROUP BY` beats `GROUP`."""
     grouped: dict[str, list[str]] = {}
     for name in clauses.names():
-        grouped.setdefault(name.split()[0], []).append(name)
+        # A name with no words in it has no first word, and `split()[0]` raised
+        # rather than skipping — so one blank clause reached through
+        # `extend(Clause(name=''))` took `complete` down with an IndexError.
+        # Dropped silently here because it can never match anything anyway;
+        # `DialectConformance.structure` is where it gets said out loud.
+        words = name.split()
+        if words:
+            grouped.setdefault(words[0], []).append(name)
     return {word: tuple(names) for word, names in grouped.items()}
 
 
@@ -1648,6 +1922,7 @@ def select_outputs(
     hi: int,
     dialect: Dialect,
     ctes: dict[str, Relation] | None = None,
+    remaining: int = _MAX_NESTING,
 ) -> Projection:
     """
     The output columns of the select body spanning [lo, hi).
@@ -1662,14 +1937,22 @@ def select_outputs(
     `WITH outer_q AS (WITH inner_q AS (...) SELECT * FROM inner_q)` has to
     reach inner_q — neither is visible from the level above.
     """
-    declared, _ = _read_ctes(tokens, lo, hi, dialect)
+    # The same bound `_scope_level` keeps, for the same stated reason: this pair
+    # of functions calls back and forth once per nesting level, and `_MAX_NESTING`
+    # used to be applied only one stage above. A generated document — 495 nested
+    # `WITH a AS(`, or a thousand nested derived tables — reached Python's stack
+    # limit and the RecursionError left `complete` entirely, including through
+    # the language server's handler, which documents that it never raises.
+    if remaining <= 0:
+        return Projection()
+    declared, _ = _read_ctes(tokens, lo, hi, dialect, remaining - 1)
     visible = {**(ctes or {}), **declared}
     body_relations = [_bind(r, visible) for r in _relations_in(tokens, lo, hi, -1, dialect)]
     for derived_lo, derived_hi, alias, columns_of in _derived_tables(tokens, lo, hi, dialect):
         nested = (
             Projection(columns=columns_of)
             if columns_of
-            else select_outputs(tokens, derived_lo, derived_hi, dialect, visible)
+            else select_outputs(tokens, derived_lo, derived_hi, dialect, visible, remaining - 1)
         )
         body_relations.append(Relation(alias=alias, path=(), source='subquery', projection=nested))
     base = min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)
@@ -1780,6 +2063,14 @@ def _output_of(
         return significant[-1].value, None
 
     if len(significant) == 1 and significant[0].type is TokenType.IDENT:
+        # Guarded like the two branches below it, and for the same reason.
+        # `SELECT NULL` names nothing — Postgres calls the result `?column?` —
+        # but this read `null` as an output name, and `rank` then quoted it
+        # *because* it is reserved, so `"null"` arrived above every real column
+        # with the local-origin bonus behind it. In a CTE it was the only answer,
+        # and the reference it writes does not exist.
+        if not significant[0].quoted and significant[0].value.upper() in dialect.reserved_upper:
+            return None, None
         return significant[0].value, None
 
     if _is_an_implicit_alias(significant, dialect):
@@ -1859,6 +2150,7 @@ def _read_ctes(
     lo: int,
     hi: int,
     dialect: Dialect,
+    remaining: int = _MAX_NESTING,
 ) -> tuple[dict[str, Relation], dict[tuple[int, int], dict[str, Relation]]]:
     """
     Every relation declared in a leading WITH clause, keyed by name.
@@ -1868,8 +2160,13 @@ def _read_ctes(
     second — Postgres answers `relation "b" does not exist` — and RECURSIVE is
     precisely the word that adds the body's own name to its own scope.
     """
-    start = _after_clause(tokens, lo, hi, 'WITH', dialect)
-    if start is None:
+    # Depth-restricted, like every other caller of `_after_clause`. Without it
+    # this found the first WITH at any level, so a CTE declared inside a derived
+    # table or an expression subquery joined the *statement's* table — offering a
+    # name the server refuses, and, worse, rebinding a real relation that shared
+    # it, which lost every one of that relation's columns.
+    start = _after_clause(tokens, lo, hi, 'WITH', dialect, depth=_base_depth(tokens, lo, hi))
+    if start is None or remaining <= 0:
         return {}, {}
     ctes: dict[str, Relation] = {}
     visible: list[tuple[tuple[int, int], tuple[str, ...]]] = []
@@ -1899,7 +2196,13 @@ def _read_ctes(
         # Earlier CTEs are in scope inside this one's body, so `WITH a AS (...),
         # b AS (SELECT * FROM a)` can resolve b's star against a's projection.
         projection = (
-            Projection(columns=declared) if declared else select_outputs(tokens, body_lo, body_hi, dialect, ctes)
+            Projection(columns=declared)
+            if declared
+            # `remaining` unchanged, not decremented: this and `select_outputs`
+            # are two halves of one nesting level, and spending the budget on
+            # both legs halved it — truncating a CTE chain at 32 levels where
+            # the stack it guards only gives out near 490.
+            else select_outputs(tokens, body_lo, body_hi, dialect, ctes, remaining)
         )
         visible.append(((body_lo, body_hi), (*ctes, *((name,) if recursive else ()))))
         ctes[name] = Relation(alias=None, path=(name,), source='cte', projection=projection)
