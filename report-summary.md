@@ -28,9 +28,20 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-Nine findings closed and one substantially improved, each with a regression test written *before* the
-fix and watched to fail. Gate green: `./scripts/check.sh` → ruff format, ruff check, mypy strict,
-**1714 passed**.
+**18 findings closed and one substantially improved**, across three commits, each fix carrying a
+regression test written *before* it and watched to fail. Gate green throughout:
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1724 passed** (from 1700).
+
+| Commit | Closes |
+| --- | --- |
+| `9e123c1` from a caret to the catalog | 1, 2, 3, 4, 5, 6, 10, 13, 17*, 37 |
+| `4b38c3e` a CTE belongs to the query that declares it | 24, 25, 27 |
+| `8b5f21c` the server's half of a position | 30, 31, 32, 33, 35, 36 |
+
+Still open: **7** (Postgres quoting), **8** (`SELECT NULL`), **9** (empty clause name), **11** (3.10
+capability detection), **12** (`render` binds unasked values), **14**–**16** (registry and
+conformance), **18**–**20**, **21**–**23** (literal prefixes, placeholder hang), **26** (ORDER BY
+after a set operation), **28** (INSERT target), **29**, **34**, and both design calls U1/U2.
 
 | # | Fix | Test |
 | --- | --- | --- |
