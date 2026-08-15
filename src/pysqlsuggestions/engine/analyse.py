@@ -152,12 +152,24 @@ def statement_at(tokens: Sequence[Token], caret: int) -> tuple[int, int]:
     """
     The index range [lo, hi) of the statement containing `caret`.
 
-    Statements are separated by semicolons at depth 0; a semicolon inside a
-    string or inside parens does not split.
+    Every semicolon *token* separates statements. The one inside a string, a
+    comment, a quoted identifier or a dollar-quoted function body never reaches
+    here as punctuation — the lexer swallowed it — which is the whole of what
+    "a semicolon inside a literal does not split" ever meant.
+
+    This used to require depth 0 as well, and that half guarded nothing: no
+    dialect here admits a bare `;` between parentheses, so a semicolon token at
+    depth greater than zero is always evidence of a paren the author has not
+    closed yet. Refusing to split there merged the two statements and leaked the
+    earlier one's relations into the later one's scope — a wrong answer bought
+    in exchange for protecting a construct that cannot occur.
+
+    `lsp/documents.statement_at` has always split on any semicolon, so this is
+    also the two of them agreeing on where a statement ends.
     """
     lo = 0
     for index, token in enumerate(tokens):
-        if token.type is TokenType.PUNCT and token.text == ';' and token.depth == 0:
+        if token.type is TokenType.PUNCT and token.text == ';':
             if token.start >= caret:
                 return lo, index
             lo = index + 1
