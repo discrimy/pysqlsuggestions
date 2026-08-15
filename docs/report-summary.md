@@ -332,54 +332,83 @@ Qualifying the relation is what loses the proposal, which is the opposite of wha
 name should do. `joins._links` finds both edges either way — verified directly against the pure
 function — so neither half is in `joins.py`; both are in what `resolve` hands it.
 
-### Still open — the whole list, worst first
+### The open list, and what closed it
 
-Nothing here is a blocker. There is **no known crash and no known silently-wrong SQL**, which is the
-class this library cares most about; the differential's 1,266,984 triples found zero raise-splits in
-either direction, and the re-run raised nothing either. What is left is suggestions a server refuses
-loudly, performance on inputs larger than the documented budget, one capability that fails closed on
-a slow database, and things outside the library.
+Nothing on it was a blocker. There was **no known crash and no known silently-wrong SQL**, which is
+the class this library cares most about; the differential's 1,266,984 triples found zero raise-splits
+in either direction, and the re-run raised nothing either. What was left was suggestions a server
+refuses loudly, performance on inputs larger than the documented budget, one capability that failed
+closed on a slow database, and things outside the library.
 
-Ordered by severity as the re-run assessed it, worst first.
+Six of the seven are now closed. The gate is green at each: ruff format, ruff check, mypy strict, and
+**1805 passed, 1 skipped, 10 xfailed** with integration deselected — from the 1788 the re-run
+measured.
 
-| # | Open | Cost when it fires | Where |
-| --- | --- | --- | --- |
-| O5 | `CONNECT_TIMEOUT` bounds the whole socket, not the connect | a catalog read over 5 s degrades the session outright | `lsp/connections.py` |
-| O2 | An INSERT whose source is *parenthesised* leaks the **target** into the source query | wrong names offered; all three servers refuse on accept | `analyse._around_an_insert_target` |
-| O4 | A run of *bare* unclosed parens is cleanly quadratic | 1.0 s at 4,000 parens, ~4 s at 8,000; 3.9× per doubling | `analyse.clause_at` (finding 17, part) |
-| O3 | The server re-lexes the whole document on every keystroke | 28 ms on a 14.2 KB statement, 10 s on 10 MB | `lsp/documents.py` (finding 34) |
-| O6 | Join proposals: a dedupe key without the target, and reverse edges across schemas | a missing proposal, silently | `engine/joins.py`, `resolve._edges` |
-| O7 | `time`/`interval` value families, and `CAST(x AS t)` narrowing | fewer suggestions than the type allows | `resolve.py` |
-| O8 | Demo and build: `pending` unvalidated, paramstyle drift, no 20k cap in the browser build, `build_pages` picks a wheel lexicographically | not the library | `demo/`, `scripts/` |
+Ordered by severity as the re-run assessed it, worst first. **All but one are now closed**, each
+with a regression test written before the fix and watched to fail.
 
-O1 — `FOR UPDATE` and its three siblings in a set operation's tail — was closed in `0f78223` and is
-no longer on this list. Verified: the tail keeps `USING`, `ASC`, `DESC`, `NULLS LAST` and the four
-governing clauses and offers no `FOR *`, while a plain `ORDER BY` still offers `FOR UPDATE`.
+| # | Was | Now |
+| --- | --- | --- |
+| O5 | `CONNECT_TIMEOUT` bounded the whole socket, not the connect — a catalog read over 5 s degraded the session outright | **fixed — `f129be6`** |
+| O2 | An INSERT whose source is *parenthesised* leaked the **target** into the source query | **fixed — `a3e7b03`** |
+| O4 | A run of *bare* unclosed parens was cleanly quadratic — 3.9× per doubling | **fixed — `aac6a2b`** |
+| O3 | The server re-lexes the whole document on every keystroke | **open — [`docs/gaps.md` gap 2](gaps.md)** |
+| O6 | Join proposals: a dedupe key without the target, and reverse edges across schemas | **fixed — `18063c7`** |
+| O7 | `CAST(x AS t)` did not narrow a comparison | **fixed — `d111395`** |
+| O8 | Demo and build: unvalidated fields, no cap in the browser build, a wheel chosen lexicographically | **fixed — `2423064`** |
 
-Four of these are worth a sentence each on *why* they are the shape they are.
+O1 — `FOR UPDATE` and its three siblings in a set operation's tail — was closed in `0f78223` before
+this pass. Verified: the tail keeps `USING`, `ASC`, `DESC`, `NULLS LAST` and the four governing
+clauses and offers no `FOR *`, while a plain `ORDER BY` still offers `FOR UPDATE`.
 
-**O5 is the one that costs the most in practice, and the fix for finding 33 introduced it.** The
-`timeout` argument reaches `socket.create_connection`, which leaves it *on the socket* — so it
-governs every later `recv`, not just the connect. Any catalog read slower than five seconds raises,
-and `server.py:243` catches it into `degrade()`, which sets `_catalog = None` for the rest of the
-session. The largest databases, where introspection is genuinely slow and completion is worth most,
-are exactly the ones that lose schema completion entirely. Bounding the connect alone needs the
-timeout dropped from the socket once the connection is up, which is per-driver work.
+### What each fix turned out to be
 
-**O3 is not a caching problem**, which matters because it reads like one: the document changes with
-every keystroke, so a content-keyed cache never hits — five consecutive keystrokes are five distinct
-texts. Three identical requests measured 0.035 s, 0.028 s and 0.028 s on a 14.2 KB statement, so the
-second keystroke really does cost what the first did. Growth is linear, so the constant and the
-absence of any per-document cache are the finding, not the complexity. Fixing it means lexing
-incrementally against `didChange` ranges, or tracking statement boundaries per document version —
-structurally larger than anything on this branch.
+**O5 was introduced by the fix for finding 33**, which is the shape this campaign keeps producing —
+right about the hang, wrong about which clock to stop. The `timeout` reaches
+`socket.create_connection`, which leaves it *on* the socket, so the bound written for reaching an
+unreachable host governed every later `recv`. A read that overran it raised into `Session.suggest`'s
+`except Exception` → `degrade()` → no catalog for the rest of the session, so the guard for a host
+that was down was disabling the feature on the hosts that were up. `READ_TIMEOUT` is now its own
+constant and the connect bound is lifted off the socket once the connection is established. The two
+HTTP readers stop being passed the constant at all: their `timeout` bounds a whole round trip rather
+than the reaching of a host, so it cut every introspection query at five seconds by the same
+mechanism reached by a different route.
 
-**O4 is a different mechanism from the hash fix that closed the rest of finding 17** — `clause_at`
-widens outward once per paren depth, calling two O(n) helpers each time — and it is a far less
-realistic input than the nested subqueries that were fixed, which is why it was left.
+**O2 was the unfixed half of finding 28.** `_around_an_insert_target` located the source by looking
+for a `SELECT` at the statement's own depth, so parentheses hid it a level down. The group is now
+recognised where the clause cannot be, through the `_opens_a_query` that `_relations_in` already
+uses — which is also what separates it from `VALUES ((SELECT 1))`, where the group opens an
+expression that merely contains a query. Nothing counts until the target has been read, or a leading
+`WITH` would have taken the column list's target away.
 
-**O6 costs a suggestion, never a wrong one**, which is why it sits below the rest despite having two
-independent mechanisms. Both are recorded under [the re-run](#o6-had-a-second-mechanism).
+**O4 needed one pass, not a rewrite.** A clause name is a word, so a depth holding no word can hold
+no clause; the widening now skips those levels and both O(n) helpers drop out of the loop entirely.
+8,000 parens went from about four seconds to 0.040 s and the growth ratio from 3.9× per doubling to
+2.0×. The memo is keyed to the token stream for the reason `_clause_starting_at`'s is, or this would
+have traded one quadratic for another.
+
+**O6 was in neither place the entry named.** `joins.py` finds every edge it is given; `resolve._edges`
+was the problem twice over — a dedupe key without the referenced side, which deleted a second
+constraint on one column rather than duplicating it, and a fetch keyed on the referencing schema, so
+writing `public.users` returned *less* than writing `users`. What remains out of reach is a
+referencing side in a schema neither named nor on the search path, which is the port's shape and
+needs a capability rather than a fix.
+
+**O7 was half a defect.** `CAST(x AS t)` did not narrow while `x::t` did, and `::` is an extension —
+ANSI declares no cast operator, so on that dialect the functional form is the only spelling and
+narrowing never happened at all. The other half was not a defect: `time` and `interval` already reach
+value suggestions through planner statistics, checked against a catalog that reports them. What they
+have no counterpart to is `boolean` and a self-describing enum, which enumerate *exhaustively*
+because the type says what the values are — and the only way to produce that for a clock is to read
+the column.
+
+**O3 stays open, as a gap rather than a defect.** It is not a caching problem, which matters because
+it reads like one: the document changes with every keystroke, so a content-keyed cache never hits.
+Growth is linear — the shape `test_scale.py` asks for — so what is left is the constant and the
+absence of per-document state, and closing it means lexing incrementally against `didChange` ranges.
+That is a feature with its own correctness surface, so it is now
+[gap 2 in `docs/gaps.md`](gaps.md) alongside the two cheaper shapes that were considered and are not
+enough on their own.
 
 ### A reason that did not survive being tested, again
 

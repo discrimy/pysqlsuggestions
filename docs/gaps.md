@@ -37,6 +37,37 @@ first in its key, and for the same reason.
 
 ---
 
+## 2. Incremental lexing in the language server
+
+The server lexes the whole document on every keystroke and keeps nothing
+between requests, so the second keystroke costs what the first did. Measured:
+three identical requests on a 14.2 KB statement at 0.035 s, 0.028 s and
+0.028 s, and about ten seconds on a 10 MB document. `documents.statement_at`
+tokenises the entire text to find the statement the caret is in, and `complete`
+then lexes that statement again.
+
+**Not a caching problem**, which is worth saying because it reads like one. The
+document changes with every keystroke, so a cache keyed on the content never
+hits — five consecutive keystrokes are five distinct texts. Closing this means
+lexing incrementally against the ranges `didChange` reports, keeping tokens per
+document version and re-lexing forward from the earliest edit.
+
+Growth is linear, which is the shape `tests/test_scale.py` says it should be, so
+what is left is the constant and the absence of any per-document state. That is
+a feature with its own correctness surface — overlapping changes, changes
+arriving out of order, and an invalidation that is wrong in a way no completion
+would reveal — rather than a repair, which is why it is a numbered gap here and
+not a defect.
+
+Two cheaper shapes were considered and are not enough on their own. Making
+`lex` lazy so `statement_at` can stop at the first semicolon past the caret
+helps only a caret early in a large multi-statement document, and touches the
+most heavily fuzzed module in the library to do it. A token cache keyed on the
+document text hits on a re-trigger at an unchanged document and never while
+anybody is typing.
+
+---
+
 ## Closed since this list was written
 
 Kept rather than deleted, because a list whose entries only ever disappear tells
