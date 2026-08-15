@@ -26,6 +26,7 @@ from pysqlsuggestions.engine.analyse import (
     depth_at,
     in_literal,
     in_placeholder,
+    in_set_operation_tail,
     inside_a_cast_awaiting_as,
     literal_argument_call,
     opens_a_name_list,
@@ -79,6 +80,11 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     scope = scope_of(tokens, lo, hi, caret, dialect) if tokens else None
 
     comparand, comparand_type = comparand_at(tokens, caret, dialect)
+    if in_set_operation_tail(tokens, lo, hi, caret, dialect):
+        # Above everything else, because the reason is about the position rather
+        # than about what was typed in it: no answer here is right on all three
+        # backends, and the one the engine gave errored on two of them.
+        return Request(kinds=(), prefix='', replace_span=(caret, caret), clause=clause, scope=scope)
     if in_placeholder(tokens, caret):
         # Above the literal check rather than folded into it: a half-written
         # literal has an answer — the values that column holds — and a

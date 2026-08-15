@@ -1201,6 +1201,61 @@ def _branch_at(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> tuple[i
     return start, hi
 
 
+_SET_OPERATION_TAIL = frozenset({'ORDER BY', 'LIMIT', 'OFFSET', 'FETCH'})
+"""
+Clauses written after the last branch that govern the whole set operation.
+
+Named here rather than derived from the clause model because the model records
+what a clause *is*, not whose scope it takes. Every dialect here spells these
+four the same, and a dialect that adds a fifth gets the shared answer for it —
+nothing — which is the safe direction.
+"""
+
+
+def in_set_operation_tail(
+    tokens: Sequence[Token],
+    lo: int,
+    hi: int,
+    caret: int,
+    dialect: Dialect,
+) -> bool:
+    """
+    Whether the caret is in the trailing clause of a UNION, INTERSECT or EXCEPT.
+
+    The three backends do not agree on what is in scope there, and measurement
+    rather than the standard is what settled it. Postgres and Trino bind the
+    clause to the *result*: only the first branch's output names and ordinals
+    resolve, and a qualified reference is refused outright. ClickHouse binds it
+    to the *last branch* — that branch's own columns resolve, including ones the
+    select list aliased away — and the query then runs without sorting the union
+    at all, which is the "valid SQL, wrong rows" case this library refuses
+    elsewhere.
+
+    So there is no answer that is right on all three, and the engine offered the
+    last branch's columns to all three: SQL that errors on two and silently
+    mis-sorts on the third. Nothing is the one answer that is wrong nowhere, and
+    `LIMIT` in this position already said it.
+    """
+    base = _base_depth(tokens, lo, hi)
+    operators = [
+        index
+        for index in range(lo, hi)
+        if tokens[index].type is TokenType.IDENT
+        and tokens[index].depth == base
+        and tokens[index].value.upper() in _SET_OPERATORS
+    ]
+    if not operators:
+        return False
+    for index in range(operators[-1] + 1, hi):
+        token = tokens[index]
+        if token.type in _SKIP or token.depth != base or caret < token.start:
+            continue
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
+        if matched is not None and matched[0] in _SET_OPERATION_TAIL:
+            return True
+    return False
+
+
 def _base_depth(tokens: Sequence[Token], lo: int, hi: int) -> int:
     """The shallowest paren depth among the significant tokens in [lo, hi)."""
     return min((t.depth for t in tokens[lo:hi] if t.type not in _SKIP), default=0)

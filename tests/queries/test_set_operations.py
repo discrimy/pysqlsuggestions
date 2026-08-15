@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
+from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.dialects.trino import TRINO
 from tests.queries.harness import ALL_ORDER_COLUMNS, at, texts
 
 
@@ -89,3 +93,56 @@ def test_union_inside_a_cte_body(cur: MemoryCatalog) -> None:
     """
     got = at(cur, 'WITH a AS (SELECT id FROM auth_user UNION SELECT ‸ FROM orders) SELECT * FROM a', limit=50)
     assert sorted(got) == ['orders.created', 'orders.id', 'orders.total', 'orders.user_id']
+
+
+def test_the_tail_of_a_set_operation_offers_nothing() -> None:
+    """
+    Measured against all three backends, which do not agree with each other.
+
+    `ORDER BY` after a UNION binds to the *result* on Postgres and Trino, where
+    only the first branch's output names and ordinals resolve — and to the *last
+    branch* on ClickHouse, which accepts that branch's own columns and then does
+    not sort the union at all. The engine offered the last branch's columns
+    everywhere: SQL that errors on two backends and silently mis-sorts on the
+    third.
+
+    Nothing is the one answer that is not wrong on any of them, and it is what
+    this position's neighbour `LIMIT` already said.
+    """
+    catalog = MemoryCatalog(
+        {
+            ('public', 'users'): [('id', 'bigint'), ('name', 'text')],
+            ('public', 'orders'): [('id', 'bigint'), ('total', 'numeric')],
+        }
+    )
+    for dialect in (POSTGRES, CLICKHOUSE, TRINO):
+        for tail in ('ORDER BY ', 'ORDER BY n'):
+            sql = f'SELECT name AS nm FROM users UNION SELECT total FROM orders {tail}'
+            assert complete(sql, len(sql), dialect, catalog) == [], (dialect.name, tail)
+
+
+def test_a_plain_order_by_is_untouched() -> None:
+    """The suppression is about the set operation, not about ORDER BY."""
+    catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint'), ('name', 'text')]})
+    sql = 'SELECT name AS nm FROM users ORDER BY '
+    assert 'nm' in [s.text for s in complete(sql, len(sql), POSTGRES, catalog)]
+
+
+def test_an_order_by_inside_a_branch_of_a_set_operation_is_untouched() -> None:
+    """A parenthesised branch orders itself, and that ORDER BY is its own."""
+    catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint'), ('name', 'text')]})
+    sql = 'SELECT * FROM (SELECT name AS nm FROM users ORDER BY ) x'
+    caret = sql.index(') x')
+    assert 'nm' in [s.text for s in complete(sql, caret, POSTGRES, catalog)]
+
+
+def test_a_clause_of_the_last_branch_still_answers() -> None:
+    """Only the tail is suppressed; the branch's own clauses keep their scope."""
+    catalog = MemoryCatalog(
+        {
+            ('public', 'users'): [('id', 'bigint'), ('name', 'text')],
+            ('public', 'orders'): [('id', 'bigint'), ('total', 'numeric')],
+        }
+    )
+    sql = 'SELECT name FROM users UNION SELECT total FROM orders WHERE '
+    assert [s.text for s in complete(sql, len(sql), POSTGRES, catalog)][:2] == ['orders.id', 'orders.total']
