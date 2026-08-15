@@ -28,9 +28,9 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-**34 findings closed and one substantially improved**, across ten commits, each fix carrying a
+**35 findings closed and one substantially improved**, across twelve commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1839 passed** (from 1700), and with
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1842 passed** (from 1700), and with
 the docker backends up the integration suite passes too.
 
 | Commit | Closes |
@@ -46,6 +46,7 @@ the docker backends up the integration suite passes too.
 | `2578fc8` `without()` refuses a name the model does not have | 19 |
 | `fe01ae7` a dialect name claimed twice says so | 14 |
 | `6e196cf` an empty argument list keeps the caret it opened | U1 |
+| `6424ce6` quote a name this engine could not read back | 7 |
 
 ### Measurement changed three of the six decisions
 
@@ -66,7 +67,6 @@ not a formality:
 
 | # | Finding | Why it is still here |
 | --- | --- | --- |
-| 7 | Postgres leaves ~13k BMP code points unquoted | The last real correctness bug. The fix is a narrower character class, but it changes what every non-ASCII name inserts as, so it wants its own change and its own round-trip corpus. |
 | 11 | Capability detection differs on 3.10 vs 3.12 | Left deliberately. Matching 3.12 means `inspect.getattr_static`, which stops seeing `classmethod` capabilities that work today — a live regression traded for a proxy-catalog edge case. |
 | 20 | Markers rewritten inside strings and comments | Latent; no shipped query trips it. Needs a real scanner in `render`, not a regex. |
 | 29, 34 | Cubic nesting cost; per-keystroke LSP cost | Constants and caching, not correctness. |
