@@ -1842,6 +1842,14 @@ def _output_of(
         return significant[-1].value, None
 
     if len(significant) == 1 and significant[0].type is TokenType.IDENT:
+        # Guarded like the two branches below it, and for the same reason.
+        # `SELECT NULL` names nothing — Postgres calls the result `?column?` —
+        # but this read `null` as an output name, and `rank` then quoted it
+        # *because* it is reserved, so `"null"` arrived above every real column
+        # with the local-origin bonus behind it. In a CTE it was the only answer,
+        # and the reference it writes does not exist.
+        if not significant[0].quoted and significant[0].value.upper() in dialect.reserved_upper:
+            return None, None
         return significant[0].value, None
 
     if _is_an_implicit_alias(significant, dialect):

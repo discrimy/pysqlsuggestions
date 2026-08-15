@@ -168,3 +168,21 @@ def test_a_zero_marker_is_rejected_rather_than_binding_the_last_value() -> None:
     """
     with pytest.raises(ValueError, match=r'\$0'):
         render('SELECT $0, $1', ('first', 'second'), 'format')
+
+
+def test_a_query_with_no_markers_binds_no_parameters_in_any_style() -> None:
+    """
+    Trino's `SHOW FUNCTIONS` takes none, and three styles bound one anyway.
+
+    `qmark` and `format` build their parameter list from the markers that occur;
+    `numeric` returned every value it was handed and `named`/`pyformat` enumerated
+    them, so all three described a parameter the SQL never asks for. A positional
+    driver rejects that outright — sqlite3 answers `Incorrect number of bindings
+    supplied` — and `trino_http._prepare` already special-cases the same shape,
+    which is the sign the general rule was wrong rather than the query unusual.
+    """
+    functions = TRINO.catalog_queries.functions
+    assert functions is not None
+    for style in ('qmark', 'format', 'numeric', 'named', 'pyformat'):
+        _, parameters = render(functions.sql, ('public',), style)
+        assert not parameters, style

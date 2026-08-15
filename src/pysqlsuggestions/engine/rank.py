@@ -144,7 +144,12 @@ def rank(
         seen.add(key)
         ordered.append(suggestion)
 
-    return ordered[:limit] if limit is not None else ordered
+    # Clamped, because a negative limit is a Python slice from the *end* — it
+    # quietly dropped the last N suggestions instead of the first N, and
+    # `api.complete` forwards `limit * 5` to `resolve`, which ignores a negative
+    # value entirely, so the two layers disagreed about what had happened. Zero
+    # already answers with nothing, which is the boundary this meets.
+    return ordered[: max(limit, 0)] if limit is not None else ordered
 
 
 def expand_snippet(snippet: str) -> tuple[str, tuple[int, ...]]:

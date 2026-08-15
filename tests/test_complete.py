@@ -600,3 +600,35 @@ def test_an_empty_namespace_does_not_empty_the_relation_list() -> None:
     after = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')]
     cold = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, catalog(), identity='analyst')]
     assert after == cold
+
+
+def test_a_bare_reserved_word_is_not_an_output_column() -> None:
+    """
+    `SELECT NULL` names no column; Postgres calls the result `?column?`.
+
+    `_output_of` took any single-token identifier as an output name, where its
+    two neighbouring branches both guard with `reserved_upper` first. So `null`
+    became a select-list name — then `rank` quoted it, *because* it is reserved,
+    and the local-origin bonus put `"null"` above every real column. In a CTE it
+    was the only suggestion offered, and `SELECT c."null"` is an error.
+    """
+    snapshot = MemoryCatalog({('public', 't'): [('id', 'int'), ('name', 'text')]})
+    for word in ('NULL', 'TRUE', 'FALSE', 'CURRENT_USER'):
+        sql = f'SELECT {word} FROM t GROUP BY '
+        assert '"' not in ' '.join(s.text for s in complete(sql, len(sql), POSTGRES, snapshot)), word
+
+    cte = 'WITH c AS (SELECT NULL FROM t) SELECT  FROM c'
+    assert [s.text for s in complete(cte, cte.index('SELECT  FROM c') + 7, POSTGRES, snapshot)] == []
+
+
+def test_a_negative_limit_offers_nothing_rather_than_slicing_from_the_end() -> None:
+    """
+    A negative limit reached `ordered[:limit]` and dropped the *last* N.
+
+    Nothing documents a negative limit, and the two layers disagreed about what
+    had happened: `complete` forwards `limit * 5` to `resolve`, which ignores it.
+    Zero already answers with nothing, so that is the boundary to meet.
+    """
+    snapshot = MemoryCatalog({('public', 'w'): [(f'col{index}', 'int') for index in range(12)]})
+    for limit in (0, -1, -3, -100):
+        assert complete('SELECT  FROM w', 7, POSTGRES, snapshot, limit=limit) == []

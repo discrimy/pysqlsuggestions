@@ -73,13 +73,21 @@ def render(sql: str, values: Sequence[str], paramstyle: str) -> tuple[str, Any]:
         rendered = _MARKER.sub(lambda m: positional(m, token), escaped)
         return rendered, tuple(values[index] for index in order)
 
+    # The three styles below name their parameters, so what they bind comes from
+    # the markers that occur rather than from everything the caller passed.
+    # Returning all of them described a parameter the SQL never asks for —
+    # Trino's `SHOW FUNCTIONS` takes none and got one — which a positional driver
+    # rejects outright. `trino_http._prepare` already special-cased this shape,
+    # which was the sign the general rule was wrong rather than that query odd.
+    wanted = sorted({int(found) for found in _MARKER.findall(sql)})
+
     if paramstyle == 'numeric':
-        return _MARKER.sub(lambda m: f':{m.group(1)}', sql), tuple(values)
+        return _MARKER.sub(lambda m: f':{m.group(1)}', sql), tuple(values[number - 1] for number in wanted)
 
     if paramstyle in ('named', 'pyformat'):
         template = ':p{}' if paramstyle == 'named' else '%(p{})s'
         rendered = _MARKER.sub(lambda m: template.format(m.group(1)), escaped)
-        return rendered, {f'p{index + 1}': value for index, value in enumerate(values)}
+        return rendered, {f'p{number}': values[number - 1] for number in wanted}
 
     message = f'unsupported paramstyle: {paramstyle!r}'
     raise ValueError(message)

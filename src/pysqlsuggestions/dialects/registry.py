@@ -21,7 +21,7 @@ GROUP = 'pysqlsuggestions.dialects'
 
 
 @cache
-def available() -> dict[str, Dialect]:
+def _scan() -> dict[str, Dialect]:
     """
     Every registered dialect, keyed by its entry-point name.
 
@@ -42,6 +42,18 @@ def available() -> dict[str, Dialect]:
         if isinstance(loaded, Dialect):
             found[entry.name] = loaded
     return found
+
+
+def available() -> dict[str, Dialect]:
+    """
+    Every registered dialect, keyed by its entry-point name.
+
+    A copy per call. The scan behind it is cached, and handing that same dict
+    back meant a caller editing what looked like its own mapping poisoned the
+    registry for the whole process — defeating the `isinstance` check above,
+    which is the only thing keeping a non-`Dialect` out of `named`.
+    """
+    return dict(_scan())
 
 
 def named(name: str) -> Dialect | None:

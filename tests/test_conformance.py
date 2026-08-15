@@ -351,3 +351,18 @@ def test_a_catalog_query_wanting_more_values_than_it_gets_is_reported() -> None:
         ),
     )
     assert any('$3' in problem for problem in DialectConformance.structure(broken))
+
+
+def test_the_registry_does_not_hand_out_the_dictionary_it_caches() -> None:
+    """
+    One caller's mutation must not become every later caller's registry.
+
+    `available` is cached, so it returned the same dict object every time and a
+    caller editing what looked like its own copy poisoned the lookup
+    process-wide — defeating the `isinstance` guard that is the only thing
+    keeping a non-Dialect out of `named`.
+    """
+    first = available()
+    first['postgres'] = 'not a dialect at all'  # type: ignore[assignment]
+    assert named('postgres') is POSTGRES
+    assert available()['postgres'] is POSTGRES
