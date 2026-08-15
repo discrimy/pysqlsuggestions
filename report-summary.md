@@ -205,6 +205,26 @@ These are the two that justify the whole exercise. Both passed their own regress
 | `634667c` four the third sweep found in the second sweep's fixes | 3 | `numeric` bounds check, quoted alias, separator vs. suffix order, per-character counter |
 | `5d865a0` three more in the set-operation tail and the qualifier gate | 3 | paren escape, outward clamp, whole-path qualifier |
 | `d465501` a lone surrogate is a column, not a crash | 3 | `UnicodeEncodeError` out of `Session.suggest` |
+| `8fa72e6` two edits at one point are one edit | — | the spec-forbidden coincident range, and the snippet capability |
+
+### The one that was found by being asked
+
+Nothing in the three sweeps caught this; it turned up while answering "are there any critical issues
+left", by checking rather than recalling. At `SELECT ⌶` the column and its FROM clause were **two
+zero-width edits at the same position** — which the specification forbids and which has no defined
+application order, so a client was free to write ` FROM auth_userauth_user.id`. The commonest trigger
+in the library.
+
+It is the residue of finding #4. That fix corrected *which* edit leads; `_split_edits`' own docstring
+still said the other sat at "the identical range, which the specification leaves undefined". The roles
+were swapped and the collision was left.
+
+Worth recording for the second half. Folding the pair into one edit needs `$0` to keep the caret where
+`apply_suggestion` puts it, and that makes the hottest completion in the library a template —
+so a client with `snippetSupport` false (eglot without yasnippet, an ordinary configuration) would have
+had `auth_user.id$0 FROM auth_user` written into its document. **The fix would have guaranteed the
+corruption the bug only risked.** The capability is now read and carried down, and 21 of 21 items in
+that mode reproduce `apply_suggestion` exactly with no placeholder or escape leaking through.
 
 ### The third sweep's differential
 
