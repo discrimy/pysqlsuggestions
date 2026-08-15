@@ -231,3 +231,37 @@ def test_the_two_edits_keep_their_order_when_they_share_an_offset() -> None:
     assert [edit.text for edit in plan.edits] == [' FROM auth_user', 'auth_user.id']
     assert applied(sql, plan) == 'SELECT auth_user.id FROM auth_user'
     assert plan.caret == 19, 'after the column, not after the clause'
+
+
+def test_a_function_taking_arguments_keeps_its_caret_when_blanks_remain() -> None:
+    """
+    The caret goes where typing is needed; the blanks stay reachable.
+
+    `plan_insertion` computes the inside-the-parens caret for a function that
+    takes arguments, and then `if moved and finished` discarded it for the next
+    template blank — so accepting `count` at a statement template's select-list
+    blank left `count()` empty and the caret at the end of the query. In the
+    shipped template the blank it jumped to is the trailing duplicate stop, so
+    it was not even somewhere anything needed writing.
+
+    `more=True` is already set here, for the stated reason that the function
+    "still wants the list open". That only means something if the caret is
+    somewhere completion can carry on from, which end-of-statement is not.
+
+    The blank is not consumed: filling the argument list is not filling it, so
+    it stays in `pending` and the next tab still reaches it.
+    """
+    offered = suggestion('count', Kind.FUNCTION, (7, 7), takes_arguments=True)
+    plan = plan_insertion('SELECT  FROM users AS u', offered, pending=(23,))
+    assert applied('SELECT  FROM users AS u', plan) == 'SELECT count() FROM users AS u'
+    assert plan.caret == 13, 'between the parentheses, not past them'
+    assert plan.pending == (30,), 'the blank is still outstanding, shifted by the insertion'
+    assert plan.expects_more
+
+
+def test_a_function_taking_no_arguments_still_fills_its_blank() -> None:
+    """The rule is about the argument list, not about functions."""
+    offered = suggestion('now', Kind.FUNCTION, (7, 7), takes_arguments=False)
+    plan = plan_insertion('SELECT  FROM users AS u', offered, pending=(23,))
+    assert plan.caret == 28, 'the next blank, since there is nothing to type inside now()'
+    assert plan.pending == ()

@@ -168,9 +168,21 @@ def plan_insertion(
         return Insertion(edits=edits, caret=opened[0], pending=opened[1:], expects_more=True)
 
     moved = tuple(p + len(text) - (end - start) if p >= end else p for p in pending)
-    if moved and finished:
+    if moved and finished and caret is None:
         # Accepting *is* filling that blank, so the caret goes to the next one.
         return Insertion(edits=edits, caret=moved[0], pending=moved[1:], expects_more=True)
+    if moved and caret is not None:
+        # Except when this insertion opened somewhere of its own to type. An
+        # empty argument list is the only such place, and it wins: the caret
+        # belongs where the next character goes, which is what `more` above
+        # already claims for this case — a claim that means nothing if the caret
+        # has been sent to the end of the statement instead, which is exactly
+        # where the shipped template's trailing stop put it.
+        #
+        # The blank is *not* consumed. Writing an argument is not filling the
+        # select-list blank the function was offered for, so it stays pending
+        # and the next tab still reaches it.
+        return Insertion(edits=edits, caret=caret, pending=moved, expects_more=True)
     return Insertion(
         edits=edits,
         caret=caret if caret is not None else default,
