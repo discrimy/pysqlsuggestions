@@ -246,12 +246,49 @@ statements no commit touched (`UPDATE`, `DELETE`, `MERGE`, `GRANT`, plain `SELEC
 INSERT excluded) leaves 17,000 differences, **all** attributable to one of the ten known causes and 97%
 of them the insertion-separator path. Nothing at those positions is unexplained.
 
-### Still open after the third sweep
+### Still open — the whole list, worst first
 
-| Finding | Why it is still here |
-| --- | --- |
-| `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE` are offered in a set operation's tail, which Postgres refuses (`FOR UPDATE is not allowed with UNION/INTERSECT/EXCEPT`) | Not the one-line filter it looks like, and the obvious version is *tested* to be wrong. The tail keeps `Kind.KEYWORD`, and the natural rule — drop keywords that name a clause outside `_SET_OPERATION_TAIL` — also deletes `USING`, because `USING` is a clause name (a join condition) **and** legal ORDER BY vocabulary (`ORDER BY x USING <`). Telling those apart means the clause model distinguishing "continues this clause" from "opens a new one", which it does not currently express. A real design change, and one that would need its own audit round. |
-| `INSERT INTO t (⌶) (SELECT …)` still leaks the source's columns | The INSERT narrowing scans for the source at base depth, so a *parenthesised* source is not detected. Same shape as the fixed case, one nesting level down. |
+Nothing here is a blocker. There is **no known crash and no known silently-wrong SQL**, which is the
+class this library cares most about; the differential's 1,266,984 triples found zero raise-splits in
+either direction. What is left is suggestions a server refuses loudly, performance on inputs larger
+than the documented budget, and things outside the library.
+
+| # | Open | Cost when it fires | Where |
+| --- | --- | --- | --- |
+| O1 | ~~`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE` offered in a set operation's tail~~ | ~~server refuses the statement~~ | **fixed — `1a1a5ac`** |
+| O2 | `INSERT INTO t (⌶) (SELECT …)` leaks the source's columns | wrong names offered; server refuses on accept | `analyse._around_an_insert_target` |
+| O3 | The server re-lexes the whole document on every keystroke | 90 ms on a 15.8 KB statement, 10 s on 10 MB | `lsp/documents.py` (finding 34) |
+| O4 | A run of *bare* unclosed parens is cleanly quadratic | ~4 s at 8,000 parens; 3.9× per doubling | `analyse.clause_at` (finding 17, part) |
+| O5 | `CONNECT_TIMEOUT` bounds the whole socket, not the connect | a slow but working database is cut off mid-read | `lsp/connections.py` |
+| O6 | Join proposals: two-FK dedupe, and reverse edges across schemas | a duplicate or a missing proposal | `engine/joins.py` |
+| O7 | `time`/`interval` value families, and `CAST(x AS t)` narrowing | fewer suggestions than the type allows | `resolve.py` |
+| O8 | Demo and build: `pending` unvalidated, paramstyle drift, no 20k cap in the browser build, `build_pages` picks a wheel lexicographically | not the library | `demo/`, `scripts/` |
+
+Two of these are worth a sentence each on *why* they are the shape they are. **O3 is not a caching
+problem**, which matters because it reads like one: the document changes with every keystroke, so a
+content-keyed cache never hits. Fixing it means lexing incrementally against `didChange` ranges. **O4
+is a different mechanism from the hash fix that closed the rest of finding 17** — `clause_at` widens
+outward once per paren depth, calling two O(n) helpers each time — and it is a far less realistic input
+than the nested subqueries that were fixed, which is why it was left.
+
+### A reason that did not survive being tested, again
+
+O1 sat open for one paragraph with a stated reason: that suppressing it would also delete `USING`,
+since `USING` is both a clause name and legal `ORDER BY` vocabulary (`ORDER BY x USING <`), and the
+clause model could not tell the two apart. **The model already tells them apart.**
+`ClauseModel.continuations` builds its answer from two sources and excludes from the second anything
+already in the first:
+
+```python
+derived = tuple(
+    other.name for other in self.clauses if name in other.follows and other.name not in clause.followed_by
+)
+```
+
+So `USING` arrives as `ORDER BY`'s own `followed_by` and `FOR UPDATE` only as a derived clause — which
+is exactly the distinction the fix needs. This is the second time in this campaign a finding was held
+open by a reason that was wrong rather than by the work (finding 11 was the first), and both times only
+reading the code again showed it.
 
 Verdicts: **verified** (reproduced independently, and not blessed by an existing test or by
 `docs/gaps.md`), **false** (does not reproduce, or is refused by design), **unsure** (reproduces, but

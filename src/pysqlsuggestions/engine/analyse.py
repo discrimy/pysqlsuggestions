@@ -1224,7 +1224,7 @@ def _branch_at(tokens: Sequence[Token], lo: int, hi: int, caret: int) -> tuple[i
     return start, hi
 
 
-_SET_OPERATION_TAIL = frozenset({'ORDER BY', 'LIMIT', 'OFFSET', 'FETCH'})
+SET_OPERATION_TAIL = frozenset({'ORDER BY', 'LIMIT', 'OFFSET', 'FETCH'})
 """
 Clauses written after the last branch that govern the whole set operation.
 
@@ -1280,7 +1280,7 @@ def in_set_operation_tail(
         if token.type in _SKIP or token.depth != base:
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
-        if matched is not None and matched[0] in _SET_OPERATION_TAIL:
+        if matched is not None and matched[0] in SET_OPERATION_TAIL:
             # Past the clause's own keyword, not from where it starts. A caret on
             # the `O` of ORDER, or between its letters, is completing that word —
             # and blanking it there left `ORDER B⌶Y` unable to finish itself.

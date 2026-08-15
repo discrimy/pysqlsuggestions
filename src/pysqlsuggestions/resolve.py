@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
+from pysqlsuggestions.engine.analyse import SET_OPERATION_TAIL
 from pysqlsuggestions.engine.rank import MAX_POSITION_PENALTY, quote_if_needed
 from pysqlsuggestions.ports import (
     Cache,
@@ -704,12 +705,16 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         ]
     if clause is not None:
         words = _unspent_alias(
-            _only_where_an_item_begins(
-                _unchosen(
-                    dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
-                    request.item_words,
+            _governs_a_set_operation(
+                _only_where_an_item_begins(
+                    _unchosen(
+                        dialect.clauses.continuations(clause.name, statement=request.statement, used=request.written),
+                        request.item_words,
+                    ),
+                    dialect,
+                    request,
                 ),
-                dialect,
+                clause,
                 request,
             ),
             clause,
@@ -730,6 +735,28 @@ def _keywords(request: Request, reader: _Reader, dialect: Dialect) -> list[Candi
         Candidate(text=word, kind=Kind.KEYWORD, detail=description or None, origin='keyword')
         for word, description in reader.keywords()
     ]
+
+
+def _governs_a_set_operation(words: tuple[str, ...], clause: Clause, request: Request) -> tuple[str, ...]:
+    """
+    In a set operation's tail, drop the words that would open a forbidden clause.
+
+    Four clauses govern the whole operation — `ORDER BY`, `LIMIT`, `OFFSET`,
+    `FETCH` — and the tail is written for them. Anything else reached from one of
+    them belongs to the ordinary query it also continues: `FOR UPDATE` is legal
+    after a plain `ORDER BY` and Postgres answers `FOR UPDATE is not allowed with
+    UNION/INTERSECT/EXCEPT` for the statement this would have written.
+
+    `USING` is why this cannot simply drop words that name a clause. It names one
+    — a join condition — and is also `ORDER BY`'s own vocabulary, so
+    `ORDER BY id USING <` is legal in exactly this position. `followed_by` is the
+    distinction, and `continuations` already draws it: what continues this clause
+    comes from there, and what opens a new one is derived from the rest of the
+    model with anything already in `followed_by` removed.
+    """
+    if not request.set_operation_tail:
+        return words
+    return tuple(word for word in words if word in clause.followed_by or word in SET_OPERATION_TAIL)
 
 
 def _only_where_an_item_begins(words: tuple[str, ...], dialect: Dialect, request: Request) -> tuple[str, ...]:

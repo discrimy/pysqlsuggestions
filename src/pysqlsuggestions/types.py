@@ -352,6 +352,18 @@ class Request:
     A clause that appears once is not offered twice: `SELECT id <caret> FROM t`
     has its FROM, and accepting another gives `FROM FROM t`.
     """
+    set_operation_tail: bool = False
+    """
+    Whether the caret is in the clause a UNION, INTERSECT or EXCEPT ends with.
+
+    Carried rather than re-derived because it decides two things in two layers.
+    Which *names* resolve is settled here — nothing does, since the three
+    backends disagree — but which *keywords* do is settled in `resolve`, where
+    the clause model is, and only these four clauses govern the whole operation:
+    `ORDER BY`, `LIMIT`, `OFFSET`, `FETCH`. A clause reached from one of them is
+    a continuation of an ordinary query, and `FOR UPDATE` is the one that bites —
+    legal after a plain `ORDER BY`, refused outright after a set operation.
+    """
     keyword_case: Literal['lower', 'upper'] | None = None
     """
     How the author has been writing keywords, from the last one they typed.

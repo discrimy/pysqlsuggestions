@@ -129,7 +129,8 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         + _values_first(comparand, expecting, qualifier)
         + _kinds_for(clause, qualifier, scope, dialect, expecting, depth_at(tokens, caret) > 0),
     )
-    if in_set_operation_tail(tokens, lo, hi, caret, dialect):
+    tail = in_set_operation_tail(tokens, lo, hi, caret, dialect)
+    if tail:
         # Names only. Which *column* resolves against a set operation's result is
         # what the three backends disagree about — Postgres and Trino bind the
         # tail to the result, ClickHouse to the last branch, and it then does not
@@ -163,6 +164,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
         item_words=words_in_item(tokens, caret, dialect),
         statement=statement_form(tokens, lo, hi, caret, dialect),
         written=clauses_written(tokens, lo, hi, caret, dialect),
+        set_operation_tail=tail,
         keyword_case=_keyword_case(tokens, caret, dialect),
         star=star_span(tokens, star) if star is not None else None,
         star_of=star_of,

@@ -192,3 +192,36 @@ def test_the_tail_stays_suppressed_inside_parentheses() -> None:
     for tail in ('abs()', '(SELECT )'):
         sql = f'{head}{tail}'
         assert complete(sql, len(sql) - 1, POSTGRES, catalog) == [], tail
+
+
+def test_the_tail_does_not_open_a_clause_the_set_operation_forbids() -> None:
+    """
+    Restoring the tail's keywords restored four that do not belong to it.
+
+    `ORDER BY`, `LIMIT`, `OFFSET` and `FETCH` govern the whole set operation and
+    are what the tail is for. `FOR UPDATE` and its three siblings are not: they
+    are ordinary continuations of `ORDER BY` in a plain query, and Postgres
+    answers `FOR UPDATE is not allowed with UNION/INTERSECT/EXCEPT` for the
+    statement this offered to write.
+
+    `USING` is the reason this cannot be "drop words that name a clause". It
+    names one — a join condition — and is *also* `ORDER BY`'s own vocabulary, so
+    `... ORDER BY id USING <` is legal here and the naive filter deletes it.
+    `continuations` already separates the two: `followed_by` is what continues
+    this clause, and the derived list, which excludes anything already in it, is
+    what opens a new one.
+    """
+    catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint')], ('public', 'orders'): [('id', 'bigint')]})
+    sql = 'SELECT id FROM users UNION SELECT id FROM orders ORDER BY id '
+    offered = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=40)]
+    for refused in ('FOR UPDATE', 'FOR NO KEY UPDATE', 'FOR SHARE', 'FOR KEY SHARE'):
+        assert refused not in offered, offered
+    for kept in ('USING', 'DESC', 'NULLS LAST', 'LIMIT', 'OFFSET', 'FETCH'):
+        assert kept in offered, (kept, offered)
+
+
+def test_a_plain_query_still_offers_the_locking_clauses() -> None:
+    """The suppression is about the set operation, not about `FOR UPDATE`."""
+    catalog = MemoryCatalog({('public', 'users'): [('id', 'bigint')]})
+    sql = 'SELECT id FROM users ORDER BY id '
+    assert 'FOR UPDATE' in [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=40)]
