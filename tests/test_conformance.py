@@ -18,6 +18,7 @@ import pytest
 
 from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
+from pysqlsuggestions.dialects import registry
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import (
     Clause,
@@ -366,3 +367,63 @@ def test_the_registry_does_not_hand_out_the_dictionary_it_caches() -> None:
     first['postgres'] = 'not a dialect at all'  # type: ignore[assignment]
     assert named('postgres') is POSTGRES
     assert available()['postgres'] is POSTGRES
+
+
+class _FakeDistribution:
+    """Just the attribute the registry reads off a real one."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeEntry:
+    """An entry point, as `importlib.metadata` hands them over."""
+
+    def __init__(self, name: str, dialect: Dialect, distribution: str) -> None:
+        self.name = name
+        self.dist = _FakeDistribution(distribution)
+        self._dialect = dialect
+
+    def load(self) -> Dialect:
+        """The registered object."""
+        return self._dialect
+
+
+def test_a_plugin_overriding_a_built_in_dialect_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Overriding stays possible — a fork, or a fix ahead of a release — but audibly.
+
+    The four built-ins register through the same entry-point group as anyone
+    else, so they carry no privilege and the winner was whichever distribution
+    `importlib.metadata` enumerated last. That is not a documented order. It
+    matters because `lsp/connections.py` resolves the dialect by name and hands
+    it to `DbapiCatalog`, so the winner's introspection SQL is what reaches the
+    user's database.
+    """
+    shadow = replace(POSTGRES, name='shadow-of-postgres')
+    entries = [
+        _FakeEntry('postgres', POSTGRES, 'pysqlsuggestions'),
+        _FakeEntry('postgres', shadow, 'somebody-elses-package'),
+    ]
+    monkeypatch.setattr(registry, 'entry_points', lambda group: entries)
+    registry._scan.cache_clear()
+    try:
+        with pytest.warns(UserWarning, match='somebody-elses-package'):
+            found = registry.named('postgres')
+        assert found is shadow, 'the plugin still wins; only the silence is fixed'
+    finally:
+        registry._scan.cache_clear()
+
+
+def test_two_plugins_claiming_one_name_also_say_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same collision without a built-in involved, which was equally silent."""
+    first = replace(POSTGRES, name='first')
+    second = replace(POSTGRES, name='second')
+    entries = [_FakeEntry('duckdb', first, 'pkg-a'), _FakeEntry('duckdb', second, 'pkg-b')]
+    monkeypatch.setattr(registry, 'entry_points', lambda group: entries)
+    registry._scan.cache_clear()
+    try:
+        with pytest.warns(UserWarning, match='pkg-b'):
+            assert registry.named('duckdb') is second
+    finally:
+        registry._scan.cache_clear()
