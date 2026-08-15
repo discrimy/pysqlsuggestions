@@ -11,6 +11,10 @@ end and still green. The repo source was never modified; agents wrote only to sc
 
 **Status: complete. All 8 agents reported — 37 verified, 2 unsure, 0 false.**
 
+Two further sweeps then audited the *fixes* rather than the library, finding 18 and 12 more defects
+respectively — see [The fixes were then audited twice](#the-fixes-were-then-audited-twice). Everything
+below this line is the first sweep.
+
 The eighth was a high-volume differential fuzzer: **≈1,566,800 distinct (sql, caret, dialect) triples**
 plus an `apply_suggestion` and a re-entrant `complete()` per suggestion. Five of its seven harnesses —
 caret sweeps, mutation, grammar generation, four-dialect differential, output invariants — found
@@ -26,12 +30,12 @@ resource use.
 
 ---
 
-## Fixed so far — branch `fix/qa-sweep-quick-wins`
+## Fixed — merged to `main`
 
 **39 findings closed and one substantially improved**, across sixteen commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1851 passed** (from 1700), and with
-the docker backends up the integration suite passes too.
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1857 passed** (from 1700) once the two
+later sweeps' fixes are counted, and with the docker backends up the integration suite passes too.
 
 | Commit | Closes |
 | --- | --- |
@@ -146,6 +150,81 @@ less than it appeared to, and only re-running the untouched repro caught it.
    tables) has no affordable regression test: the shape recurses only about one frame per level, so
    reaching the stack limit needs depth ~1000, and even after the hash fix that is tens of seconds. It
    is protected by the same `remaining` guard the nested-CTE test exercises, but not directly pinned.
+
+---
+
+## The fixes were then audited twice
+
+The first sweep audited the library. Two further sweeps audited **the fixes** — same standing
+instruction (read-only, minimise to a runnable repro), same independent re-validation before anything
+was recorded here.
+
+| Sweep | Agents | Defects found | In |
+| --- | --- | --- | --- |
+| First | 8 | 39 | the library |
+| Second | 8 | 18 | the first sweep's fixes |
+| Third | 5 | 12 | the second sweep's fixes |
+
+The rate is falling and has **not** converged. That, rather than any single entry, is the result worth
+recording: a fix is not evidence of correctness, and each round found defects only reachable because
+the previous round's fix created them.
+
+### Two fixes that were worse than the bug they closed
+
+These are the two that justify the whole exercise. Both passed their own regression test.
+
+1. **Quoting the generated join alias.** The bare form was a syntax error — `public.order_note on ON …`
+   — so the fix quoted it. `"on"` parses, and this engine then re-reads it as the AS keyword plus a
+   relation named `on`, putting a **phantom relation** into scope for every later completion in that
+   statement. A loud failure became a silent one. Now the alias is chosen from words the dialect does
+   not reserve, so there is nothing to quote (`634667c`).
+2. **Letting the set-operation guard step aside for parentheses.** The stated reason was that a
+   subquery written in the tail is an ordinary query with its own FROM. **The premise was false** —
+   Postgres refuses an expression there at all (`invalid UNION/INTERSECT/EXCEPT ORDER BY clause`),
+   subquery included — and `depth_at` is true of *any* group, so `ORDER BY abs(⌶)` went back to
+   offering the last branch's columns: exactly what the guard exists to refuse, and what ClickHouse
+   accepts and then silently mis-sorts. Escape removed; my own test that asserted the false premise was
+   rewritten to record what the server actually says (`5d865a0`).
+
+### The commits
+
+| Commit | Sweep | Closes |
+| --- | --- | --- |
+| `6e155cb` nine defects a second sweep found in the first one's fixes | 2 | select-list clamp, tail keywords, `render` markers, capability guard, qualifier gate |
+| `b64771a` bound the memo, key it on the dialect, stop halving the nesting budget | 2 | unbounded memo, cross-dialect key, nesting spent on both legs |
+| `2d711dc` six the second sweep found outside the code it audited | 2 | insertion separator, malformed FK edges, alias generation |
+| `35faeca` three more, and one place the answer is that there is no answer | 2 | INSERT column list, `_snippet` stop order, clause-found clamp |
+| `83e5007` measure the column in the encoding the client actually asked for | 2 | LSP position encoding |
+| `634667c` four the third sweep found in the second sweep's fixes | 3 | `numeric` bounds check, quoted alias, separator vs. suffix order, per-character counter |
+| `5d865a0` three more in the set-operation tail and the qualifier gate | 3 | paren escape, outward clamp, whole-path qualifier |
+| `d465501` a lone surrogate is a column, not a crash | 3 | `UnicodeEncodeError` out of `Session.suggest` |
+
+### The third sweep's differential
+
+A single agent re-ran **1,266,984 (sql, caret, dialect) triples** across the eight fix commits —
+`derive_request`, the whole ranked list order-sensitively, and `apply_suggestion` + `plan_insertion` of
+the top suggestion — attributing each difference to the commit that caused it. **171,328 differed
+(13.5%)**, resolving to 20 groups:
+
+| | |
+| --- | --- |
+| Intended | 14 |
+| Collateral (unmentioned, defensible or cosmetic) | 3 |
+| **Regression** | **3** |
+| Inputs where one revision raised and the other did not | **0**, in either direction |
+
+All three regressions — the quoted alias, `numeric` losing its bounds check, and
+`UnicodeEncodeError` on a lone surrogate — are now closed. Its most useful negative: filtering to
+statements no commit touched (`UPDATE`, `DELETE`, `MERGE`, `GRANT`, plain `SELECT`, set operations and
+INSERT excluded) leaves 17,000 differences, **all** attributable to one of the ten known causes and 97%
+of them the insertion-separator path. Nothing at those positions is unexplained.
+
+### Still open after the third sweep
+
+| Finding | Why it is still here |
+| --- | --- |
+| `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE` are offered in a set operation's tail, which Postgres refuses (`FOR UPDATE is not allowed with UNION/INTERSECT/EXCEPT`) | Not the one-line filter it looks like, and the obvious version is *tested* to be wrong. The tail keeps `Kind.KEYWORD`, and the natural rule — drop keywords that name a clause outside `_SET_OPERATION_TAIL` — also deletes `USING`, because `USING` is a clause name (a join condition) **and** legal ORDER BY vocabulary (`ORDER BY x USING <`). Telling those apart means the clause model distinguishing "continues this clause" from "opens a new one", which it does not currently express. A real design change, and one that would need its own audit round. |
+| `INSERT INTO t (⌶) (SELECT …)` still leaks the source's columns | The INSERT narrowing scans for the source at base depth, so a *parenthesised* source is not detected. Same shape as the fixed case, one nesting level down. |
 
 Verdicts: **verified** (reproduced independently, and not blessed by an existing test or by
 `docs/gaps.md`), **false** (does not reproduce, or is refused by design), **unsure** (reproduces, but
