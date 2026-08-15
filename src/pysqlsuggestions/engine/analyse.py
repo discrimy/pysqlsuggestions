@@ -18,6 +18,15 @@ from pysqlsuggestions.types import Projection, Relation, Scope
 
 _Answer = TypeVar('_Answer')
 
+_MEMO_LIMIT = 20_000
+"""
+How many answers one token stream will remember.
+
+Well above what the shapes this exists for ask — a query nested three hundred
+deep stores a few thousand — and far below the quadratic families a long
+comma-separated relation list opens. Reached, the walk simply computes.
+"""
+
 _SKIP = (TokenType.WHITESPACE, TokenType.COMMENT)
 _RELATION_CLAUSES = frozenset({'FROM', 'JOIN', 'UPDATE', 'DELETE FROM', 'INSERT INTO', 'TABLE'})
 """
@@ -1385,7 +1394,15 @@ def _relations_in(
     dialect: Dialect,
 ) -> tuple[Relation, ...]:
     """Every table reference introduced between `lo` and `hi`."""
-    return _remembered(tokens, ('relations', lo, hi, caret), lambda: _scan_relations_in(tokens, lo, hi, caret, dialect))
+    return _remembered(
+        tokens,
+        # `dialect` too: this scan reads its clauses and reserved words, unlike
+        # the other three, so two dialects over one stream would otherwise get
+        # each other's answer. Not reachable while every `lex` call serves a
+        # single dialect — but reusing a stream is the next thing anyone tries.
+        ('relations', lo, hi, caret, dialect.name),
+        lambda: _scan_relations_in(tokens, lo, hi, caret, dialect),
+    )
 
 
 def _scan_relations_in(
@@ -1693,7 +1710,16 @@ def _remembered(tokens: Sequence[Token], key: object, produce: Callable[[], _Ans
     if memo is None:
         return produce()
     if key not in memo:
-        memo[key] = produce()
+        fresh = produce()
+        # Bounded. `_inside_a_relation_list` scans back to each comma, so it asks
+        # with `hi` set to that comma, and a long comma-separated relation list
+        # opens one family of keys per comma — 323,207 entries and 41 MiB for
+        # 6.7 KB of SQL, where the memo was also *slower* than not memoising.
+        # The key cannot drop `hi`, since what it truncates is real; past this
+        # many entries the walk is not the shape this was built for.
+        if len(memo) >= _MEMO_LIMIT:
+            return fresh
+        memo[key] = fresh
     answer: _Answer = memo[key]  # type: ignore[assignment]
     return answer
 
@@ -2172,7 +2198,11 @@ def _read_ctes(
         projection = (
             Projection(columns=declared)
             if declared
-            else select_outputs(tokens, body_lo, body_hi, dialect, ctes, remaining - 1)
+            # `remaining` unchanged, not decremented: this and `select_outputs`
+            # are two halves of one nesting level, and spending the budget on
+            # both legs halved it — truncating a CTE chain at 32 levels where
+            # the stack it guards only gives out near 490.
+            else select_outputs(tokens, body_lo, body_hi, dialect, ctes, remaining)
         )
         visible.append(((body_lo, body_hi), (*ctes, *((name,) if recursive else ()))))
         ctes[name] = Relation(alias=None, path=(name,), source='cte', projection=projection)

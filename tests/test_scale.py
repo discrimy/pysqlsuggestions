@@ -8,8 +8,10 @@ the shape of the cost, not a benchmark figure.
 
 from __future__ import annotations
 
+import gc
 import sys
 import time
+import tracemalloc
 
 from pysqlsuggestions.api import complete, derive_request
 from pysqlsuggestions.dialects.postgres import POSTGRES
@@ -140,3 +142,30 @@ def test_deeply_nested_derived_tables_stay_interactive() -> None:
     started = time.perf_counter()
     derive_request(sql, sql.index('u.') + 2, POSTGRES)
     assert time.perf_counter() - started < _BUDGET_SECONDS
+
+
+def test_the_memo_does_not_grow_with_the_square_of_a_relation_list() -> None:
+    """
+    A memo whose keys outnumber the tokens is a memory cost, not a saving.
+
+    `_inside_a_relation_list` scans back to each comma, so it asks
+    `_clause_starting_at` with `hi` set to that comma — and a list of k
+    comma-separated derived tables therefore opens k families of keys over k
+    indices. At k=400 that was 323,207 entries and 41 MiB of peak for 6.7 KB of
+    SQL, and the memo was *slower* there than not memoising at all: half of every
+    ask was a miss that cost a permanent entry.
+
+    A bound rather than a smarter key: what `hi` truncates is real, so the key
+    cannot drop it, and past a few thousand entries the walk is not the shape
+    this was built for anyway.
+    """
+    sql = 'SELECT * FROM ' + ', '.join(f'(SELECT 1) a{index}' for index in range(400)) + ' WHERE '
+    gc.collect()
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    try:
+        derive_request(sql, len(sql), POSTGRES)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 * 1024 * 1024, f'{peak / 1048576:.1f} MiB for {len(sql)} characters'
