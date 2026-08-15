@@ -282,3 +282,19 @@ def test_numeric_binds_positionally_because_that_is_what_the_marker_means() -> N
     functions = TRINO.catalog_queries.functions
     assert functions is not None
     assert render(functions.sql, ('public',), 'numeric')[1] == ()
+
+
+def test_numeric_refuses_a_marker_it_cannot_bind_like_every_other_style() -> None:
+    """
+    Slicing to the highest marker lost the bounds check indexing used to perform.
+
+    The four other styles reach `values[number - 1]` and raise `IndexError` for a
+    marker past the end; `numeric` began slicing instead, so it rendered `:3`
+    against two values and handed the driver a query it could not bind. Postgres
+    answers `bind message supplies 2 parameters, but prepared statement requires
+    3` — which names neither the query nor the marker, and is exactly the opaque
+    diagnosis `$0` was made loud to avoid.
+    """
+    for style in ('qmark', 'format', 'named', 'pyformat', 'numeric'):
+        with pytest.raises(IndexError):
+            render('SELECT $2', ('only',), style)

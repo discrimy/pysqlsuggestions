@@ -55,7 +55,7 @@ from pysqlsuggestions_lsp import __version__
 from pysqlsuggestions_lsp.check import describe
 from pysqlsuggestions_lsp.connections import Connect, Profile, open_catalog
 from pysqlsuggestions_lsp.convert import to_item
-from pysqlsuggestions_lsp.documents import line_starts, statement_at
+from pysqlsuggestions_lsp.documents import UNIT_COUNTERS, line_starts, statement_at
 
 log = logging.getLogger(__name__)
 
@@ -271,7 +271,8 @@ def create_server(connect: Connect | None = None) -> SqlServer:
             return CompletionList(is_incomplete=False, items=[])
         # The codec pygls negotiated, not an assumption: it decodes the caret
         # with this and the range has to be measured with the same one.
-        units = server.workspace.position_codec.client_num_units
+        codec = server.workspace.position_codec
+        units = UNIT_COUNTERS.get(str(codec.encoding), codec.client_num_units)
         return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset, units))
 
     del initialize, completion

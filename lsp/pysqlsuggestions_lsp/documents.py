@@ -71,6 +71,23 @@ class Lines:
     """
 
 
+UNIT_COUNTERS: dict[str, Callable[[str], int]] = {
+    'utf-16': lambda text: len(text.encode('utf-16-le')) // 2,
+    'utf-8': lambda text: len(text.encode('utf-8')),
+    'utf-32': len,
+}
+"""
+How many units of each encoding a stretch of text is, measured in one call.
+
+pygls offers `PositionCodec.client_num_units` for this and it is a per-character
+generator — the shape `to_position` measured at 3.0s against 0.066s and rejected.
+Passing it in cost 42ms per call on a 734 KB line, two seconds of latency for one
+completion, which is the thing the encoding fix was not supposed to reintroduce.
+Anything not named here falls back to the codec, so an encoding pygls grows later
+is correct before it is fast.
+"""
+
+
 def line_starts(text: str, units: Callable[[str], int] | None = None) -> Lines:
     """
     Where each line begins, `[0]` for text with no break in it.

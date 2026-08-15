@@ -193,14 +193,14 @@ def _clause_candidate(
 ) -> Candidate:
     """One whole `JOIN` clause, with an alias that collides with nothing already in scope."""
     source_schema, target_schema, target_table, pairs, direction = link
-    alias = _free_alias(target_table, taken)
+    alias = _free_alias(target_table, taken, dialect)
     reference = _reference(source[0], source_schema, target_schema, target_table, dialect)
     condition = _condition(relation.label, alias, pairs, dialect)
     # Quoted like the three identifiers around it. `_condition` already spells
     # the alias through `quote_if_needed`, and this slot did not — so a table
     # whose initials make a reserved word produced `order_note on ON r.x =
     # "on".id`, which is a syntax error and disagrees with itself besides.
-    snippet = f'{reference} {quote_if_needed(alias, dialect)} ON {condition}'
+    snippet = f'{reference} {alias} ON {condition}'
     withheld = (target_schema, target_table) in restricted
     return Candidate(
         text=snippet,
@@ -245,7 +245,7 @@ def _condition(left: str, right: str, pairs: tuple[tuple[str, str], ...], dialec
     )
 
 
-def _free_alias(name: str, taken: set[str]) -> str:
+def _free_alias(name: str, taken: set[str], dialect: Dialect) -> str:
     """
     The first idiomatic alias nothing in scope answers to.
 
@@ -253,11 +253,16 @@ def _free_alias(name: str, taken: set[str]) -> str:
     to the same target both need — `auth_user au` written twice would leave a
     statement where neither reference resolves.
     """
-    forms = alias_forms(name)
+    # A reserved word is skipped rather than quoted. Quoting it produces SQL the
+    # server accepts and this engine cannot read back: `account_status "as" ON
+    # ...` re-analyses as the AS keyword plus a relation called `on`, so every
+    # suggestion after it is scoped to a statement nobody wrote. That is worse
+    # than the bare form's loud syntax error, which is what quoting replaced.
+    forms = [form for form in alias_forms(name) if form.lower() not in dialect.reserved]
     for form in forms:
         if form.lower() not in taken:
             return form
-    stem = forms[0] if forms else name[:1].lower()
+    stem = forms[0] if forms else ''.join(c for c in name[:3].lower() if c.isalnum()) or 't'
     suffix = 2
     while f'{stem}{suffix}' in taken:
         suffix += 1

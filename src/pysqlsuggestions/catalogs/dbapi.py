@@ -141,6 +141,15 @@ def render(sql: str, values: Sequence[str], paramstyle: str, syntax: Syntax | No
 
     if paramstyle in ('qmark', 'format'):
         return rendered, tuple(values[index] for index in order)
+    if wanted and max(wanted) > len(values):
+        # The bounds check the four keyed styles get for free from
+        # `values[number - 1]`, which `numeric`'s slice does not perform. Without
+        # it a marker past the end rendered happily and the driver was handed a
+        # query it could not bind, diagnosed by the server as a parameter count
+        # naming neither the query nor the marker.
+        message = f'no value for ${max(wanted)}: {len(values)} supplied'
+        raise IndexError(message)
+
     if paramstyle == 'numeric':
         # `:N` indexes the sequence, so this one cannot be compacted the way the
         # two keyed styles are: `:3` goes on meaning "the third value" however

@@ -124,7 +124,7 @@ def plan_insertion(
     a catalog where a relation belongs — keeps its place.
     """
     start, end = suggestion.replace_span
-    text = _separated(sql, start, end, suggestion.text)
+    text = _led_in(sql, start, end, suggestion.text)
     tail = sql[end:]
     caret: int | None = None
 
@@ -156,6 +156,12 @@ def plan_insertion(
             caret = start + len(text) + 1
         else:
             text += '.'
+
+    # After the kind-specific suffixes, not before them. A schema appends its
+    # own dot and a function its parentheses, and neither fuses with what
+    # follows — checking first added a separator they were about to make
+    # unnecessary, writing `FROM public .orders` and `SELECT lower ()x`.
+    text = _led_out(sql, start, end, text)
 
     here = Edit(span=(start, end), text=text)
     later = _relation_edit(sql, suggestion, dialect)
@@ -234,7 +240,7 @@ def apply_suggestion(
     return sql, plan.caret
 
 
-def _separated(sql: str, start: int, end: int, text: str) -> str:
+def _led_in(sql: str, start: int, end: int, text: str) -> str:
     """
     A leading space when butting `text` against the character before it would
     merge two tokens into one.
@@ -245,18 +251,23 @@ def _separated(sql: str, start: int, end: int, text: str) -> str:
     junk after a numeric literal. A span that *does* cover something ends where
     its own token ends, and a dot, a paren or a space already separates.
     """
-    if start != end or not text:
+    if start != end or not text or not start:
         return text
-    if start and _fuses(sql[start - 1], text[0]):
-        text = f' {text}'
-    if end < len(sql) and _fuses(text[-1], sql[end]):
-        # The same rule read forwards, which it was not. A caret before an
-        # existing word is how a column gets added to a statement already
-        # written — click after `id`, type a comma, ask — and accepting there
-        # spliced into the next word: `SELECT id ASFROM flight`, which the
-        # server refuses just as it refuses `1AND`.
-        text = f'{text} '
-    return text
+    return f' {text}' if _fuses(sql[start - 1], text[0]) else text
+
+
+def _led_out(sql: str, start: int, end: int, text: str) -> str:
+    """
+    The same rule read forwards, which it was not.
+
+    A caret in front of an existing word is how a column gets added to a
+    statement already written — click after `id`, type a comma, ask — and
+    accepting there spliced into the next word: `SELECT id ASFROM flight`, which
+    the server refuses just as it refuses `1AND`.
+    """
+    if start != end or not text or end >= len(sql):
+        return text
+    return f'{text} ' if _fuses(text[-1], sql[end]) else text
 
 
 _CLOSES_A_NAME = '_$"`\''
