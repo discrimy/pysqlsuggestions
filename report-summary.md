@@ -163,7 +163,14 @@ was recorded here.
 | --- | --- | --- | --- |
 | First | 8 | 39 | the library |
 | Second | 8 | 18 | the first sweep's fixes |
-| Third | 5 | 12 | the second sweep's fixes |
+| Third | 5 (4 reported) | 12 | the second sweep's fixes |
+
+The third sweep's fifth agent — the memo bound and the nesting budget, `b64771a` — was stopped before
+it reported. That commit was not left unexamined: the differential below covers it directly, and
+returns the strongest negative in the campaign. It produces **zero** differences across all 1,266,984
+triples, checked triple-by-triple, so neither the bound nor the dialect-keyed memo changes an answer
+anywhere; and the nesting fix is pinned behaviourally — depth 32 answered before, 33 through 64 answer
+only after, 65+ is quiet at both, and depth 600 stays bounded at 1.6× the wall time.
 
 The rate is falling and has **not** converged. That, rather than any single entry, is the result worth
 recording: a fix is not evidence of correctness, and each round found defects only reachable because
