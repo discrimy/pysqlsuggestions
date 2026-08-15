@@ -255,7 +255,7 @@ than the documented budget, and things outside the library.
 
 | # | Open | Cost when it fires | Where |
 | --- | --- | --- | --- |
-| O1 | ~~`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE` offered in a set operation's tail~~ | ~~server refuses the statement~~ | **fixed — `1a1a5ac`** |
+| O1 | ~~`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE` offered in a set operation's tail~~ | ~~server refuses the statement~~ | **fixed — `0f78223`** |
 | O2 | `INSERT INTO t (⌶) (SELECT …)` leaks the source's columns | wrong names offered; server refuses on accept | `analyse._around_an_insert_target` |
 | O3 | The server re-lexes the whole document on every keystroke | 90 ms on a 15.8 KB statement, 10 s on 10 MB | `lsp/documents.py` (finding 34) |
 | O4 | A run of *bare* unclosed parens is cleanly quadratic | ~4 s at 8,000 parens; 3.9× per doubling | `analyse.clause_at` (finding 17, part) |
