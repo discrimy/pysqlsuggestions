@@ -201,6 +201,19 @@ def _scan_body(src: str, pos: int, body: str) -> int:
     return i
 
 
+def _placeholder_openers(syntax: Syntax) -> tuple[Placeholder, ...]:
+    """
+    The declared placeholders that can actually begin one.
+
+    An empty `opens` matches at every position and consumes nothing, so the
+    scanner emitted a zero-width token and left `pos` where it was — a total
+    function that never returns, which is worse than one that raises. Dropped
+    here rather than guarded at the call site because a placeholder that opens
+    with nothing is not a placeholder; `DialectConformance.structure` reports it.
+    """
+    return tuple(placeholder for placeholder in syntax.placeholders if placeholder.opens)
+
+
 def _scan_placeholder(src: str, pos: int, syntax: Syntax) -> tuple[int, bool] | None:
     """
     Scan a bound parameter at `pos`. Returns (end, terminated), or None for no match.
@@ -215,7 +228,7 @@ def _scan_placeholder(src: str, pos: int, syntax: Syntax) -> tuple[int, bool] | 
     the difference between `= ?<caret>`, which wants a connective, and
     `= :us<caret>`, which wants nothing at all.
     """
-    for placeholder in sorted(syntax.placeholders, key=_opener_length, reverse=True):
+    for placeholder in sorted(_placeholder_openers(syntax), key=_opener_length, reverse=True):
         if not src.startswith(placeholder.opens, pos):
             continue
         start = pos + len(placeholder.opens)

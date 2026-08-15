@@ -911,6 +911,12 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
                 position=index,
                 origin='catalog',
                 literal=True,
+                # Matched against the value as it reads, not as it is written.
+                # The prefix arrives un-doubled — `'o''b` is read back as `o'b` —
+                # while `text` is the doubled, quoted form it will be inserted
+                # as, so comparing the two dropped the suggestion the engine had
+                # just offered the moment its quote was typed.
+                match_text=value.text,
             )
             for index, value in enumerate(values)
         ]

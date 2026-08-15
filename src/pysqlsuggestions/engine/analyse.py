@@ -1556,7 +1556,14 @@ def _by_first_word(clauses: ClauseModel) -> dict[str, tuple[str, ...]]:
     """Clause names grouped by their first word, longest first so `GROUP BY` beats `GROUP`."""
     grouped: dict[str, list[str]] = {}
     for name in clauses.names():
-        grouped.setdefault(name.split()[0], []).append(name)
+        # A name with no words in it has no first word, and `split()[0]` raised
+        # rather than skipping — so one blank clause reached through
+        # `extend(Clause(name=''))` took `complete` down with an IndexError.
+        # Dropped silently here because it can never match anything anyway;
+        # `DialectConformance.structure` is where it gets said out loud.
+        words = name.split()
+        if words:
+            grouped.setdefault(words[0], []).append(name)
     return {word: tuple(names) for word, names in grouped.items()}
 
 

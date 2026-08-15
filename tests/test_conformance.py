@@ -17,6 +17,7 @@ from dataclasses import replace
 import pytest
 
 from pysqlsuggestions.api import complete
+from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import (
     Clause,
@@ -25,12 +26,14 @@ from pysqlsuggestions.dialects.base import (
     LiteralArgument,
     Namespace,
     Placeholder,
+    Query,
     Syntax,
 )
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.registry import available, named
 from pysqlsuggestions.dialects.trino import TRINO
+from pysqlsuggestions.engine.lex import lex
 from pysqlsuggestions.testing import DialectConformance
 from pysqlsuggestions.types import Kind
 
@@ -298,3 +301,53 @@ def test_the_corpus_asks_a_dialect_about_the_kinds_it_narrows_to() -> None:
         narrowed = [c for c in dialect.clauses.clauses if c.relation_kinds]
         cases = [case for case in DialectConformance.cases(dialect) if 'kinds' in case.name]
         assert bool(cases) == bool(narrowed), dialect.name
+
+
+def test_a_clause_with_a_blank_name_is_reported_rather_than_crashing() -> None:
+    """
+    Reached through documented composition, and worse than inert.
+
+    `_by_first_word` groups clause names by `name.split()[0]`, which raises on a
+    name with no words in it — so a dialect built with `extend(Clause(name=''))`
+    took `complete` down with an IndexError, and took `check` down with the same
+    one before it could report anything. `structure` said nothing at all, and a
+    blank name is exactly the sort of declaration it exists to name.
+    """
+    broken = replace(ANSI, clauses=ANSI.clauses.extend(Clause(name='')))
+    assert any('blank' in problem for problem in DialectConformance.structure(broken))
+    assert complete('SELECT ', 7, broken, MemoryCatalog({('public', 'events'): [('id', 'bigint')]})) is not None
+    assert DialectConformance.check(broken)
+
+
+def test_a_zero_length_placeholder_opener_is_reported_rather_than_hanging() -> None:
+    """
+    `lex` is documented total, and non-termination is worse than raising.
+
+    A placeholder whose `opens` is empty put the scanner's position where it
+    already was, so it appended a zero-width token and never advanced. `check`
+    inherited the hang, because it runs `complete` over its own corpus — the
+    shipped self-test never returning rather than reporting the declaration.
+    """
+    syntax = Syntax(placeholders=(Placeholder(opens='', body='none'),))
+    broken = replace(ANSI, name='broken', syntax=syntax)
+    assert any('empty' in problem for problem in DialectConformance.structure(broken))
+    assert lex('a', syntax) is not None
+
+
+def test_a_catalog_query_wanting_more_values_than_it_gets_is_reported() -> None:
+    """
+    A `$N` typo is the mistake this harness ships to catch and did not.
+
+    `DbapiCatalog` fixes each query's arity — `columns` is given two values, the
+    searches one — so a marker beyond that is a static contradiction of exactly
+    the kind reported here, needing neither a server nor a consistent dialect to
+    see. Left unchecked it surfaced as an IndexError on the first catalog read.
+    """
+    broken = replace(
+        POSTGRES,
+        catalog_queries=replace(
+            POSTGRES.catalog_queries,
+            columns=Query(sql='SELECT 1 WHERE s = $1 AND t = $2 AND x = $3', row=lambda row: row),
+        ),
+    )
+    assert any('$3' in problem for problem in DialectConformance.structure(broken))
