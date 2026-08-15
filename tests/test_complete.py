@@ -688,3 +688,48 @@ def test_a_capability_that_only_answers_to_its_name_is_not_one() -> None:
     catalog = _InventsEverything()
     for sql, caret in (('SELECT sta', 10), ("SELECT * FROM t WHERE s = 'a", 28), ('SELECT * FROM t JOIN ', 21)):
         assert complete(sql, caret, POSTGRES, catalog) is not None, sql
+
+
+def test_a_qualifier_naming_a_relation_out_of_scope_offers_nothing() -> None:
+    """
+    Measured on Postgres: `SELECT auth_user.id FROM auth_group` is `missing
+    FROM-clause entry for table "auth_user"`, and so is the shape `resolve.py`
+    cited to justify offering these — `WITH a AS (...) SELECT * FROM a WHERE
+    auth_user.<caret>`. A relation the catalog knows is not thereby a relation
+    this statement may reference.
+
+    The unqualified path already answers this way: `SELECT ema<caret> FROM
+    orders` offers nothing from a relation the query does not name, while with
+    no FROM at all it offers the column *and* the clause to go with it. The
+    qualified path disagreed with it, and with all three servers.
+    """
+    for sql, marker in (
+        ('SELECT auth_user. FROM reports_report', 'auth_user.'),
+        ('SELECT * FROM reports_report WHERE auth_user.', 'auth_user.'),
+        ('WITH a AS (SELECT 1 AS x) SELECT * FROM a WHERE auth_user.', 'WHERE auth_user.'),
+    ):
+        caret = sql.index(marker) + len(marker)
+        assert complete(sql, caret, POSTGRES, catalog()) == [], sql
+
+
+def test_a_qualifier_still_reaches_a_relation_the_statement_does_name() -> None:
+    """The readings that were always right, and must survive the narrowing."""
+    cases = {
+        'SELECT auth_user. FROM auth_user': 'auth_user.',
+        'SELECT u. FROM auth_user u': 'u.',
+        'SELECT * FROM public.': 'public.',
+        'SELECT public.auth_user. FROM auth_user': 'public.auth_user.',
+    }
+    for sql, marker in cases.items():
+        caret = sql.index(marker) + len(marker)
+        assert complete(sql, caret, POSTGRES, catalog()), sql
+
+
+def test_a_qualifier_before_any_from_still_names_its_relation() -> None:
+    """
+    With nothing in scope the author has not written the FROM yet, so the
+    qualifier is a reasonable guess at what they are about to name rather than a
+    reference to something absent.
+    """
+    sql = 'SELECT auth_user.'
+    assert [s.text for s in complete(sql, len(sql), POSTGRES, catalog(), limit=3)]

@@ -372,6 +372,11 @@ class _Reader:
         return [(word, '') for word in sorted(self._dialect.keywords)]
 
 
+def _names_a_relation(scope: Scope | None) -> bool:
+    """Whether the statement already says what it reads from, here or further out."""
+    return scope is not None and any(scope.visible())
+
+
 def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
     """A dotted path narrows hard: either one relation's columns, or one namespace's contents."""
     scope = request.scope
@@ -413,10 +418,22 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
         return [_column_candidate(column) for column in reader.columns(schema, table)]
 
     candidates: list[Candidate] = []
-    if Kind.COLUMN in request.kinds:
-        # A name that is not in scope may still be a relation the catalog knows:
-        # `WITH a AS (...) SELECT * FROM a WHERE auth_user.<caret>` reads as the
-        # table. Nothing comes back when it is only a schema name.
+    if Kind.COLUMN in request.kinds and not _names_a_relation(scope):
+        # A name that is not in scope may still be the relation the author is
+        # about to write, so long as the statement names none yet: `SELECT
+        # auth_user.<caret>` has no FROM and the qualifier is a fair guess at
+        # what it will be. Nothing comes back when it is only a schema name.
+        #
+        # Once the statement *does* name relations, a qualifier that is not among
+        # them cannot resolve on any backend here — Postgres answers `missing
+        # FROM-clause entry for table "auth_user"` — so offering that table's
+        # columns is offering a reference the server will refuse. This used to
+        # cite `WITH a AS (...) SELECT * FROM a WHERE auth_user.<caret>` as the
+        # case it served; that statement is refused too, which is what settled it.
+        #
+        # The unqualified path has always answered this way, which is the other
+        # half of the argument: `SELECT ema<caret> FROM orders` offers nothing
+        # from a relation the query does not name.
         candidates += [_column_candidate(column) for column in reader.columns(None, request.qualifier[-1])]
     if Kind.TABLE in request.kinds:
         candidates += [

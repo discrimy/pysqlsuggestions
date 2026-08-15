@@ -239,13 +239,34 @@ def test_inner_relation_does_not_leak_outward(cur: MemoryCatalog) -> None:
     assert texts(cur, sql) == ['a.id']
 
 
-def test_unknown_qualifier_still_falls_back_to_catalog(cur: MemoryCatalog) -> None:
+def test_unknown_qualifier_is_not_a_relation_this_statement_may_read(cur: MemoryCatalog) -> None:
     """
-    A qualifier naming no CTE and no alias is still a name the catalog might
-    know. Stopping at the scope lookup makes a valid reference answer nothing.
+    This asserted the opposite, on a premise the servers do not share.
+
+    It read: "a qualifier naming no CTE and no alias is still a name the catalog
+    might know. Stopping at the scope lookup makes a valid reference answer
+    nothing." The reference is not valid. Its own SQL, put to all three:
+
+        WITH a as (select id from auth_user)
+        SELECT * FROM a WHERE auth_user.id = 1
+
+        postgres    missing FROM-clause entry for table "auth_user"
+        trino       Column 'auth_user.id' cannot be resolved
+        clickhouse  Missing columns: 'auth_user.report_id'
+
+    The CTE's body reads `auth_user`; the outer query names only `a`, and a
+    relation the catalog knows is not thereby one this statement may reference.
+    The unqualified path always answered this way — `SELECT ema<caret> FROM
+    orders` offers nothing from a relation the query does not name — so this is
+    the two agreeing rather than a new rule.
+
+    What survives is the reading that has no FROM to contradict it, which
+    `tests/test_complete.py::test_a_qualifier_before_any_from_still_names_its_relation`
+    pins: with nothing in scope the author has not said what they are reading
+    from yet, and the qualifier is a fair guess at what they are about to.
     """
     sql = 'WITH a as (select id from auth_user)\nSELECT * FROM a WHERE auth_user.'
-    assert sorted(texts(cur, sql)) == sorted(USER_COLUMNS)
+    assert texts(cur, sql) == []
 
 
 def test_cursor_inside_cte_body_sees_body_relations(cur: MemoryCatalog) -> None:
