@@ -166,3 +166,22 @@ def test_an_undecodable_document_answers_with_nothing() -> None:
             position=Position(line=0, character=3),
         )
         assert handler(params).items == []
+
+
+def test_the_column_is_measured_in_the_encoding_the_client_asked_for() -> None:
+    """
+    UTF-16 is the protocol's default, not the only answer.
+
+    pygls negotiates the encoding from the client's `general.positionEncodings`
+    and builds the codec it decodes the caret with from the result — so a client
+    preferring UTF-8 sent a caret in UTF-8 units and got a range in UTF-16 ones.
+    That is the disagreement `Lines` was introduced to end, on the branch it did
+    not cover: the same `FROM rec` splice, for a different editor.
+    """
+    from pygls.workspace.position_codec import PositionCodec
+
+    text = 'SELECT \U0001f642 x'
+    assert to_position(line_starts(text), len(text)) == (0, len(text) + 1), 'utf-16 default'
+    for encoding, expected in (('utf-8', len(text.encode('utf-8'))), ('utf-32', len(text))):
+        units = PositionCodec(encoding).client_num_units
+        assert to_position(line_starts(text, units), len(text)) == (0, expected), encoding

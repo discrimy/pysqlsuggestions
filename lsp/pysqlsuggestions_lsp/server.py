@@ -164,7 +164,7 @@ class Session:
                 self._announced = True
                 self.on_degrade(why)
 
-    def suggest(self, text: str, offset: int) -> list[CompletionItem]:
+    def suggest(self, text: str, offset: int, units: Callable[[str], int] | None = None) -> list[CompletionItem]:
         """
         Items for a caret at `offset` in `text`. Never raises.
 
@@ -173,7 +173,7 @@ class Session:
         caret = max(0, min(offset, len(text)))
         dialect = self.dialect
         statement, base = statement_at(text, caret, dialect.syntax)
-        starts = line_starts(text)
+        starts = line_starts(text, units)
         within = caret - base
         suggestions = self._from_catalog(statement, within, dialect)
         if suggestions is None:
@@ -269,7 +269,10 @@ def create_server(connect: Connect | None = None) -> SqlServer:
             offset = document.offset_at_position(params.position)
         except (OSError, UnicodeDecodeError):
             return CompletionList(is_incomplete=False, items=[])
-        return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset))
+        # The codec pygls negotiated, not an assumption: it decodes the caret
+        # with this and the range has to be measured with the same one.
+        units = server.workspace.position_codec.client_num_units
+        return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset, units))
 
     del initialize, completion
     return server

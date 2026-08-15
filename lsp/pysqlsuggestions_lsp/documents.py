@@ -18,7 +18,8 @@ completion list.
 from __future__ import annotations
 
 from bisect import bisect_right
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from pysqlsuggestions.dialects.base import Syntax
 from pysqlsuggestions.engine.lex import TokenType, lex
@@ -56,9 +57,21 @@ class Lines:
 
     text: str
     starts: list[int]
+    units: Callable[[str], int] = field(default=lambda text: len(text.encode('utf-16-le')) // 2)
+    """
+    How many units of the client's encoding a stretch of text is.
+
+    Not always UTF-16, which is what this assumed. pygls negotiates the encoding
+    from the client's `general.positionEncodings` and builds its inbound codec
+    from the result, so a client preferring UTF-8 — helix does — decoded the
+    caret one way and received a range measured the other. That is the same
+    disagreement this record was introduced to end, on the branch it did not
+    cover. The default is UTF-16, which is the protocol's own and what pygls
+    falls back to when a client expresses no preference.
+    """
 
 
-def line_starts(text: str) -> Lines:
+def line_starts(text: str, units: Callable[[str], int] | None = None) -> Lines:
     """
     Where each line begins, `[0]` for text with no break in it.
 
@@ -81,7 +94,7 @@ def line_starts(text: str) -> Lines:
             index += text.startswith('\n', index + 1)
             starts.append(index + 1)
         index += 1
-    return Lines(text=text, starts=starts)
+    return Lines(text=text, starts=starts) if units is None else Lines(text=text, starts=starts, units=units)
 
 
 def to_position(lines: Lines, offset: int) -> tuple[int, int]:
@@ -106,5 +119,4 @@ def to_position(lines: Lines, offset: int) -> tuple[int, int]:
     # slice below is that copy either way, and a per-character generator over it
     # is far slower: 3.0s against 0.066s on one 789 KB line, which is 1.3s of
     # latency for a single completion on a long generated statement.
-    prefix = lines.text[start:offset]
-    return line, len(prefix.encode('utf-16-le')) // 2
+    return line, lines.units(lines.text[start:offset])
