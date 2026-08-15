@@ -339,3 +339,22 @@ def test_a_comma_still_starts_a_new_item() -> None:
     """The older bound, unchanged: a new list item gets every choice back."""
     result = request('SELECT * FROM users ORDER BY id ASC, name ⌶')
     assert 'ASC' not in result.item_words
+
+
+def test_caret_at_the_end_of_a_terminated_comment_offers_nothing() -> None:
+    """
+    The end of the comment text is where a typist's caret sits, not past it.
+
+    `_inside` treats `caret == token.end` as outside, which is right for a string
+    or a block comment: their spans include the closing delimiter, so the caret
+    really has passed it. A line comment's terminator is the newline, and the
+    span used to stop just short of it — so the position at the end of the
+    written comment read as ordinary SQL and offered keywords. Accepting one
+    buried it in the comment.
+    """
+    assert request('SELECT * FROM t -- note⌶\nSELECT 1').kinds == ()
+
+
+def test_a_caret_after_a_comment_is_back_in_the_statement() -> None:
+    """The counterpart, so suppressing the position above does not swallow the next line."""
+    assert request('SELECT * FROM t -- note\n⌶').kinds != ()

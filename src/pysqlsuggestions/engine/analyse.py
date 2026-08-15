@@ -93,7 +93,17 @@ def _inside(token: Token, caret: int) -> bool:
     `'ab'<caret>` is back in ordinary SQL. At the end of an unterminated one it
     is inside, because there is no delimiter to have passed. Three callers need
     the rule and it is subtle enough that three copies would drift.
+
+    A line comment is the one token whose span stops *short* of its delimiter:
+    the newline that ends it stays whitespace, deliberately, so `caret == end` is
+    the position just before it rather than just after — which is exactly where a
+    typist writing the comment sits. Reading that as "past the delimiter" offered
+    keywords at the end of a written comment, and accepting one buried it there.
+    Detected by the opener because `/*` is hardcoded in the scanner while the
+    line-comment marker varies by dialect (`--`, and `#` on ClickHouse).
     """
+    if token.type is TokenType.COMMENT and not token.text.startswith('/*'):
+        return token.covers(caret)
     return token.start < caret < token.end or (caret == token.end and not token.terminated)
 
 
@@ -1100,15 +1110,22 @@ def _scope_level(
             # correlated subquery in an expression sees everything.
             body_ctes = cte_scopes.get((inner_lo, inner_hi))
             opaque_here = body_ctes is not None or (inner_lo, inner_hi) in opaque
+            # A body may declare CTEs of its own, and the pass above cannot have
+            # read them: it stopped at this level's WITH. `select_outputs` reaches
+            # them from outside — `WITH oq AS (WITH iq AS (...) SELECT * FROM iq)`
+            # is the shape its docstring names — and without this the same `iq`
+            # read as a catalog table once the caret was inside the body.
+            inner_ctes, inner_bodies = _read_ctes(tokens, inner_lo, inner_hi, dialect, remaining - 1)
+            visible = ctes if body_ctes is None else body_ctes
             return _scope_level(
                 tokens,
                 inner_lo,
                 inner_hi,
                 caret,
                 dialect,
-                ctes if body_ctes is None else body_ctes,
+                {**visible, **inner_ctes},
                 parent=None if opaque_here else here,
-                cte_scopes=cte_scopes,
+                cte_scopes={**cte_scopes, **inner_bodies},
                 remaining=remaining - 1,
             )
     return here
@@ -1907,7 +1924,12 @@ def _read_ctes(
     second — Postgres answers `relation "b" does not exist` — and RECURSIVE is
     precisely the word that adds the body's own name to its own scope.
     """
-    start = _after_clause(tokens, lo, hi, 'WITH', dialect)
+    # Depth-restricted, like every other caller of `_after_clause`. Without it
+    # this found the first WITH at any level, so a CTE declared inside a derived
+    # table or an expression subquery joined the *statement's* table — offering a
+    # name the server refuses, and, worse, rebinding a real relation that shared
+    # it, which lost every one of that relation's columns.
+    start = _after_clause(tokens, lo, hi, 'WITH', dialect, depth=_base_depth(tokens, lo, hi))
     if start is None or remaining <= 0:
         return {}, {}
     ctes: dict[str, Relation] = {}
