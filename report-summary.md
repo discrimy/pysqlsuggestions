@@ -28,9 +28,9 @@ resource use.
 
 ## Fixed so far — branch `fix/qa-sweep-quick-wins`
 
-**36 findings closed and one substantially improved**, across thirteen commits, each fix carrying a
+**37 findings closed and one substantially improved**, across fourteen commits, each fix carrying a
 regression test written *before* it and watched to fail. Gate green throughout:
-`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1843 passed** (from 1700), and with
+`./scripts/check.sh` → ruff format, ruff check, mypy strict, **1847 passed** (from 1700), and with
 the docker backends up the integration suite passes too.
 
 | Commit | Closes |
@@ -48,6 +48,7 @@ the docker backends up the integration suite passes too.
 | `6e196cf` an empty argument list keeps the caret it opened | U1 |
 | `6424ce6` quote a name this engine could not read back | 7 |
 | `d274806` a capability that only answers to its name is not one | 11 |
+| `6f61ef1` a marker inside a literal is text, not a parameter | 20 |
 
 ### Measurement changed three of the six decisions
 
@@ -68,7 +69,6 @@ not a formality:
 
 | # | Finding | Why it is still here |
 | --- | --- | --- |
-| 20 | Markers rewritten inside strings and comments | Latent; no shipped query trips it. Needs a real scanner in `render`, not a regex. |
 | 29, 34 | Cubic nesting cost; per-keystroke LSP cost | Constants and caching, not correctness. |
 
 ### One reason that did not survive being tested
