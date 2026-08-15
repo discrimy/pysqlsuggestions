@@ -10,7 +10,7 @@ without moving anything the caller then has to move back.
 from __future__ import annotations
 
 from pysqlsuggestions.dialects.postgres import POSTGRES
-from pysqlsuggestions_lsp.documents import line_starts, statement_at, to_position
+from pysqlsuggestions_lsp.documents import UNIT_COUNTERS, line_starts, statement_at, to_position
 
 SYNTAX = POSTGRES.syntax
 
@@ -166,6 +166,31 @@ def test_an_undecodable_document_answers_with_nothing() -> None:
             position=Position(line=0, character=3),
         )
         assert handler(params).items == []
+
+
+def test_a_lone_surrogate_is_counted_rather_than_raised_on() -> None:
+    r"""
+    Counting by encoding is 46x faster and cannot encode an unpaired surrogate.
+
+    `Session.suggest` says it never raises and the completion handler guards
+    `UnicodeDecodeError`, so a `UnicodeEncodeError` from measuring the column
+    reached the editor as JSON-RPC -32603 on a keystroke. A client can put one
+    here without trying: `json` decodes a lone `\udXXX` escape happily, so any
+    `didOpen` carrying one arrives intact, and pygls's own codec counts it
+    without complaint -- it decoded the caret, so disagreeing with it about the
+    same character is the bug twice over.
+
+    `surrogatepass` is the narrow answer: it costs nothing measurable, keeps the
+    single-call fast path, and gives the count pygls gives for each encoding.
+    """
+    from pygls.workspace.position_codec import PositionCodec
+
+    for encoding in ('utf-16', 'utf-8', 'utf-32'):
+        units = UNIT_COUNTERS[encoding]
+        for text in ('\ud800', 'a\udfffb', '\ud800\ud800'):
+            assert units(text) == PositionCodec(encoding).client_num_units(text), (encoding, repr(text))
+    text = 'SELECT \ud800, '
+    assert to_position(line_starts(text), len(text)) == (0, len(text))
 
 
 def test_the_column_is_measured_in_the_encoding_the_client_asked_for() -> None:

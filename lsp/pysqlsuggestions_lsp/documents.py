@@ -44,6 +44,33 @@ def statement_at(text: str, offset: int, syntax: Syntax) -> tuple[str, int]:
     return text[start:], start
 
 
+UNIT_COUNTERS: dict[str, Callable[[str], int]] = {
+    'utf-16': lambda text: len(text.encode('utf-16-le', 'surrogatepass')) // 2,
+    'utf-8': lambda text: len(text.encode('utf-8', 'surrogatepass')),
+    'utf-32': len,
+}
+"""
+How many units of each encoding a stretch of text is, measured in one call.
+
+pygls offers `PositionCodec.client_num_units` for this and it is a per-character
+generator — the shape `to_position` measured at 3.0s against 0.066s and rejected.
+Passing it in cost 42ms per call on a 734 KB line, two seconds of latency for one
+completion, which is the thing the encoding fix was not supposed to reintroduce.
+Anything not named here falls back to the codec, so an encoding pygls grows later
+is correct before it is fast.
+
+`surrogatepass` is what buying that speed costs. A str may hold an unpaired
+surrogate — `json` decodes a lone `\\udXXX` escape without complaint, so one
+travels through `didOpen` intact — and `str.encode` refuses it where counting
+character by character never could. `Session.suggest` says it never raises, so
+the difference arrived at the editor as JSON-RPC -32603 on a keystroke. The
+handler cannot be widened to cover it either: the column would still be missing,
+and the codec that *decoded* the caret counts that character happily. This gives
+the same number pygls gives for each encoding — one unit for a lone surrogate in
+UTF-16, three in UTF-8 — at no measurable cost, which is the whole point.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class Lines:
     """
@@ -57,7 +84,7 @@ class Lines:
 
     text: str
     starts: list[int]
-    units: Callable[[str], int] = field(default=lambda text: len(text.encode('utf-16-le')) // 2)
+    units: Callable[[str], int] = field(default=UNIT_COUNTERS['utf-16'])
     """
     How many units of the client's encoding a stretch of text is.
 
@@ -67,25 +94,10 @@ class Lines:
     caret one way and received a range measured the other. That is the same
     disagreement this record was introduced to end, on the branch it did not
     cover. The default is UTF-16, which is the protocol's own and what pygls
-    falls back to when a client expresses no preference.
+    falls back to when a client expresses no preference — and it is the entry
+    from `UNIT_COUNTERS` rather than a second copy of it, because the two were
+    written out separately and a fix to one of them missed the other.
     """
-
-
-UNIT_COUNTERS: dict[str, Callable[[str], int]] = {
-    'utf-16': lambda text: len(text.encode('utf-16-le')) // 2,
-    'utf-8': lambda text: len(text.encode('utf-8')),
-    'utf-32': len,
-}
-"""
-How many units of each encoding a stretch of text is, measured in one call.
-
-pygls offers `PositionCodec.client_num_units` for this and it is a per-character
-generator — the shape `to_position` measured at 3.0s against 0.066s and rejected.
-Passing it in cost 42ms per call on a 734 KB line, two seconds of latency for one
-completion, which is the thing the encoding fix was not supposed to reintroduce.
-Anything not named here falls back to the codec, so an encoding pygls grows later
-is correct before it is fast.
-"""
 
 
 def line_starts(text: str, units: Callable[[str], int] | None = None) -> Lines:
