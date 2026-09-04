@@ -26,9 +26,13 @@ from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Ta
 KEY_VERSION = '1'
 """The grammar's version. Bumped by hand when the *shape* of the key changes, not its contents."""
 
-Kind = Literal['schemas', 'tables', 'columns', 'functions', 'values', 'fk']
+ReadKind = Literal['schemas', 'tables', 'columns', 'functions', 'values', 'fk']
 """
 Which read a key belongs to.
+
+`ReadKind` rather than `Kind`, which `types` already uses for what a candidate
+is. One library with two `Kind`s would be a shadowed import waiting to happen —
+`resolve.py` imports both modules.
 
 A field of the grammar rather than a sentinel folded into the data, which is
 what makes `tables(None)` against `columns(None, '')` structurally impossible
@@ -122,7 +126,7 @@ FINGERPRINT = _fingerprint()
 """The shape of the cached types, computed once at import. See `_fingerprint`."""
 
 
-def cache_key(identity: str | None, dialect: str, kind: Kind, *parts: str | None) -> str:
+def cache_key(identity: str | None, dialect: str, kind: ReadKind, *parts: str | None) -> str:
     """
     The key for one catalog read.
 

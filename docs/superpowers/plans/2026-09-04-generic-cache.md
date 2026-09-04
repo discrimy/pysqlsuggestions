@@ -31,7 +31,7 @@
 | Path | Responsibility | Task |
 | --- | --- | --- |
 | `src/pysqlsuggestions/caches/__init__.py` | the package's exports | 1 |
-| `src/pysqlsuggestions/caches/keys.py` | `cache_key`, `KEY_VERSION`, `FINGERPRINT`, `CACHED_TYPES` | 1 |
+| `src/pysqlsuggestions/caches/keys.py` | `cache_key`, `KEY_VERSION`, `FINGERPRINT`, `CACHED_TYPES`, `ReadKind` | 1 |
 | `src/pysqlsuggestions/caches/codec.py` | `encode`, `decode`, the tag allowlist | 2 |
 | `src/pysqlsuggestions/caches/memory.py` | `MemoryCache` | 3 |
 | `src/pysqlsuggestions/caches/redis.py` | `RedisCache`, `RedisClient` | 10 |
@@ -55,7 +55,7 @@ Tests: `tests/test_cache_keys.py` (1, 4), `tests/test_cache_codec.py` (2), `test
 
 **Interfaces:**
 - Consumes: `pysqlsuggestions.types.{Table, Column, Function, ColumnValue, ForeignKey}`
-- Produces: `cache_key(identity: str | None, dialect: str, kind: Kind, *parts: str | None) -> str`; `KEY_VERSION: str`; `FINGERPRINT: str`; `CACHED_TYPES: tuple[Any, ...]`; `Kind = Literal['schemas', 'tables', 'columns', 'functions', 'values', 'fk']`
+- Produces: `cache_key(identity: str | None, dialect: str, kind: Kind, *parts: str | None) -> str`; `KEY_VERSION: str`; `FINGERPRINT: str`; `CACHED_TYPES: tuple[Any, ...]`; `ReadKind = Literal['schemas', 'tables', 'columns', 'functions', 'values', 'fk']` (*not* `Kind` — `types.Kind` already owns that name and `resolve.py` imports both modules)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -313,9 +313,9 @@ module named after a backend adapts that one and takes its imports lazily.
 
 from __future__ import annotations
 
-from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, Kind, cache_key
+from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, ReadKind, cache_key
 
-__all__ = ['CACHED_TYPES', 'FINGERPRINT', 'KEY_VERSION', 'Kind', 'cache_key']
+__all__ = ['CACHED_TYPES', 'FINGERPRINT', 'KEY_VERSION', 'ReadKind', 'cache_key']
 ```
 
 - [ ] **Step 4: Fill in the pinned fingerprint**
@@ -767,9 +767,9 @@ In `src/pysqlsuggestions/caches/__init__.py`, add `codec` to the imports and to 
 
 ```python
 from pysqlsuggestions.caches import codec
-from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, Kind, cache_key
+from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, ReadKind, cache_key
 
-__all__ = ['CACHED_TYPES', 'FINGERPRINT', 'KEY_VERSION', 'Kind', 'cache_key', 'codec']
+__all__ = ['CACHED_TYPES', 'FINGERPRINT', 'KEY_VERSION', 'ReadKind', 'cache_key', 'codec']
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -980,7 +980,7 @@ In `src/pysqlsuggestions/caches/__init__.py`:
 
 ```python
 from pysqlsuggestions.caches import codec
-from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, Kind, cache_key
+from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, ReadKind, cache_key
 from pysqlsuggestions.caches.memory import MemoryCache
 
 __all__ = ['CACHED_TYPES', 'FINGERPRINT', 'KEY_VERSION', 'Kind', 'MemoryCache', 'cache_key', 'codec']
@@ -1029,8 +1029,8 @@ The cache is still the old `get`/`__setitem__` protocol here, so a dict still wo
 - Test: `tests/test_complete.py` (four `dict[tuple[object, ...], object]` annotations, and `test_cache_is_keyed_by_role`), `tests/test_availability.py` (two `dict[object, object]` annotations)
 
 **Interfaces:**
-- Consumes: `cache_key`, `Kind` from Task 1.
-- Produces: `_Reader._key(kind: Kind, *parts: str | None) -> str`. Every cache key in the process is now a `str`.
+- Consumes: `cache_key`, `ReadKind` from Task 1.
+- Produces: `_Reader._key(kind: ReadKind, *parts: str | None) -> str`. Every cache key in the process is now a `str`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1064,7 +1064,7 @@ In `src/pysqlsuggestions/resolve.py`:
 Add to the imports:
 
 ```python
-from pysqlsuggestions.caches.keys import Kind, cache_key
+from pysqlsuggestions.caches.keys import ReadKind, cache_key
 ```
 
 Change `_memo`'s annotation in `__init__` from `dict[tuple[str | None, ...], Any]` to `dict[str, Any]`.
@@ -1072,7 +1072,7 @@ Change `_memo`'s annotation in `__init__` from `dict[tuple[str | None, ...], Any
 Replace `_key` entirely:
 
 ```python
-    def _key(self, kind: Kind, *parts: str | None) -> str:
+    def _key(self, kind: ReadKind, *parts: str | None) -> str:
         """
         The documented cache key, encoded by `caches.keys`.
 

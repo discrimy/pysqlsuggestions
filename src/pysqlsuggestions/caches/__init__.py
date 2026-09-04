@@ -8,7 +8,7 @@ module named after a backend adapts that one and takes its imports lazily.
 from __future__ import annotations
 
 from pysqlsuggestions.caches import codec
-from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, Kind, cache_key
+from pysqlsuggestions.caches.keys import CACHED_TYPES, FINGERPRINT, KEY_VERSION, ReadKind, cache_key
 from pysqlsuggestions.caches.memory import MemoryCache
 
-__all__ = ['CACHED_TYPES', 'FINGERPRINT', 'KEY_VERSION', 'Kind', 'MemoryCache', 'cache_key', 'codec']
+__all__ = ['CACHED_TYPES', 'FINGERPRINT', 'KEY_VERSION', 'MemoryCache', 'ReadKind', 'cache_key', 'codec']

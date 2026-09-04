@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from pysqlsuggestions.api import complete, plan_insertion
+from pysqlsuggestions.caches import cache_key
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.rank import rank
@@ -80,12 +81,12 @@ def test_reader_reads_through_the_capability() -> None:
 def test_reader_caches_edges_under_the_identity_led_key() -> None:
     """Constraints change on DDL, not between keystrokes, so one read serves the session."""
     catalog = _Constrained()
-    cache: dict[object, object] = {}
+    cache: dict[str, object] = {}
     reader = _Reader(catalog, POSTGRES, cache, 'analyst')  # type: ignore[arg-type]
     reader.foreign_keys('public')
     reader.foreign_keys('public')
     assert catalog.calls == 1
-    assert ('analyst', 'postgres', 'public', '\x00fk') in cache
+    assert cache_key('analyst', 'postgres', 'fk', 'public') in cache
 
 
 def test_a_join_proposal_outranks_the_tables_it_sits_among() -> None:

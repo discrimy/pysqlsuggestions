@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from pysqlsuggestions.caches import cache_key
 from pysqlsuggestions.catalogs.dbapi import Cursor, DbapiCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
@@ -214,8 +215,12 @@ def _warm(key: str) -> None:
         _examples[key] = found
     with suppress(Exception):
         for name in ('', *catalog.schemas()):
-            cache[('demo', dialect.name, name, '\x00schemas')] = catalog.schemas(name or None)
-            cache[('demo', dialect.name, name, '')] = catalog.tables(name or None)
+            # `name or None` on both sides: the reader asks for the default namespace as
+            # `None`, and this wrote it under `''`, so neither half of the warm-up was
+            # ever read back. `cache_key` is what keeps the two ends from drifting again.
+            schema = name or None
+            cache[cache_key('demo', dialect.name, 'schemas', schema)] = catalog.schemas(schema)
+            cache[cache_key('demo', dialect.name, 'tables', schema)] = catalog.tables(schema)
 
 
 @app.on_event('startup')

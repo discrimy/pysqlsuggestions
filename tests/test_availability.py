@@ -176,7 +176,7 @@ def test_one_cache_two_roles_do_not_leak() -> None:
     privilege bug rather than a caching one, which is why it belongs in CI
     rather than in a paragraph.
     """
-    shared: dict[object, object] = {}
+    shared: dict[str, object] = {}
     sql = 'SELECT * FROM users u WHERE u.'
     for catalog, identity, expected in (
         (_permissive(), 'alice', Availability.AVAILABLE),
@@ -190,7 +190,7 @@ def test_one_cache_two_roles_do_not_leak() -> None:
 
 def test_an_unnamed_role_still_gets_its_own_line_in_the_key() -> None:
     """identity=None is a role like any other, not a wildcard matching every entry."""
-    shared: dict[object, object] = {}
+    shared: dict[str, object] = {}
     sql = 'SELECT * FROM users u WHERE u.'
     complete(sql, len(sql), POSTGRES, _permissive(), cache=shared)
     found = complete(sql, len(sql), POSTGRES, _restrictive(), cache=shared, identity='bob')

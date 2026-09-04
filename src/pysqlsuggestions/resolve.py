@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 from inspect import getattr_static
 from typing import Any, TypeVar
 
+from pysqlsuggestions.caches.keys import ReadKind, cache_key
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
 from pysqlsuggestions.engine.analyse import SET_OPERATION_TAIL
@@ -247,7 +248,7 @@ class _Reader:
         self._dialect = dialect
         self._cache = cache
         self._identity = identity
-        self._memo: dict[tuple[str | None, ...], Any] = {}
+        self._memo: dict[str, Any] = {}
         """
         Answers already given during this request.
 
@@ -257,21 +258,24 @@ class _Reader:
         and with no cache supplied that would be two round trips for one answer.
         """
 
-    def _key(self, *parts: str | None) -> tuple[str | None, ...]:
+    def _key(self, kind: ReadKind, *parts: str | None) -> str:
         """
-        The documented cache key: (role, dialect, schema, table).
+        The documented cache key, encoded by `caches.keys`.
 
-        `None` is carried through rather than folded to `''`, because to every
-        one of these readers the two mean different things: `None` is "wherever
-        the search path reaches" and `''` is a namespace actually named that.
+        The NUL sentinels this used to carry are now `kind`, a field of the
+        grammar — which is what makes `tables(None)` and `columns(None, '')`
+        structurally distinct rather than distinct by convention. `None` is
+        still carried through rather than folded to `''`, because to every one
+        of these readers the two mean different things: `None` is "wherever the
+        search path reaches" and `''` is a namespace actually named that.
         `SELECT "".` reads a quoted empty identifier as a namespace, so the two
         calls really do both happen — and while `tables('')` correctly answers
         with nothing, writing that nothing under `tables(None)`'s key silently
         emptied the relation list for as long as the cache lived.
         """
-        return (self._identity, self._dialect.name, *parts)
+        return cache_key(self._identity, self._dialect.name, kind, *parts)
 
-    def _read(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
+    def _read(self, key: str, produce: Callable[[], _T]) -> _T:
         if key in self._memo:
             remembered: _T = self._memo[key]
             return remembered
@@ -279,7 +283,7 @@ class _Reader:
         self._memo[key] = value
         return value
 
-    def _read_through(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
+    def _read_through(self, key: str, produce: Callable[[], _T]) -> _T:
         """The caller's cache, when there is one."""
         if self._cache is None:
             return produce()
@@ -293,7 +297,7 @@ class _Reader:
 
     def schemas(self, catalog: str | None = None) -> Sequence[str]:
         """Namespace names one level below `catalog`."""
-        return self._read(self._key(catalog, '\x00schemas'), lambda: self._catalog.schemas(catalog))
+        return self._read(self._key('schemas', catalog), lambda: self._catalog.schemas(catalog))
 
     def tables(self, schema: str | None) -> Sequence[Table]:
         """
@@ -308,11 +312,11 @@ class _Reader:
         silent, and `lsp/` holds one cache per session, so a single such caret
         emptied the relation list for the rest of it.
         """
-        return self._read(self._key(schema, '\x00tables'), lambda: self._catalog.tables(schema))
+        return self._read(self._key('tables', schema), lambda: self._catalog.tables(schema))
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
-        return self._read(self._key(schema, table), lambda: self._catalog.columns(schema, table))
+        return self._read(self._key('columns', schema, table), lambda: self._catalog.columns(schema, table))
 
     def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
         """
@@ -327,7 +331,7 @@ class _Reader:
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
         """Functions in `schema`, or everywhere."""
-        return self._read(self._key(schema, '\x00functions'), lambda: self._catalog.functions(schema))
+        return self._read(self._key('functions', schema), lambda: self._catalog.functions(schema))
 
     def loose_columns(self, prefix: str, limit: int) -> Sequence[Column]:
         """
@@ -375,7 +379,7 @@ class _Reader:
         catalog = self._catalog
         if not isinstance(catalog, SupportsColumnValues) or not _declared(catalog, 'common_values'):
             return ()
-        key = self._key(schema, table, f'\x00values:{column}')
+        key = self._key('values', schema, table, column)
         return self._read(key, lambda: catalog.common_values(schema, table, column, _MAX_VALUES))
 
     def foreign_keys(self, schema: str | None) -> Sequence[ForeignKey]:
@@ -389,7 +393,7 @@ class _Reader:
         catalog = self._catalog
         if not isinstance(catalog, SupportsForeignKeys) or not _declared(catalog, 'foreign_keys'):
             return ()
-        return self._read(self._key(schema, '\x00fk'), lambda: catalog.foreign_keys(schema))
+        return self._read(self._key('fk', schema), lambda: catalog.foreign_keys(schema))
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords when available, otherwise the dialect's shipped set."""
