@@ -73,6 +73,64 @@ derive_request(sql, len(sql), POSTGRES).kinds  # (Kind.COLUMN, Kind.TABLE)  a sc
 derive_request(sql, len(sql), TRINO).kinds     # (Kind.SCHEMA,)  analytics is a catalog
 ```
 
+## Caching catalog reads
+
+A completion makes up to six catalog reads, and none of the answers change
+between keystrokes. Pass a cache and they are made once:
+
+```python
+from pysqlsuggestions.caches import MemoryCache
+
+cache = MemoryCache()
+complete(sql, len(sql), POSTGRES, catalog, cache=cache, identity='analyst')
+```
+
+A cache satisfies one of two protocols, and implements whichever it can.
+`ObjectCache` — `get(key)` and `set(key, value, ttl=None)` — keeps Python
+objects, which is what a process holds for itself. `ByteCache` —
+`get_bytes(key)` and `set_bytes(key, value, ttl=None)` — keeps bytes, which is
+everything across a process boundary; the library encodes and decodes, so an
+implementation never sees a `Table`.
+
+A plain dict satisfies neither and `complete` says so rather than silently
+caching nothing. `MemoryCache` is the dict it used to be.
+
+For redis:
+
+```bash
+pip install 'pysqlsuggestions[cache-redis]'
+```
+
+```python
+from pysqlsuggestions.caches.redis import RedisCache
+
+cache = RedisCache.from_url('redis://localhost:6379/0', namespace='prod-pg')
+```
+
+`RedisCache` never imports redis except in `from_url`; hand it any client with
+`get` and `set` — redis-py 3 through 6, valkey, a cluster client, a pool your
+application already owns — and it works.
+
+**One namespace per database, and per identity you cannot name.** The key leads
+with the role and carries the dialect, but nothing in it names the *server*, and
+these reads are privilege-filtered. Two databases sharing a namespace, or two
+end users sharing one without `identity=` to tell them apart, serve each other's
+readable sets — which is silent, and reads as a database permission bug.
+
+Entries expire after five minutes by default, and every key carries a
+fingerprint of the shapes it holds, so upgrading the library misses rather than
+decoding an old shape.
+
+If you write your own `ByteCache`, `pysqlsuggestions.testing.CacheConformance`
+is shipped in the wheel to check it:
+
+```python
+from pysqlsuggestions.testing import CacheConformance
+
+failures = CacheConformance.check(MyCache())
+assert not failures, failures
+```
+
 ## Demo
 
 ```bash

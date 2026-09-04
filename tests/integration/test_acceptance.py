@@ -30,6 +30,7 @@ from typing import Any
 import pytest
 
 from pysqlsuggestions.api import apply_suggestion, complete
+from pysqlsuggestions.caches import MemoryCache
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.types import Kind
@@ -150,7 +151,7 @@ def test_no_suggestion_writes_a_statement_postgres_refuses(
     decision produces as many bad suggestions as there are tables in the schema
     — thirty of them from a single missing check reads as thirty bugs.
     """
-    cache: dict[object, object] = {}
+    cache = MemoryCache()
     broken: dict[str, list[str]] = {}
     accepted = 0
 

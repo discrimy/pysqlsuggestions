@@ -14,15 +14,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from inspect import getattr_static
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
+from pysqlsuggestions.caches import codec
+from pysqlsuggestions.caches.keys import ReadKind, cache_key
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
 from pysqlsuggestions.engine.analyse import SET_OPERATION_TAIL
 from pysqlsuggestions.engine.rank import MAX_POSITION_PENALTY, quote_if_needed
 from pysqlsuggestions.ports import (
+    ByteCache,
     Cache,
     Catalog,
+    ObjectCache,
     SupportsColumnSearch,
     SupportsColumnValues,
     SupportsForeignKeys,
@@ -247,7 +251,7 @@ class _Reader:
         self._dialect = dialect
         self._cache = cache
         self._identity = identity
-        self._memo: dict[tuple[str | None, ...], Any] = {}
+        self._memo: dict[str, Any] = {}
         """
         Answers already given during this request.
 
@@ -256,22 +260,43 @@ class _Reader:
         serves both the TABLE candidates and the join proposals' availability —
         and with no cache supplied that would be two round trips for one answer.
         """
-
-    def _key(self, *parts: str | None) -> tuple[str | None, ...]:
+        self._encoded = cache is not None and not isinstance(cache, ObjectCache)
         """
-        The documented cache key: (role, dialect, schema, table).
+        Whether this cache takes bytes.
 
-        `None` is carried through rather than folded to `''`, because to every
-        one of these readers the two mean different things: `None` is "wherever
-        the search path reaches" and `''` is a namespace actually named that.
+        Decided once rather than per read, and `ObjectCache` wins a tie: an
+        implementation satisfying both is a two-tier cache, and the object path
+        is the one that costs no encode.
+        """
+        self._failed = False
+        """
+        Whether the cache has already failed during this request.
+
+        Latched rather than retried. A store behind a socket with a two-second
+        timeout costs one timeout per read otherwise, so a request making six
+        reads waits twelve seconds to answer what it could have answered in
+        none — slower than having no cache at all, and indistinguishable from
+        the engine hanging.
+        """
+
+    def _key(self, kind: ReadKind, *parts: str | None) -> str:
+        """
+        The documented cache key, encoded by `caches.keys`.
+
+        The NUL sentinels this used to carry are now `kind`, a field of the
+        grammar — which is what makes `tables(None)` and `columns(None, '')`
+        structurally distinct rather than distinct by convention. `None` is
+        still carried through rather than folded to `''`, because to every one
+        of these readers the two mean different things: `None` is "wherever the
+        search path reaches" and `''` is a namespace actually named that.
         `SELECT "".` reads a quoted empty identifier as a namespace, so the two
         calls really do both happen — and while `tables('')` correctly answers
         with nothing, writing that nothing under `tables(None)`'s key silently
         emptied the relation list for as long as the cache lived.
         """
-        return (self._identity, self._dialect.name, *parts)
+        return cache_key(self._identity, self._dialect.name, kind, *parts)
 
-    def _read(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
+    def _read(self, key: str, produce: Callable[[], _T]) -> _T:
         if key in self._memo:
             remembered: _T = self._memo[key]
             return remembered
@@ -279,21 +304,73 @@ class _Reader:
         self._memo[key] = value
         return value
 
-    def _read_through(self, key: tuple[str | None, ...], produce: Callable[[], _T]) -> _T:
-        """The caller's cache, when there is one."""
-        if self._cache is None:
+    def _read_through(self, key: str, produce: Callable[[], _T]) -> _T:
+        """
+        The caller's cache, when there is one and it is still answering.
+
+        Every failure here is caught and none reaches the caller. A cache is an
+        optimisation, and the rule the rest of this module follows — a missing
+        capability costs suggestions and never raises — holds for this one too.
+        `Exception` broadly, because the library cannot name a driver's errors
+        without importing it and a caller's object may raise anything.
+        """
+        if self._cache is None or self._failed:
             return produce()
-        cached = self._cache.get(key)
+        cached = self._cached(key)
         if cached is not None:
             found: _T = cached
             return found
         value = produce()
-        self._cache[key] = value
+        self._store(key, value)
         return value
+
+    def _cached(self, key: str) -> Any | None:
+        """
+        One read, or `None` for a miss, a failure, or a value we cannot decode.
+
+        A transport failure latches; a decode failure does not. They are
+        different events: the first says the store is unreachable and every
+        further read this request will pay the same timeout, the second says one
+        value under our namespace is not ours, and disabling the other five
+        reads over it would punish the wrong thing.
+        """
+        cache = self._cache
+        try:
+            if not self._encoded:
+                return cast(ObjectCache, cache).get(key)
+            raw = cast(ByteCache, cache).get_bytes(key)
+        except Exception:  # noqa: BLE001
+            self._failed = True
+            return None
+        if raw is None:
+            return None
+        try:
+            return codec.decode(raw)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _store(self, key: str, value: Any) -> None:
+        """
+        One write, failing silently.
+
+        The encode happens *outside* the guard on purpose. A value the codec
+        cannot handle is our bug and not the store's, and swallowing it would
+        turn a red build into a cache that quietly stores nothing;
+        `tests/test_cache_codec.py` exists so it never reaches here.
+        """
+        cache = self._cache
+        payload = codec.encode(value) if self._encoded else None
+        try:
+            if payload is None:
+                cast(ObjectCache, cache).set(key, value)
+            else:
+                cast(ByteCache, cache).set_bytes(key, payload)
+        except Exception:  # noqa: BLE001
+            self._failed = True
 
     def schemas(self, catalog: str | None = None) -> Sequence[str]:
         """Namespace names one level below `catalog`."""
-        return self._read(self._key(catalog, '\x00schemas'), lambda: self._catalog.schemas(catalog))
+        return self._read(self._key('schemas', catalog), lambda: self._catalog.schemas(catalog))
 
     def tables(self, schema: str | None) -> Sequence[Table]:
         """
@@ -308,11 +385,11 @@ class _Reader:
         silent, and `lsp/` holds one cache per session, so a single such caret
         emptied the relation list for the rest of it.
         """
-        return self._read(self._key(schema, '\x00tables'), lambda: self._catalog.tables(schema))
+        return self._read(self._key('tables', schema), lambda: self._catalog.tables(schema))
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
-        return self._read(self._key(schema, table), lambda: self._catalog.columns(schema, table))
+        return self._read(self._key('columns', schema, table), lambda: self._catalog.columns(schema, table))
 
     def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
         """
@@ -327,7 +404,7 @@ class _Reader:
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
         """Functions in `schema`, or everywhere."""
-        return self._read(self._key(schema, '\x00functions'), lambda: self._catalog.functions(schema))
+        return self._read(self._key('functions', schema), lambda: self._catalog.functions(schema))
 
     def loose_columns(self, prefix: str, limit: int) -> Sequence[Column]:
         """
@@ -375,7 +452,7 @@ class _Reader:
         catalog = self._catalog
         if not isinstance(catalog, SupportsColumnValues) or not _declared(catalog, 'common_values'):
             return ()
-        key = self._key(schema, table, f'\x00values:{column}')
+        key = self._key('values', schema, table, column)
         return self._read(key, lambda: catalog.common_values(schema, table, column, _MAX_VALUES))
 
     def foreign_keys(self, schema: str | None) -> Sequence[ForeignKey]:
@@ -389,7 +466,7 @@ class _Reader:
         catalog = self._catalog
         if not isinstance(catalog, SupportsForeignKeys) or not _declared(catalog, 'foreign_keys'):
             return ()
-        return self._read(self._key(schema, '\x00fk'), lambda: catalog.foreign_keys(schema))
+        return self._read(self._key('fk', schema), lambda: catalog.foreign_keys(schema))
 
     def keywords(self) -> Sequence[tuple[str, str]]:
         """Server keywords when available, otherwise the dialect's shipped set."""

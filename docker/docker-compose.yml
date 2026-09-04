@@ -29,6 +29,16 @@ services:
       timeout: 5s
       retries: 30
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '57379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.8-alpine
     environment:

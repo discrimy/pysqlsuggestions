@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
+from pysqlsuggestions.caches import MemoryCache
+from pysqlsuggestions.ports import Cache
+from pysqlsuggestions.testing import InMemoryByteCache
 from tests.corpus.cases import CASES
 from tests.grammar.cases import CASES as GRAMMAR_CASES
 
@@ -55,3 +60,15 @@ def pytest_terminal_summary(terminalreporter: TerminalReporter) -> None:
     if shared:
         counts = ', '.join(f'{sum(1 for c in GRAMMAR_CASES if name in c.dialects)} on {name}' for name in shared)
         terminalreporter.write_line(f'  also holding: {counts}')
+
+
+@pytest.fixture(params=['object', 'bytes'])
+def cache(request: pytest.FixtureRequest) -> Cache:
+    """
+    Both cache disciplines, so tests written for other reasons exercise the encoded path.
+
+    Unplanned coverage is the point: the sites using this were written about
+    roles, about the empty namespace and about second reads, and each of them
+    now says the same thing about bytes for free.
+    """
+    return MemoryCache() if request.param == 'object' else InMemoryByteCache()

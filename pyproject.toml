@@ -1,6 +1,6 @@
 [project]
 name = 'pysqlsuggestions'
-version = '0.8.0'
+version = '0.9.0'
 description = 'Context-aware, schema-aware SQL completion as a library'
 readme = 'README.md'
 requires-python = '>=3.10'
@@ -29,12 +29,16 @@ Demo = 'https://discrimy.github.io/pysqlsuggestions/'
 
 # Extras are named after the driver they install, not the backend: more than one
 # driver can serve the same backend, so a future psycopg3 extra sits alongside
-# psycopg2 rather than silently changing what `postgres` means.
+# psycopg2 rather than silently changing what `postgres` means. Anything that is
+# not a catalog driver is named for its role first — `demo` already was, without
+# anybody writing the rule down — so `cache-redis` and a future `cache-valkey`
+# are siblings the way `psycopg2` and `pg8000` are.
 [project.optional-dependencies]
 psycopg2 = ['psycopg2-binary>=2.9']
 pg8000 = ['pg8000>=1.30']
 clickhouse-driver = ['clickhouse-driver>=0.2.9']
 trino = ['trino>=0.328']
+cache-redis = ['redis>=3.0']
 demo = ['fastapi>=0.110', 'uvicorn>=0.29']
 
 [project.entry-points.'pysqlsuggestions.dialects']
@@ -74,6 +78,10 @@ dev = [
     'trino>=0.328',
     'fastapi>=0.110',
     'uvicorn>=0.29',
+    # The cache adapter's own tests: fakeredis for the fast suite, the real
+    # client for the one integration test that needs a server to be unpluggable.
+    'redis>=3.0',
+    'fakeredis>=2.21',
     # The language server and the pure-Python driver the extension bundles.
     'pysqlsuggestions-lsp',
     'pg8000>=1.30',

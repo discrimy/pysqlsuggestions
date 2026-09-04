@@ -1,5 +1,10 @@
 """
-The shared corpus every dialect must pass.
+The harnesses a third-party implementation needs to prove itself.
+
+Two of them: a shared corpus every dialect must pass, and the doubles and
+conformance checks for the cache port.
+
+The corpus first.
 
 A dialect is data, so a new one is a few dozen lines and no code — which makes
 it easy to write and easy to get quietly wrong. Nothing else in the suite tells
@@ -29,6 +34,7 @@ from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.dbapi import _markers, _quoted_spans
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
+from pysqlsuggestions.testing.caches import CacheConformance, InMemoryByteCache
 from pysqlsuggestions.types import Function, Kind
 
 _QUERY_ARITY = {
@@ -50,7 +56,7 @@ silently followed a refactor of the caller would stop catching the mistake it
 exists for. A change to either has to be a change to both, which is the point.
 """
 
-__all__ = ['Case', 'DialectConformance']
+__all__ = ['CacheConformance', 'Case', 'DialectConformance', 'InMemoryByteCache']
 
 USERS = (('id', 'integer'), ('email', 'varchar'), ('is_staff', 'boolean'))
 ORDERS = (('id', 'integer'), ('user_id', 'integer'), ('total', 'numeric'))

@@ -12,7 +12,7 @@ where the degradation lives so no adapter has to repeat it.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
@@ -178,26 +178,76 @@ class SupportsKeywords(Protocol):
         ...
 
 
-class Cache(Protocol):
+@runtime_checkable
+class ObjectCache(Protocol):
     """
-    Somewhere to keep catalog reads. A plain dict satisfies this.
+    Somewhere to keep catalog reads as Python objects. In practice, a dict.
 
-    The key shape is a documented contract, because users supply their own cache:
+    The key is an opaque string built by `pysqlsuggestions.caches.cache_key`,
+    which is the only supported way to make one — the string's shape is not a
+    format, and changes whenever a cached type does.
 
-        (role, dialect, schema, table)
+    `None` means miss. No value the library caches is ever `None`, which is what
+    makes one channel enough for two answers; the cost of that rule is recorded
+    in `docs/gaps.md`, where caching `all_columns` sits blocked by it.
 
-    `role` is first and is not optional. Privilege-aware reads evaluate against
-    the connection's role, so a cache keyed without it leaks one user's readable
-    set into another user's session — a failure that is silent and looks like a
-    database privilege bug rather than a caching bug. It is in the key from the
-    start so that adding it later cannot silently change the meaning of an
-    existing deployment's cache.
+    `ttl` is integer seconds, and `None` means the implementation's own default.
+    The library never passes one: it knows what a value is, not how long the
+    deployment wants it, so expiry belongs to whoever built the cache.
     """
 
-    def get(self, key: Any, default: Any = None) -> Any:
-        """The cached value, or `default`."""
+    def get(self, key: str) -> Any | None:
+        """The cached value, or `None`."""
         ...
 
-    def __setitem__(self, key: Any, value: Any) -> None:
+    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """Store a value."""
         ...
+
+
+@runtime_checkable
+class ByteCache(Protocol):
+    """
+    Somewhere to keep catalog reads as bytes. Anything across a process boundary.
+
+    The library encodes and decodes; an implementation never sees a `Table`,
+    which is what makes an adapter that forgets to encode unrepresentable rather
+    than merely unlikely.
+
+    The method names differ from `ObjectCache`'s deliberately. `isinstance`
+    against a `runtime_checkable` Protocol compares method names and nothing
+    else, so two protocols both spelling `get` and `set` would be
+    indistinguishable at runtime and would need a marker attribute whose only
+    job was to say which of two identical shapes was meant. Two smaller things
+    fall out: an implementation wrapping a client that already has `get` and
+    `set` with other semantics can delegate without shadowing, and a two-tier
+    cache can implement both. Where both are present the library uses
+    `ObjectCache`, because that path costs no encode.
+
+    `None` means miss, and specifically not `b''`, which is a value.
+
+    **The contract on sharing.** A cache must not be shared across databases. It
+    must also not be shared across identities *unless* the caller passes
+    `identity`, since that already leads the key. One namespace per database,
+    per identity you cannot name — the reads this caches are privilege-filtered,
+    so getting it wrong serves one user's readable set to another, which is
+    silent and reads as a database privilege bug.
+    """
+
+    def get_bytes(self, key: str) -> bytes | None:
+        """The stored bytes, or `None`."""
+        ...
+
+    def set_bytes(self, key: str, value: bytes, ttl: int | None = None) -> None:
+        """Store bytes."""
+        ...
+
+
+Cache: TypeAlias = ObjectCache | ByteCache
+"""
+Either discipline. An implementer satisfies whichever they can.
+
+A plain dict satisfies neither, which is a break from every version before
+0.9.0: it has `get` and no `set`. `pysqlsuggestions.caches.MemoryCache` is the
+dict this used to be.
+"""

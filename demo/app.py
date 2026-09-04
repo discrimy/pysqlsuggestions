@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from pysqlsuggestions.caches import MemoryCache, cache_key
 from pysqlsuggestions.catalogs.dbapi import Cursor, DbapiCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
@@ -125,7 +126,7 @@ EXAMPLES = {
 app = FastAPI(title='pysqlsuggestions demo')
 
 _connections: dict[str, Any] = {}
-_caches: dict[str, dict[Any, Any]] = {}
+_caches: dict[str, MemoryCache] = {}
 _examples: dict[str, str] = {}
 """Examples discovered from the connected database, overriding the fixture ones."""
 
@@ -207,15 +208,19 @@ def _warm(key: str) -> None:
     catalog = _catalog(key)
     if catalog is None:
         return
-    cache = _caches.setdefault(key, {})
+    cache = _caches.setdefault(key, MemoryCache())
     dialect = BACKENDS[key].dialect
     found = _discovered_example(key, catalog)
     if found is not None:
         _examples[key] = found
     with suppress(Exception):
         for name in ('', *catalog.schemas()):
-            cache[('demo', dialect.name, name, '\x00schemas')] = catalog.schemas(name or None)
-            cache[('demo', dialect.name, name, '')] = catalog.tables(name or None)
+            # `name or None` on both sides: the reader asks for the default namespace as
+            # `None`, and this wrote it under `''`, so neither half of the warm-up was
+            # ever read back. `cache_key` is what keeps the two ends from drifting again.
+            schema = name or None
+            cache.set(cache_key('demo', dialect.name, 'schemas', schema), catalog.schemas(schema))
+            cache.set(cache_key('demo', dialect.name, 'tables', schema), catalog.tables(schema))
 
 
 @app.on_event('startup')
@@ -265,7 +270,7 @@ def suggest(payload: SuggestRequest) -> JSONResponse:
 
     caret = payload.caret
     catalog = _catalog(backend.key)
-    cache = _caches.setdefault(backend.key, {})
+    cache = _caches.setdefault(backend.key, MemoryCache())
 
     return JSONResponse(
         respond(

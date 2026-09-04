@@ -19,7 +19,7 @@ from typing import Any
 
 from pysqlsuggestions.api import complete, derive_request, plan_insertion
 from pysqlsuggestions.dialects.base import Dialect
-from pysqlsuggestions.ports import Catalog
+from pysqlsuggestions.ports import Cache, Catalog
 from pysqlsuggestions.types import Kind, Relation, Request, Scope, Suggestion
 
 MAX_SQL_LENGTH = 20_000
@@ -51,7 +51,7 @@ def respond(
     dialect: Dialect,
     catalog: Catalog | None,
     *,
-    cache: dict[Any, Any] | None = None,
+    cache: Cache | None = None,
     identity: str = 'demo',
     limit: int = 25,
     pending: Sequence[int] = (),
