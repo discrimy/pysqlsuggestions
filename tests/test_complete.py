@@ -14,6 +14,7 @@ from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.dialects.trino import TRINO
+from pysqlsuggestions.ports import Cache
 from pysqlsuggestions.types import Column, Function, Kind, Table
 from tests.corpus.cases import split_caret
 
@@ -445,9 +446,8 @@ def test_a_completion_stores_the_key_cache_key_builds() -> None:
     assert cache_key('analyst', 'postgres', 'tables', None) in cache.writes
 
 
-def test_cache_prevents_a_second_read() -> None:
+def test_cache_prevents_a_second_read(cache: Cache) -> None:
     """A warm cache means the catalog is not touched again."""
-    cache = MemoryCache()
     cat = catalog()
     sql, caret = split_caret('SELECT * FROM reports_report r WHERE r.⌶')
     complete(sql, caret, POSTGRES, cat, cache=cache, identity='analyst')
@@ -596,20 +596,21 @@ def test_a_table_of_unknown_size_says_nothing_about_it() -> None:
     assert found['reports_report'] == 'public.reports_report (table)'
 
 
-def test_an_empty_qualifier_does_not_evict_the_relation_list() -> None:
+def test_an_empty_qualifier_does_not_evict_the_relation_list(cache: Cache) -> None:
     """
     `tables` and `columns` shared a cache key when the table name was empty.
 
     Every reader once shared a four-tuple key and carried a NUL sentinel in its
     last slot to keep it clear of a column read — except `tables`, which used the
     bare empty string, so `tables(None)` and `columns(None, '')` were one key.
-    The sentinel is now `kind`, a field of the key's grammar, which makes the
-    conflation unrepresentable rather than avoided; this stays as the regression
-    test for the caret that found it. `SELECT "".⌶` is a quoted empty identifier and reaches the second,
-    which meant one such caret either crashed the next relation read or silently
-    emptied it for as long as the cache lived.
+    `SELECT "".⌶` is a quoted empty identifier and reaches the second, which meant
+    one such caret either crashed the next relation read or silently emptied it
+    for as long as the cache lived.
+
+    The sentinel is now `kind`, a field of the key's grammar, so the conflation
+    is unrepresentable rather than avoided. This stays as the regression test for
+    the caret that found it.
     """
-    cache = MemoryCache()
     warm = catalog()
     complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')
     complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
@@ -618,7 +619,7 @@ def test_an_empty_qualifier_does_not_evict_the_relation_list() -> None:
     assert after == cold
 
 
-def test_an_empty_namespace_does_not_empty_the_relation_list() -> None:
+def test_an_empty_namespace_does_not_empty_the_relation_list(cache: Cache) -> None:
     """
     The other order, and the other half of the same conflation.
 
@@ -630,7 +631,6 @@ def test_an_empty_namespace_does_not_empty_the_relation_list() -> None:
     as the cache lived. A sentinel on `tables` does not help: both calls are
     `tables`, and it is the argument that was lost.
     """
-    cache = MemoryCache()
     warm = catalog()
     complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
     after = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')]
