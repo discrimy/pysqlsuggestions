@@ -257,6 +257,16 @@ class _Reader:
         serves both the TABLE candidates and the join proposals' availability —
         and with no cache supplied that would be two round trips for one answer.
         """
+        self._failed = False
+        """
+        Whether the cache has already failed during this request.
+
+        Latched rather than retried. A store behind a socket with a two-second
+        timeout costs one timeout per read otherwise, so a request making six
+        reads waits twelve seconds to answer what it could have answered in
+        none — slower than having no cache at all, and indistinguishable from
+        the engine hanging.
+        """
 
     def _key(self, kind: ReadKind, *parts: str | None) -> str:
         """
@@ -284,15 +294,30 @@ class _Reader:
         return value
 
     def _read_through(self, key: str, produce: Callable[[], _T]) -> _T:
-        """The caller's cache, when there is one."""
-        if self._cache is None:
+        """
+        The caller's cache, when there is one and it is still answering.
+
+        Every failure here is caught and none reaches the caller. A cache is an
+        optimisation, and the rule the rest of this module follows — a missing
+        capability costs suggestions and never raises — holds for this one too.
+        `Exception` broadly, because the library cannot name a driver's errors
+        without importing it and a caller's object may raise anything.
+        """
+        if self._cache is None or self._failed:
             return produce()
-        cached = self._cache.get(key)
+        try:
+            cached = self._cache.get(key)
+        except Exception:  # noqa: BLE001
+            self._failed = True
+            return produce()
         if cached is not None:
             found: _T = cached
             return found
         value = produce()
-        self._cache[key] = value
+        try:
+            self._cache[key] = value
+        except Exception:  # noqa: BLE001
+            self._failed = True
         return value
 
     def schemas(self, catalog: str | None = None) -> Sequence[str]:
