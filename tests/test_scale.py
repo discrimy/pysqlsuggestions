@@ -12,9 +12,13 @@ import gc
 import sys
 import time
 import tracemalloc
+from typing import Any
+
+import pytest
 
 from pysqlsuggestions.api import complete, derive_request
 from pysqlsuggestions.dialects.postgres import POSTGRES
+from pysqlsuggestions.engine import analyse
 
 _BUDGET_SECONDS = 1.5
 
@@ -123,7 +127,17 @@ def test_a_long_cte_chain_resolves_without_exhausting_the_stack() -> None:
     assert complete(sql, len(sql), POSTGRES) is not None
 
 
-def test_deeply_nested_derived_tables_stay_interactive() -> None:
+_MAX_UNCACHED_SCANS = 40_000
+"""
+What the memoised scope walk is allowed to scan at depth 160.
+
+Sits between the 17,547 the memo produces and the 100,774 it prevents, with room
+on both sides: a clause-model change that shifts the count a little does not fail
+this, and losing the memo does.
+"""
+
+
+def test_deeply_nested_derived_tables_are_not_rescanned_per_level(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     The scope walk asked the same question about the same tokens repeatedly.
 
@@ -136,12 +150,40 @@ def test_deeply_nested_derived_tables_stay_interactive() -> None:
     A generated query is where this arrives: `_MAX_NESTING`'s own comment says
     "nobody writes sixty-four, but a code generator does", and 2.6 KB of it took
     almost two seconds.
+
+    **Counted rather than timed, and that is this test rather than a detail of
+    it.** It used to assert 1.5 seconds against a cost of 0.9, and it failed in
+    CI. The memo is worth about 4x in wall clock here — 0.9 seconds against 3.7
+    — which is the same order as the spread between a developer's machine and a
+    two-core hosted runner, so any absolute budget tight enough to catch the
+    regression is also tight enough to trip on hardware.
+
+    Neither other timing shape in this file rescues it. A budget loose enough
+    for a slow runner stops detecting anything, because the unmemoised walk
+    finishes in 3.7 seconds and passes every threshold such a runner also
+    passes. And a growth ratio — what
+    `test_the_cost_grows_with_the_query_not_with_its_square` asserts — never
+    detected this at all: the memo helps both depths in much the same
+    proportion, 18.5x from depth forty to depth 160 with it against 22.5x
+    without.
+
+    The count separates cleanly and reads the same on every machine, so what was
+    a proxy for the defect is now the defect itself.
     """
     depth = 160
     sql = 'SELECT * FROM ' + '(SELECT * FROM ' * depth + 'users u WHERE u.' + ')' * depth
-    started = time.perf_counter()
+    scanned = 0
+    uncached = analyse._scan_clause_start  # noqa: SLF001
+
+    def counted(*args: Any, **kwargs: Any) -> Any:
+        """Count one scan the memo did not answer, then answer as usual."""
+        nonlocal scanned
+        scanned += 1
+        return uncached(*args, **kwargs)
+
+    monkeypatch.setattr(analyse, '_scan_clause_start', counted)
     derive_request(sql, sql.index('u.') + 2, POSTGRES)
-    assert time.perf_counter() - started < _BUDGET_SECONDS
+    assert scanned < _MAX_UNCACHED_SCANS, f'{scanned} uncached scans: the walk is rescanning levels again'
 
 
 def test_the_memo_does_not_grow_with_the_square_of_a_relation_list() -> None:
