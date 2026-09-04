@@ -4,6 +4,83 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## 0.9.0
+
+### Nothing changes at a caret
+
+Which is worth stating, because everything else here does. Every position
+answers exactly what it answered in 0.8.0, with the same ranking and the same
+degradations. What changes is who is allowed to hold the answers between
+keystrokes.
+
+### Breaking: a plain dict is no longer a cache
+
+`Cache` was one protocol whose docstring opened by saying a dict satisfied it.
+It is now two — `ObjectCache`, with `get(key)` and `set(key, value, ttl=None)`,
+and `ByteCache`, with `get_bytes` and `set_bytes` — and a dict satisfies
+neither, because it has `get` and no `set`.
+
+Passing one raises `TypeError` naming the replacement. That is deliberate:
+treating it as "no cache" would have left every existing caller correct, silent
+and uncached, with nothing to notice but completions that had quietly got
+slower.
+
+```python
+complete(sql, caret, POSTGRES, catalog, cache={})              # 0.8.0
+complete(sql, caret, POSTGRES, catalog, cache=MemoryCache())   # 0.9.0
+```
+
+`MemoryCache` is in `pysqlsuggestions.caches` and is the dict it used to be,
+with an optional expiry.
+
+### Any store can now be a cache
+
+`ByteCache` exists so that redis, memcached, diskcache or anything else can hold
+catalog reads for a fleet of processes rather than one. The library owns the
+encoding on both ends: the key is an opaque string from `cache_key`, and values
+are encoded by the library, so an implementation never sees a `Table` and cannot
+forget to serialise one. An `ObjectCache` is stored as-is, so the in-process
+path pays nothing for the existence of the other one.
+
+### A redis cache, in an extra
+
+```bash
+pip install 'pysqlsuggestions[cache-redis]'
+```
+
+```python
+from pysqlsuggestions.caches.redis import RedisCache
+
+cache = RedisCache.from_url('redis://localhost:6379/0', namespace='prod-pg')
+```
+
+`namespace` is required and has no default. The key leads with the role and
+carries the dialect but names no server, so two databases sharing a namespace
+would serve each other's privilege-filtered reads — silently, and looking like a
+database permission bug. One namespace per database, and per identity you cannot
+name.
+
+The module never imports redis outside `from_url`; it duck-types a client with
+`get` and `set`, which is what makes it work with redis-py 3 through 6, valkey,
+cluster clients and pooling wrappers alike.
+
+### A cache that fails costs suggestions, never the completion
+
+The rule the rest of the library follows now covers this port too. A store that
+is down, full, or handing back something foreign is caught, and the completion
+answers as it would have with no cache at all. A transport failure disables the
+cache for the remainder of that one request — otherwise a two-second socket
+timeout is paid once per read rather than once per request — while an
+undecodable value is treated as a miss and nothing more.
+
+### For anyone writing an adapter
+
+`pysqlsuggestions.testing` ships `CacheConformance`, which checks the parts of
+the `ByteCache` contract that two method names do not state: that a miss is
+`None` and not `b''`, that arbitrary binary round-trips, that a write replaces,
+and that keys are opaque. `InMemoryByteCache` is there too, for exercising the
+encoded path without a socket.
+
 ## 0.8.0
 
 ### Accepting a suggestion no longer breaks the statement

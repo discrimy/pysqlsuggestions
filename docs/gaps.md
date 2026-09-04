@@ -68,6 +68,89 @@ anybody is typing.
 
 ---
 
+## 3. Caching the unqualified column search
+
+`SupportsColumnSearch.all_columns` is prefix-independent and would be the single
+most valuable thing a shared cache could hold: it is the read behind `SELECT ⌶`
+with no FROM yet, it touches every relation in the database, and unlike
+`search_columns` beside it, nothing about it changes between keystrokes.
+
+It is not cached, and what blocks it is a rule 0.9.0 introduced rather than an
+oversight. `all_columns` returns `Sequence[Column] | None`, where `None` is a
+real answer meaning "too many to enumerate" — and `None` is also how the cache
+port spells a miss. Caching it would need either a sentinel value standing for
+"the catalog declined", or an envelope wrapping every cached value so that
+presence and content are separate questions.
+
+The envelope is the honest shape and it is not free: it adds a level to
+everything the codec writes, for one read out of seven. A sentinel is cheaper
+and is the kind of in-band signal this codebase has already been bitten by —
+`\x00tables` was one, and the collision it caused is why the key has a `kind`
+field now.
+
+Worth doing when there is a second reason to want an envelope. Not worth an
+envelope on its own.
+
+---
+
+## 4. Does `identity` belong in the cache key?
+
+It has led the key since v0.1, on an argument rather than a measurement: reads
+are privilege-filtered, so a cache keyed without the role serves one user's
+readable set to another, and that failure is silent and reads as a database
+permission bug. `tests/test_availability.py` is the test that finally gave it
+meaning.
+
+Sharing a store makes the question live, because `identity` is *optional*.
+`server.py` passes `self.profile.user if self.profile else None`, and
+`Profile.user` is itself `str | None`, so a profile using peer auth or a bare
+DSN has none to pass. In-process that never mattered — a dict lives inside one
+session, so isolation was structural. A shared store removes the structure.
+
+Two mechanisms were designed and neither shipped.
+
+**Requiring it on `complete`** removes the hazard by construction, which is the
+right shape, and is a second breaking change to the public API for a question
+nobody has settled: something still has to resolve an identity when the
+connection profile does not name one.
+
+**A `SupportsIdentity` capability** reading the session role — `SELECT
+current_user` and its per-dialect equivalents — is the most correct source,
+since privilege filtering evaluates against the session role rather than against
+what a settings file claimed. It reintroduces the same problem one level down:
+every capability here must define what happens when it is absent, and the answer
+would be the cross-role share again. It also has a chicken-and-egg: the read
+that resolves an identity would need a cache key containing the identity it is
+resolving, so it can only be cached by the adapter, not by `_Reader`.
+
+What shipped instead is a contract, stated on `ByteCache` and on `RedisCache`'s
+`namespace`: one cache per database, and per identity you cannot name. That is
+the right answer for a release about storage and the wrong place to leave it
+permanently.
+
+---
+
+## 5. Batch reads for a cache across a socket
+
+One `get` per read, and a completion makes up to six distinct ones. Locally that
+is free. Over a socket at one millisecond it is six milliseconds; at twenty —
+another region, or a busy managed instance — it is the whole latency budget.
+
+The obvious fix is a `SupportsBulkRead` capability, and it is not reachable from
+where `_Reader` stands. It discovers its keys *as the request resolves*: nothing
+knows it needs `columns(schema, table)` until scope resolution has named the
+relation, and nothing knows it needs `common_values` until the comparand's type
+is known. Batching means restructuring `_Reader` into a plan-then-execute pass —
+work out every key the request could want, fetch them together, then answer from
+what came back — which changes what a capability's absence means at every one of
+those points.
+
+`_memo` already collapses repeats within a request, so the win is one round trip
+against six rather than against sixty. Worth measuring against a remote store
+before building; not worth building on the argument alone.
+
+---
+
 ## Closed since this list was written
 
 Kept rather than deleted, because a list whose entries only ever disappear tells
