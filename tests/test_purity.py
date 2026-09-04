@@ -15,7 +15,7 @@ import pysqlsuggestions
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / 'src' / 'pysqlsuggestions' / 'engine'
 FORBIDDEN_FOR_ENGINE = {'pysqlsuggestions.ports', 'pysqlsuggestions.resolve'}
-DRIVERS = {'psycopg2', 'psycopg', 'trino', 'clickhouse_connect', 'clickhouse_driver', 'sqlalchemy', 'sqlglot'}
+DRIVERS = {'psycopg2', 'psycopg', 'trino', 'clickhouse_connect', 'clickhouse_driver', 'sqlalchemy', 'sqlglot', 'redis'}
 
 
 def test_version_is_declared_once_in_effect() -> None:
@@ -61,6 +61,22 @@ def test_import_pulls_in_no_catalog_readers() -> None:
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
     loaded = set(result.stdout.split())
     assert not (READERS & loaded), f'a catalog reader leaked into import: {sorted(READERS & loaded)}'
+
+
+def test_import_pulls_in_no_cache_adapter() -> None:
+    """
+    `pysqlsuggestions.caches.redis` must not load on a bare import.
+
+    It takes no dependency — it duck-types a client rather than importing one —
+    so neither of the guards above can see it. What this actually pins is that
+    `caches/__init__.py` does not re-export it: importing any submodule of that
+    package runs its `__init__`, and `resolve.py` imports the key encoder, so a
+    convenience re-export would drag the adapter into every import of the
+    library.
+    """
+    code = 'import sys, pysqlsuggestions; print(" ".join(sorted(sys.modules)))'
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True)
+    assert 'pysqlsuggestions.caches.redis' not in set(result.stdout.split())
 
 
 def _imported_modules(path: Path) -> set[str]:
