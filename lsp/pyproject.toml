@@ -1,10 +1,10 @@
 [project]
 name = 'pysqlsuggestions-lsp'
-version = '0.8.0'
+version = '0.9.0'
 description = 'A language server over pysqlsuggestions'
 requires-python = '>=3.10'
 dependencies = [
-    'pysqlsuggestions==0.8.0',
+    'pysqlsuggestions==0.9.0',
     # 2.x, not 1.x: the two differ in how features are registered and in what a
     # handler receives, and `server.py` is written against 2.x. A floor that
     # admitted 1.x would install cleanly and fail at the first keystroke.
