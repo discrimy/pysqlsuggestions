@@ -14,16 +14,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from inspect import getattr_static
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
+from pysqlsuggestions.caches import codec
 from pysqlsuggestions.caches.keys import ReadKind, cache_key
 from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
 from pysqlsuggestions.engine.analyse import SET_OPERATION_TAIL
 from pysqlsuggestions.engine.rank import MAX_POSITION_PENALTY, quote_if_needed
 from pysqlsuggestions.ports import (
+    ByteCache,
     Cache,
     Catalog,
+    ObjectCache,
     SupportsColumnSearch,
     SupportsColumnValues,
     SupportsForeignKeys,
@@ -257,6 +260,14 @@ class _Reader:
         serves both the TABLE candidates and the join proposals' availability —
         and with no cache supplied that would be two round trips for one answer.
         """
+        self._encoded = cache is not None and not isinstance(cache, ObjectCache)
+        """
+        Whether this cache takes bytes.
+
+        Decided once rather than per read, and `ObjectCache` wins a tie: an
+        implementation satisfying both is a two-tier cache, and the object path
+        is the one that costs no encode.
+        """
         self._failed = False
         """
         Whether the cache has already failed during this request.
@@ -305,20 +316,57 @@ class _Reader:
         """
         if self._cache is None or self._failed:
             return produce()
-        try:
-            cached = self._cache.get(key)
-        except Exception:  # noqa: BLE001
-            self._failed = True
-            return produce()
+        cached = self._cached(key)
         if cached is not None:
             found: _T = cached
             return found
         value = produce()
+        self._store(key, value)
+        return value
+
+    def _cached(self, key: str) -> Any | None:
+        """
+        One read, or `None` for a miss, a failure, or a value we cannot decode.
+
+        A transport failure latches; a decode failure does not. They are
+        different events: the first says the store is unreachable and every
+        further read this request will pay the same timeout, the second says one
+        value under our namespace is not ours, and disabling the other five
+        reads over it would punish the wrong thing.
+        """
+        cache = self._cache
         try:
-            self._cache[key] = value
+            if not self._encoded:
+                return cast(ObjectCache, cache).get(key)
+            raw = cast(ByteCache, cache).get_bytes(key)
         except Exception:  # noqa: BLE001
             self._failed = True
-        return value
+            return None
+        if raw is None:
+            return None
+        try:
+            return codec.decode(raw)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _store(self, key: str, value: Any) -> None:
+        """
+        One write, failing silently.
+
+        The encode happens *outside* the guard on purpose. A value the codec
+        cannot handle is our bug and not the store's, and swallowing it would
+        turn a red build into a cache that quietly stores nothing;
+        `tests/test_cache_codec.py` exists so it never reaches here.
+        """
+        cache = self._cache
+        payload = codec.encode(value) if self._encoded else None
+        try:
+            if payload is None:
+                cast(ObjectCache, cache).set(key, value)
+            else:
+                cast(ByteCache, cache).set_bytes(key, payload)
+        except Exception:  # noqa: BLE001
+            self._failed = True
 
     def schemas(self, catalog: str | None = None) -> Sequence[str]:
         """Namespace names one level below `catalog`."""

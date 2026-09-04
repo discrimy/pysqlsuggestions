@@ -48,6 +48,7 @@ from lsprotocol.types import (
 from pygls.lsp.server import LanguageServer
 
 from pysqlsuggestions import complete
+from pysqlsuggestions.caches import MemoryCache
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.registry import named
@@ -114,7 +115,7 @@ class Session:
     columns and aliases — so nothing downstream can infer this from the
     suggestions themselves. It has to be said out loud.
     """
-    cache: dict[Any, Any] = field(default_factory=dict)
+    cache: MemoryCache = field(default_factory=MemoryCache)
     _catalog: Any = None
     _tried: bool = False
     _announced: bool = False

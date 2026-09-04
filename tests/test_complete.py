@@ -7,7 +7,7 @@ from collections.abc import Sequence
 import pytest
 
 from pysqlsuggestions.api import complete, derive_request
-from pysqlsuggestions.caches import cache_key
+from pysqlsuggestions.caches import MemoryCache, cache_key
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Dialect
@@ -406,15 +406,28 @@ def test_limit_is_respected() -> None:
 
 def test_cache_is_keyed_by_role() -> None:
     """Two roles must not share a cached read; the key shape is a documented contract."""
-    cache: dict[str, object] = {}
+    cache = _Recorder()
     sql, caret = split_caret('SELECT * FROM reports_report r WHERE r.⌶')
     complete(sql, caret, POSTGRES, catalog(), cache=cache, identity='analyst')
     complete(sql, caret, POSTGRES, catalog(), cache=cache, identity='admin')
-    analyst = {key for key in cache if ':+analyst:' in key}
-    admin = {key for key in cache if ':+admin:' in key}
+    analyst = {key for key in cache.writes if ':+analyst:' in key}
+    admin = {key for key in cache.writes if ':+admin:' in key}
     assert analyst
     assert admin
     assert not analyst & admin
+
+
+class _Recorder(MemoryCache):
+    """A `MemoryCache` that remembers the keys written to it, so a test can read them."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.writes: list[str] = []
+
+    def set(self, key: str, value: object, ttl: int | None = None) -> None:
+        """Record the key, then store as usual."""
+        self.writes.append(key)
+        super().set(key, value, ttl)
 
 
 def test_a_completion_stores_the_key_cache_key_builds() -> None:
@@ -427,14 +440,14 @@ def test_a_completion_stores_the_key_cache_key_builds() -> None:
     a prewarm writing keys no read ever looks up would pass every test and warm
     nothing.
     """
-    cache: dict[str, object] = {}
+    cache = _Recorder()
     complete('SELECT * FROM ', 14, POSTGRES, catalog(), cache=cache, identity='analyst')
-    assert cache_key('analyst', 'postgres', 'tables', None) in cache
+    assert cache_key('analyst', 'postgres', 'tables', None) in cache.writes
 
 
 def test_cache_prevents_a_second_read() -> None:
     """A warm cache means the catalog is not touched again."""
-    cache: dict[str, object] = {}
+    cache = MemoryCache()
     cat = catalog()
     sql, caret = split_caret('SELECT * FROM reports_report r WHERE r.⌶')
     complete(sql, caret, POSTGRES, cat, cache=cache, identity='analyst')
@@ -596,7 +609,7 @@ def test_an_empty_qualifier_does_not_evict_the_relation_list() -> None:
     which meant one such caret either crashed the next relation read or silently
     emptied it for as long as the cache lived.
     """
-    cache: dict[str, object] = {}
+    cache = MemoryCache()
     warm = catalog()
     complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')
     complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
@@ -617,7 +630,7 @@ def test_an_empty_namespace_does_not_empty_the_relation_list() -> None:
     as the cache lived. A sentinel on `tables` does not help: both calls are
     `tables`, and it is the argument that was lost.
     """
-    cache: dict[str, object] = {}
+    cache = MemoryCache()
     warm = catalog()
     complete('SELECT "".', 10, POSTGRES, warm, cache=cache, identity='analyst')
     after = [s.text for s in complete('SELECT * FROM ', 14, POSTGRES, warm, cache=cache, identity='analyst')]

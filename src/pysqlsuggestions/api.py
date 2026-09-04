@@ -19,7 +19,7 @@ from pysqlsuggestions.engine.lex import lex
 from pysqlsuggestions.engine.local import local_candidates
 from pysqlsuggestions.engine.rank import quote_if_needed, rank
 from pysqlsuggestions.engine.request import derive_request
-from pysqlsuggestions.ports import Cache, Catalog
+from pysqlsuggestions.ports import ByteCache, Cache, Catalog, ObjectCache
 from pysqlsuggestions.resolve import resolve
 from pysqlsuggestions.types import (
     Candidate,
@@ -87,7 +87,18 @@ def complete(
 
     `identity` is the end-user role. It leads the cache key, because a cache
     shared across roles leaks one user's readable set into another's session.
+
+    A `cache` satisfying neither protocol is refused here rather than ignored. A
+    plain dict is exactly that case — it has `get` and no `set` — and treating it
+    as "no cache" would leave a caller written against the pre-0.9.0 port
+    correct, silent and uncached, with nothing to notice but suggestions that
+    had quietly got slower.
     """
+    if cache is not None and not isinstance(cache, ObjectCache | ByteCache):
+        raise TypeError(
+            'cache must satisfy ObjectCache (get/set) or ByteCache (get_bytes/set_bytes). '
+            'A plain dict satisfies neither — use pysqlsuggestions.caches.MemoryCache().'
+        )
     request = derive_request(sql, caret, dialect)
     return rank(_candidates(request, dialect, catalog, cache, identity, limit), request, dialect, limit)
 

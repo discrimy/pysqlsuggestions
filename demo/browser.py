@@ -20,6 +20,7 @@ import json
 from demo import schema
 from demo.payload import MAX_PENDING, MAX_SQL_LENGTH, backend_entry, respond
 
+from pysqlsuggestions.caches import MemoryCache
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
 from pysqlsuggestions.dialects.clickhouse import CLICKHOUSE
@@ -61,7 +62,7 @@ class Demo:
             'clickhouse': schema.clickhouse(),
             'trino': schema.trino(),
         }
-        self._caches: dict[str, dict[object, object]] = {key: {} for key in self._catalogs}
+        self._caches: dict[str, MemoryCache] = {key: MemoryCache() for key in self._catalogs}
 
     def backends(self) -> str:
         """The tab strip, as JSON."""

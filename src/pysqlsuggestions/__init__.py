@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pysqlsuggestions.api import apply_suggestion, complete, derive_request, plan_insertion
 from pysqlsuggestions.ports import (
+    ByteCache,
     Cache,
     Catalog,
+    ObjectCache,
     SupportsColumnSearch,
     SupportsColumnValues,
     SupportsForeignKeys,
@@ -32,6 +34,7 @@ __version__ = '0.8.0'
 
 __all__ = [
     'Availability',
+    'ByteCache',
     'Cache',
     'Candidate',
     'Catalog',
@@ -41,6 +44,7 @@ __all__ = [
     'Function',
     'Insertion',
     'Kind',
+    'ObjectCache',
     'Projection',
     'Relation',
     'Request',
