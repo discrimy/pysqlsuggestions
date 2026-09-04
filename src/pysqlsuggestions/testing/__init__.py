@@ -34,7 +34,7 @@ from pysqlsuggestions.api import complete
 from pysqlsuggestions.catalogs.dbapi import _markers, _quoted_spans
 from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects.base import Dialect
-from pysqlsuggestions.testing.caches import InMemoryByteCache
+from pysqlsuggestions.testing.caches import CacheConformance, InMemoryByteCache
 from pysqlsuggestions.types import Function, Kind
 
 _QUERY_ARITY = {
@@ -56,7 +56,7 @@ silently followed a refactor of the caller would stop catching the mistake it
 exists for. A change to either has to be a change to both, which is the point.
 """
 
-__all__ = ['Case', 'DialectConformance', 'InMemoryByteCache']
+__all__ = ['CacheConformance', 'Case', 'DialectConformance', 'InMemoryByteCache']
 
 USERS = (('id', 'integer'), ('email', 'varchar'), ('is_staff', 'boolean'))
 ORDERS = (('id', 'integer'), ('user_id', 'integer'), ('total', 'numeric'))
