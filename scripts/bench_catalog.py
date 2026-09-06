@@ -405,7 +405,7 @@ def measure(spec: Ladder, connect: Any, paramstyle: str, rtt: float) -> None:
     rows = []
     for label, sql in carets.items():
         request = derive_request(sql, len(sql), POSTGRES)
-        resolve_ms, candidates = timed(partial(resolve, request, catalog, POSTGRES, cache=warm, limit=200))
+        resolve_ms, candidates = timed(partial(resolve, request, catalog, POSTGRES, cache=warm))
         rank_ms, _ = timed(partial(rank, candidates, request, POSTGRES, 40))
         rows.append(
             (
@@ -432,12 +432,58 @@ def measure(spec: Ladder, connect: Any, paramstyle: str, rtt: float) -> None:
     connection.close()
 
 
+def build_crowded(connect: Any) -> None:
+    """Create the crowded-search fixture from scratch."""
+    admin = connect(DSN.format(database='postgres'))
+    admin.autocommit = True
+    with admin.cursor() as cursor:
+        cursor.execute(f'DROP DATABASE IF EXISTS {CROWDED} WITH (FORCE)')
+        cursor.execute(f'CREATE DATABASE {CROWDED}')
+    admin.close()
+
+    connection = connect(DSN.format(database=CROWDED))
+    connection.autocommit = True
+    with connection.cursor() as cursor:
+        cursor.execute('; '.join(crowded_ddl()))
+        cursor.execute('ANALYZE')
+    connection.close()
+    print(f'  {CROWDED}: 701 relations carrying one column name')
+
+
+def measure_crowded(connect: Any, paramstyle: str) -> None:
+    """
+    Report whether the search-path column survives the search's truncation.
+
+    Not a timing. This is the one place `SEARCH_ROWS` is visibly load-bearing,
+    and what it reports is an answer rather than a duration: the wanted column
+    appears at 701 rows and not at 700, so the number in the library is either
+    large enough for this shape or it is not.
+    """
+    connection = connect(DSN.format(database=CROWDED))
+    catalog = DbapiCatalog(connection.cursor, POSTGRES, paramstyle=paramstyle)
+    rule = '=' * 78
+    print(f'\n{rule}\n  {CROWDED}: a crowded search, off the search path\n{rule}')
+
+    sql = 'SELECT user_ref'
+    found = [suggestion.text for suggestion in complete(sql, len(sql), POSTGRES, catalog)]
+    wanted = next((text for text in found if text.startswith('zzz_orders')), None)
+    print(f'  SEARCH_ROWS is {SEARCH_ROWS}, and 701 relations carry the column')
+    print(f'  top 3: {found[:3]}')
+    print(f'  the one relation a bare reference could reach: {wanted or "NOT OFFERED"}')
+    connection.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Build the ladder, measure it, or both."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--build', action='store_true', help='create the schemas first; takes a few minutes')
     parser.add_argument('--only', action='append', help='one rung by name, repeatable (default: all of them)')
     parser.add_argument('--rtt', type=float, default=0.0, help='also report the cold path at this round trip, in ms')
+    parser.add_argument(
+        '--crowded',
+        action='store_true',
+        help='also build and report the crowded-search case, which shows what a truncated search loses',
+    )
     arguments = parser.parse_args(argv)
 
     try:
@@ -456,6 +502,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             build(rung, psycopg2.connect)
     for rung in wanted:
         measure(rung, psycopg2.connect, psycopg2.paramstyle, arguments.rtt)
+
+    if arguments.crowded:
+        if arguments.build:
+            build_crowded(psycopg2.connect)
+        measure_crowded(psycopg2.connect, psycopg2.paramstyle)
     return 0
 
 

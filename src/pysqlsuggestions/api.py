@@ -100,7 +100,7 @@ def complete(
             'A plain dict satisfies neither — use pysqlsuggestions.caches.MemoryCache().'
         )
     request = derive_request(sql, caret, dialect)
-    return rank(_candidates(request, dialect, catalog, cache, identity, limit), request, dialect, limit)
+    return rank(_candidates(request, dialect, catalog, cache, identity), request, dialect, limit)
 
 
 def _candidates(
@@ -109,11 +109,10 @@ def _candidates(
     catalog: Catalog | None,
     cache: Cache | None,
     identity: str | None,
-    limit: int,
 ) -> list[Candidate]:
     local = local_candidates(request)
     source = catalog if catalog is not None else _NullCatalog()
-    fetched = resolve(request, source, dialect, cache=cache, identity=identity, limit=limit * 5)
+    fetched = resolve(request, source, dialect, cache=cache, identity=identity)
     known = {(c.kind, c.text) for c in local}
     return [*local, *(c for c in fetched if (c.kind, c.text) not in known)]
 

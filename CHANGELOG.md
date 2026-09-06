@@ -4,7 +4,18 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
-## Unreleased
+## 0.11.0
+
+### `resolve` no longer takes a `limit`
+
+Nothing in `complete`'s signature changes, and no caret answers differently. This
+is for anyone using the lower-level entry point directly.
+
+The parameter bounded the prefix searches, which now bound themselves at
+`SEARCH_ROWS`, so it had become an argument that was accepted and ignored. That
+is worse than removing it: a caller asking for five suggestions used to search a
+smaller part of the database than one asking for forty, and would have gone on
+believing they still could.
 
 ### A truncated completion list now says it is truncated
 

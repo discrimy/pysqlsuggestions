@@ -66,3 +66,28 @@ def test_the_row_count_is_not_the_suggestion_limit() -> None:
     server's ordering discarding something the engine would have ranked first.
     """
     assert SEARCH_ROWS >= 1000
+
+
+def test_a_small_display_limit_does_not_narrow_the_search() -> None:
+    """
+    Asking for five suggestions must consider the same candidates as asking for forty.
+
+    These were tied together and it was the whole bug: the rows fetched came from
+    `limit * 5`, so a caller who wanted a short list silently searched a smaller
+    part of the database and could be handed a worse best answer, not merely
+    fewer of them.
+
+    Asserted through `complete`, because that is where the coupling lived.
+    """
+    from pysqlsuggestions.api import complete
+    from pysqlsuggestions.catalogs.memory import MemoryCatalog
+
+    snapshot = {
+        ('public', f'relation_{index:03d}'): [('id', 'bigint'), (f'user_ref_{index}', 'bigint')] for index in range(60)
+    }
+    catalog = MemoryCatalog(snapshot, search_path=('public',))
+
+    sql = 'SELECT user_ref'
+    short = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=5)]
+    long = [s.text for s in complete(sql, len(sql), POSTGRES, catalog, limit=40)]
+    assert short == long[:5]

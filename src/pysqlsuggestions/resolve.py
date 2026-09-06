@@ -50,7 +50,6 @@ from pysqlsuggestions.types import (
     Table,
 )
 
-_DEFAULT_SEARCH_LIMIT = 200
 _MAX_VALUES = 30
 """How many frequent values are worth offering. `pg_stats` keeps up to a hundred."""
 
@@ -123,15 +122,24 @@ def resolve(
     *,
     cache: Cache | None = None,
     identity: str | None = None,
-    limit: int = _DEFAULT_SEARCH_LIMIT,
 ) -> list[Candidate]:
-    """Fetch what `request` asked for. Returns candidates; ranking happens after."""
+    """
+    Fetch what `request` asked for. Returns candidates; ranking happens after.
+
+    No limit, deliberately. This used to take one and thread it down to the
+    prefix searches, so a caller asking for five suggestions searched a smaller
+    part of the database than one asking for forty — a shorter list *and* a
+    possibly worse best answer. How many rows a search reads is
+    `dialect.base.SEARCH_ROWS`, which is a property of what can be ranked
+    affordably rather than of what a front end means to display, and ranking is
+    where the display limit belongs.
+    """
     if not request.kinds:
         return []
     reader = _Reader(catalog, dialect, cache, identity)
     _prefetch_scope_columns(request, reader)
     fetch = _qualified if request.qualifier else _unqualified
-    return _of_comparable_type(fetch(request, reader, dialect, limit), request, reader)
+    return _of_comparable_type(fetch(request, reader, dialect), request, reader)
 
 
 _WANTS_EVERY_RELATION = (Kind.COLUMN, Kind.EXPANSION, Kind.VALUE)
@@ -638,7 +646,7 @@ def _names_a_relation(scope: Scope | None, qualifier: tuple[str, ...]) -> bool:
     return bool(visible)
 
 
-def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
+def _qualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
     """A dotted path narrows hard: either one relation's columns, or one namespace's contents."""
     scope = request.scope
     head = request.qualifier[0]
@@ -720,7 +728,7 @@ price for not inventing a second ranking signal.
 """
 
 
-def _loose_columns(request: Request, reader: _Reader, limit: int) -> list[Candidate]:
+def _loose_columns(request: Request, reader: _Reader) -> list[Candidate]:
     """
     Columns with no relation in scope — `SELECT <caret>` before any FROM.
 
@@ -784,7 +792,7 @@ def _qualifier_for(relation: Relation, ambiguous: frozenset[str]) -> tuple[str, 
     return (relation.label,) if relation.label else ()
 
 
-def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
+def _unqualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
     """No dot typed: everything the clause admits, from whatever is in scope."""
     candidates: list[Candidate] = []
     scope = request.scope
@@ -831,7 +839,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             # answers to its relation name, so `SELECT invoices.amount FROM
             # billing.invoices` is what this writes and what Postgres plans. It
             # lengthens only when two schemas would render the same reference.
-            candidates += _loose_columns(request, reader, limit)
+            candidates += _loose_columns(request, reader)
 
     if Kind.TABLE in request.kinds:
         wanted = _relation_kinds(request, dialect)
@@ -856,7 +864,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         ]
 
     if Kind.SEQUENCE in request.kinds:
-        candidates += _sequences(request, reader, dialect, limit)
+        candidates += _sequences(request, reader, dialect)
 
     if Kind.SCHEMA in request.kinds:
         candidates += [_schema_candidate(name) for name in reader.schemas()]
@@ -902,8 +910,8 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
 
     # Deliberately not truncated: ranking has to see every candidate, or a
     # perfect match sitting past the cut is dropped before it is ever scored.
-    # `limit` reaches only the prefix-dependent column search, which is bounded
-    # server-side because it cannot be cached.
+    # The prefix-dependent searches are the one exception and bound themselves,
+    # server-side at `SEARCH_ROWS`, because they cannot be cached.
     return candidates
 
 
@@ -1149,7 +1157,7 @@ def _omission(omitted: int) -> str | None:
     return f'{omitted} column{"" if omitted == 1 else "s"} omitted: {_NO_PRIVILEGE}'
 
 
-def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
+def _sequences(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
     """
     Sequences by name, from the default namespace and from a prefix search.
 
