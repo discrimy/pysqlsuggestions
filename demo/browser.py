@@ -62,7 +62,8 @@ class Demo:
             'clickhouse': schema.clickhouse(),
             'trino': schema.trino(),
         }
-        self._caches: dict[str, MemoryCache] = {key: MemoryCache() for key in self._catalogs}
+        self._caches: dict[str, MemoryCache] = {key: MemoryCache(default_ttl=None) for key in self._catalogs}
+        """No expiry: these catalogs are baked into the page and cannot change under it."""
 
     def backends(self) -> str:
         """The tab strip, as JSON."""
