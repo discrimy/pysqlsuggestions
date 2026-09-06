@@ -17,6 +17,7 @@ import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 
 from pysqlsuggestions.dialects.base import Placeholder, Syntax
 
@@ -73,6 +74,23 @@ def _is_ident_char(ch: str) -> bool:
     return ch.isalnum() or ch in '_$' or unicodedata.combining(ch) != 0
 
 
+_NAME_MEMO = 1 << 16
+"""
+How many names the quoting decision remembers having read back.
+
+Entries are a short string against a bool, so this is a few megabytes at worst —
+a different order of thing from `MemoryCache`, whose 1024 entries are column
+lists. The number is chosen to cover a large schema's names comfortably: the
+memo only earns anything when this keystroke ranks names the last one also
+ranked, and a 5000-relation catalog offers about 5000 of them at a FROM caret.
+
+Bounded rather than unbounded because the argument is not always a catalog name.
+Whatever the user has typed reaches here too, and `lsp/` keeps one process alive
+for a working day.
+"""
+
+
+@lru_cache(maxsize=_NAME_MEMO)
 def reads_as_one_identifier(text: str) -> bool:
     """
     Whether this scanner would read `text`, written bare, back as a single name.
@@ -86,6 +104,18 @@ def reads_as_one_identifier(text: str) -> bool:
 
     Exposed rather than duplicated in `rank`, because a second copy of these
     predicates is a second thing to keep in step with the scan below.
+
+    Memoised because `rank` asks it once per candidate and it walks the string a
+    character at a time: on a 5000-relation schema that is 5000 walks per
+    keystroke over names that did not change, and it measured as 45% of the
+    ranking cost — the largest single reason a warm cache still spent 23ms on a
+    completion that did no I/O at all.
+
+    Safe to memoise because the answer depends on `text` and nothing else. That
+    is worth stating, because the neighbouring quoting predicates take a
+    `Dialect` and memoising *those* on the dialect costs more than it saves:
+    `Dialect` is a frozen dataclass over large frozensets, and hashing one to
+    look up a cached bool is more work than recomputing the bool.
     """
     return bool(text) and _is_ident_start(text[0]) and all(_is_ident_char(ch) for ch in text[1:])
 

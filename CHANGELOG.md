@@ -6,6 +6,35 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A keystroke on a large schema costs a quarter less, and offers the same thing
+
+Two pure functions in the hot path were recomputed on every keystroke over names
+that had not changed. `lex.reads_as_one_identifier` walks a name character by
+character to decide whether it survives unquoted, and `rank._words` splits one
+into its components for matching; ranking asks each of them once per candidate,
+so a 5000-relation schema paid 5000 walks and 5000 splits per completion. They
+measured as 45% and 59% of ranking respectively — the first dominating at an
+empty prefix, where no matching runs, and the second once something is typed.
+
+Both are now memoised on the string, which is all either depends on. Measured on
+a 5000-table Postgres with a warm cache and no I/O at all:
+
+| caret | before | after |
+| --- | --- | --- |
+| `SELECT * FROM ⌶` | 38.0 ms | 28.6 ms |
+| `SELECT * FROM ord⌶` | 36.7 ms | 26.5 ms |
+| `... JOIN ⌶` | 42.5 ms | 31.6 ms |
+| `WHERE ⌶`, 20 relations in scope | 24.3 ms | 19.2 ms |
+
+Output is unchanged everywhere — this is the same ranking, arrived at with less
+work. The memos are bounded rather than unbounded, for the reason 0.10.0 bounded
+`MemoryCache`: what reaches them is not only catalog names but whatever has been
+typed, and a language server stays up for a working day.
+
+What this does *not* fix is the shape underneath it: a caret still builds a
+candidate for all 5000 relations in order to show 40, so the cost still grows
+with the catalog. That is recorded in `docs/gaps.md` rather than fixed here.
+
 ### A Trino caret no longer offers another catalog's columns
 
 `SELECT * FROM orders o WHERE o.⌶` asked `system.jdbc.columns` for a relation by
