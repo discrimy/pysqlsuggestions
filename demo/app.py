@@ -127,8 +127,23 @@ app = FastAPI(title='pysqlsuggestions demo')
 
 _connections: dict[str, Any] = {}
 _caches: dict[str, MemoryCache] = {}
+
 _examples: dict[str, str] = {}
 """Examples discovered from the connected database, overriding the fixture ones."""
+
+
+def _cache_for(key: str) -> MemoryCache:
+    """
+    The cache for one backend, built without an expiry.
+
+    The default is five minutes, which is right for a database somebody might
+    run DDL against. These are fixed docker fixtures whose schema does not
+    move, and `_warm` exists because Trino's ClickHouse connector takes about
+    ten seconds to answer its first metadata query — letting that entry expire
+    would put those ten seconds back on a keystroke every five minutes, which
+    is the one thing the warm-up is for.
+    """
+    return _caches.setdefault(key, MemoryCache(default_ttl=None))
 
 
 def _discovered_example(key: str, catalog: DbapiCatalog) -> str | None:
@@ -208,7 +223,7 @@ def _warm(key: str) -> None:
     catalog = _catalog(key)
     if catalog is None:
         return
-    cache = _caches.setdefault(key, MemoryCache())
+    cache = _cache_for(key)
     dialect = BACKENDS[key].dialect
     found = _discovered_example(key, catalog)
     if found is not None:
@@ -270,7 +285,7 @@ def suggest(payload: SuggestRequest) -> JSONResponse:
 
     caret = payload.caret
     catalog = _catalog(backend.key)
-    cache = _caches.setdefault(backend.key, MemoryCache())
+    cache = _cache_for(backend.key)
 
     return JSONResponse(
         respond(
