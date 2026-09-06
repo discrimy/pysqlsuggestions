@@ -250,3 +250,33 @@ def test_the_bundle_ships_a_runtime_and_not_the_wheels_that_built_it() -> None:
     """
     ignored = (ROOT / 'editors' / 'vscode' / '.vscodeignore').read_text(encoding='utf-8')
     assert 'bundled/wheels/**' in ignored
+
+
+def test_every_capability_is_exported_from_the_package() -> None:
+    """
+    A capability an adapter cannot import is one it will not implement.
+
+    `ports` is where these are defined and `pysqlsuggestions` is where the
+    documentation tells people to import from, so the two have to agree. They
+    drifted: `SupportsRelationSearch` was added and never exported, and nothing
+    said so — an adapter author reads the package, finds four capabilities where
+    there are seven, and writes against what they can see.
+
+    Asserted by discovery rather than by a list, because a list is the thing that
+    fell behind. Anything named `Supports*` in `ports` counts.
+    """
+    import pysqlsuggestions
+    from pysqlsuggestions import ports
+
+    defined = {name for name in vars(ports) if name.startswith('Supports')}
+    assert defined, 'no capabilities found, so this asserts nothing'
+    exported = {name for name in pysqlsuggestions.__all__ if name.startswith('Supports')}
+    assert defined == exported, f'not exported: {sorted(defined - exported)}'
+
+
+def test_everything_exported_is_importable_from_the_package() -> None:
+    """`__all__` is a promise, and a name in it that resolves to nothing breaks `import *`."""
+    import pysqlsuggestions
+
+    missing = [name for name in pysqlsuggestions.__all__ if not hasattr(pysqlsuggestions, name)]
+    assert missing == []

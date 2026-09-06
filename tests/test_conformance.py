@@ -21,6 +21,7 @@ from pysqlsuggestions.catalogs.memory import MemoryCatalog
 from pysqlsuggestions.dialects import registry
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import (
+    CatalogQueries,
     Clause,
     ClauseModel,
     Dialect,
@@ -462,3 +463,41 @@ def test_conformance_names_a_zero_marker() -> None:
         ),
     )
     assert any('$0' in problem for problem in DialectConformance.structure(dialect))
+
+
+def test_the_new_catalog_queries_are_checked_for_arity() -> None:
+    """
+    Every query `DbapiCatalog` runs is held to the values it is actually given.
+
+    `_QUERY_ARITY` is the table that does it, and a query missing from the table
+    is not checked at all. `queryable_tables` and `columns_in` were added to
+    `CatalogQueries` after it, so a third-party dialect shipping either got no
+    check on precisely the two it had least precedent for.
+    """
+    from pysqlsuggestions.testing import _QUERY_ARITY
+
+    fields = set(vars(CatalogQueries).get('__annotations__', {}))
+    assert fields, 'no catalog query fields found, so this asserts nothing'
+    assert fields == set(_QUERY_ARITY), f'unchecked: {sorted(fields - set(_QUERY_ARITY))}'
+
+
+def test_a_spread_marker_that_is_not_last_is_reported() -> None:
+    """
+    A spread claims every remaining value, so a marker after it binds the wrong thing.
+
+    `render` refuses it, but only on the first catalog read against a live
+    server. This is the class of mistake the harness exists to catch without one
+    — the dialect contradicts itself and nothing but a database was saying so.
+    """
+    broken = replace(
+        POSTGRES,
+        catalog_queries=replace(
+            POSTGRES.catalog_queries,
+            columns_in=Query(
+                sql='SELECT 1 FROM t WHERE name IN ($2...) AND schema = $1',
+                row=lambda row: str(row[0]),
+            ),
+        ),
+    )
+    failures = DialectConformance.check(broken)
+    assert any('spread' in failure for failure in failures), failures
