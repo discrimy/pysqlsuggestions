@@ -287,11 +287,20 @@ def build(spec: Ladder, connect: Any) -> None:
         if batch:
             cursor.execute('; '.join(batch))
         connection.commit()
-    with connection.cursor() as cursor:
-        # `reltuples` is what the relation list reports as a row count, and it is
-        # -1 until something has analysed the table.
-        cursor.execute('ANALYZE')
+    # `reltuples` is what the relation list reports as a row count, and it is -1
+    # until something has analysed the table.
+    #
+    # Outside a transaction, which is not a detail. A bare ANALYZE gives each
+    # relation its own transaction and releases the lock as it goes; inside an
+    # explicit one it has to hold all of them at once, and 20 000 relations is
+    # far past `max_locks_per_transaction`. It failed as `out of shared memory`
+    # after the minutes spent creating the tables, and only on the largest rung —
+    # the two smaller ones fit inside the lock table and passed, so the benchmark
+    # broke at exactly the size it exists to measure.
     connection.commit()
+    connection.autocommit = True
+    with connection.cursor() as cursor:
+        cursor.execute('ANALYZE')
     connection.close()
     elapsed = time.perf_counter() - started
     print(f'  {spec.name}: {spec.tables} tables x {spec.columns} columns x {spec.indexes} indexes in {elapsed:.1f}s')

@@ -102,6 +102,14 @@ It is linear in the join count, and the join count is exactly what makes a query
 worth completing. Against Trino, whose per-query floor is 60 ms even when
 correct, five relations in scope cost six queries.
 
+**It is also flat in the size of the catalog**, which the ladder is what showed.
+The same twenty-relation statement at a 20 ms round trip costs 490 ms against a
+100-table schema, 491 ms against 1 000 and 495 ms against 5 000: the cost is the
+join count and nothing else. So this is not a large-schema problem at all, and
+filing it under one — which is what the first draft of this document did — gets
+the priority wrong. Every user with a wide query pays it, on any schema, and it
+is the only item here that a small database does not grow out of.
+
 `docs/gaps.md` §5 names batching and calls it unreachable, because `_Reader`
 discovers its keys as the request resolves. **That reasoning does not hold for
 columns.** `request.scope` names every relation before any I/O happens; the keys

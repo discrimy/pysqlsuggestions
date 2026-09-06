@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.bench_catalog import LADDER, Ladder, column_name, column_type, ddl, format_rows, table_name
+from scripts.bench_catalog import LADDER, Ladder, build, column_name, column_type, ddl, format_rows, table_name
 
 
 def test_a_key_column_is_always_an_integer() -> None:
@@ -85,3 +85,74 @@ def test_the_report_lines_up_its_numbers() -> None:
     # The measurement column starts at the same offset on every row.
     offsets = [line.index('ms') for line in lines if 'ms' in line]
     assert len(set(offsets)) == 1
+
+
+class _FakeCursor:
+    """Records statements and the autocommit state each one ran under."""
+
+    def __init__(self, connection: _FakeConnection) -> None:
+        self._connection = connection
+
+    def __enter__(self) -> _FakeCursor:
+        """Usable as a context manager, the way psycopg2's is."""
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Nothing to release."""
+
+    def execute(self, statement: str) -> None:
+        """Record the statement against the autocommit state in force."""
+        self._connection.ran.append((statement, self._connection.autocommit))
+
+
+class _FakeConnection:
+    """Enough of a psycopg2 connection for `build` to run against nothing."""
+
+    def __init__(self) -> None:
+        self.autocommit = False
+        self.ran: list[tuple[str, bool]] = []
+
+    def cursor(self) -> _FakeCursor:
+        """A cursor writing back to this connection's log."""
+        return _FakeCursor(self)
+
+    def commit(self) -> None:
+        """Committing changes nothing that is asserted on."""
+
+    def close(self) -> None:
+        """Nothing to close."""
+
+
+def test_analyze_does_not_run_inside_a_transaction() -> None:
+    """
+    `ANALYZE` over a whole database needs its own transaction per relation.
+
+    Inside an explicit one it must instead hold a lock on every relation at once,
+    which on the 5000-table rung is 20 000 of them and exceeds
+    `max_locks_per_transaction` — `out of shared memory`, after the several
+    minutes it took to create the tables, leaving the schema built but never
+    analysed so `reltuples` reads -1 and every relation reports no row count.
+
+    It survived the two smaller rungs, which is what makes this worth pinning:
+    the failure appears only at the size the benchmark exists to measure.
+    """
+    admin, builder = _FakeConnection(), _FakeConnection()
+    pending = [admin, builder]
+    build(Ladder('bench_t', tables=2, columns=6, indexes=1), lambda _dsn: pending.pop(0))
+
+    analyzed = [autocommit for statement, autocommit in builder.ran if statement.strip() == 'ANALYZE']
+    assert analyzed == [True], 'ANALYZE must run with autocommit on, or it holds every lock at once'
+
+
+def test_the_database_is_dropped_before_it_is_rebuilt() -> None:
+    """A rebuild must not measure yesterday's schema, and DROP needs autocommit too."""
+    admin, builder = _FakeConnection(), _FakeConnection()
+    pending = [admin, builder]
+    build(Ladder('bench_t', tables=1, columns=4, indexes=0), lambda _dsn: pending.pop(0))
+
+    assert [statement for statement, _ in admin.ran] == [
+        'DROP DATABASE IF EXISTS bench_t WITH (FORCE)',
+        'CREATE DATABASE bench_t',
+    ]
+    assert all(autocommit for _, autocommit in admin.ran), 'CREATE DATABASE cannot run in a transaction'
+    assert not builder.ran or builder.ran[0][0].startswith('CREATE TABLE')
