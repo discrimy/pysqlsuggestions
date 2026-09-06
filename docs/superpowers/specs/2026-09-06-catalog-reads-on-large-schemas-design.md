@@ -346,8 +346,18 @@ can be honestly reviewed against the nineteen-relation fixture.
 
 ## 9. Reproducing the measurements
 
-The generator and probes were throwaway. Before any of this is built they should
-be committed as `scripts/bench_catalog.py`, building the ladder of schemas and
-printing the table in §2.2, so a later reader can tell a regression from a
-change of machine. That script is the first deliverable, not an afterthought:
-every number in this document is a claim someone will want to re-check.
+`scripts/bench_catalog.py` builds the ladder and prints every layer above:
+
+    docker compose -f docker/docker-compose.yml up -d --wait
+    uv run python -m scripts.bench_catalog --build     # once; a few minutes
+    uv run python -m scripts.bench_catalog --rtt 20
+
+It was committed before any of this was designed rather than after, because
+every number here is a claim someone will want to re-check, and a benchmark
+reconstructed later measures whatever the reconstruction happened to do. The
+`--rtt` figure is the one to watch for §4: it reproduces the 498 ms in §4.1,
+which is otherwise invisible against a server on the same machine.
+
+The three rungs matter more than the largest one. A single schema gives a
+number; the ladder is what says whether a cost grows with the catalog, which is
+the difference between a slow query and a design that will not hold.
