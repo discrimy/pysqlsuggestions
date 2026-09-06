@@ -301,18 +301,46 @@ QUERIES = CatalogQueries(
     # column name — `user_` would match `usera`. Substring rather than prefix
     # because `mail` finding `email` is behaviour the suite this library
     # inherits already pins, and the ordering puts a true prefix first anyway.
+    # The narrowing runs first; the expensive columns are computed on what
+    # survives it.
+    #
+    # `has_column_privilege` and `format_type` are per-row function calls, and
+    # written into a single flat select they were evaluated for every match
+    # *before* the LIMIT — 55 000 privilege checks on a 5000-table schema to
+    # return 500 rows. 251ms against 34ms at a one-character prefix, which is
+    # exactly where matches are most numerous and a caret least patient.
+    #
+    # The sort was never the problem, which is worth recording because it is the
+    # obvious suspect: the planner uses a top-N heapsort and it costs nothing
+    # worth naming. Dropping only the privilege column took the same query to
+    # 36ms, and that is how the cause was found rather than guessed at.
+    #
+    # The ordering is stated twice on purpose. The inner one decides which 500
+    # rows survive and is the port's contract — a name beginning with the prefix
+    # must precede one merely containing it, because the truncation happens
+    # before ranking ever sees a row. The outer one restores that order for the
+    # result, which a subquery does not promise to preserve. `hit` carries the
+    # match position out so the second ordering does not recompute it.
     column_search=Query(
         sql="""
-            SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum,
-                   pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT')
-            FROM pg_attribute a
-            JOIN pg_class c ON c.oid = a.attrelid
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-              AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
-              AND position(lower($1) in lower(a.attname)) > 0
-            ORDER BY position(lower($1) in lower(a.attname)), length(a.attname), n.nspname, c.relname, a.attname
-            LIMIT 500
+            WITH found AS (
+                SELECT a.attnum, a.attname, a.atttypid, a.atttypmod, c.oid AS reloid,
+                       n.nspname, c.relname,
+                       position(lower($1) in lower(a.attname)) AS hit
+                FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                  AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
+                  AND position(lower($1) in lower(a.attname)) > 0
+                ORDER BY position(lower($1) in lower(a.attname)), length(a.attname),
+                         n.nspname, c.relname, a.attname
+                LIMIT 500
+            )
+            SELECT f.nspname, f.relname, f.attname, format_type(f.atttypid, f.atttypmod), f.attnum,
+                   pg_catalog.has_column_privilege(f.reloid, f.attnum, 'SELECT')
+            FROM found f
+            ORDER BY f.hit, length(f.attname), f.nspname, f.relname, f.attname
         """,
         # No relkind guard on the privilege here: this query already filters to
         # the relkinds where the question applies.
@@ -329,19 +357,30 @@ QUERIES = CatalogQueries(
     # point. The system-schema exclusion stays, because `pg_%` is not what
     # anybody means by `FROM ord`. ORDER BY before LIMIT is the port's contract
     # — the truncation happens before ranking sees the rows.
+    # Narrowed first, privilege computed after, for the reason `column_search`
+    # above states at length. Smaller here — `pg_class` is a fraction of
+    # `pg_attribute` — but the shape is the same and so is the argument, and two
+    # neighbouring queries that answer the same kind of question differently are
+    # a trap for whoever edits one of them next.
     relation_search=Query(
         sql="""
-            SELECT n.nspname, c.relname, c.relkind, c.reltuples,
-                   CASE WHEN c.relkind IN ('r', 'p', 'v', 'm', 'f')
-                        THEN pg_catalog.has_any_column_privilege(c.oid, 'SELECT')
+            WITH found AS (
+                SELECT c.oid AS reloid, c.relname, c.relkind, c.reltuples, n.nspname,
+                       position(lower($1) in lower(c.relname)) AS hit
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'i')
+                  AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
+                  AND position(lower($1) in lower(c.relname)) > 0
+                ORDER BY position(lower($1) in lower(c.relname)), length(c.relname), n.nspname, c.relname
+                LIMIT 200
+            )
+            SELECT f.nspname, f.relname, f.relkind, f.reltuples,
+                   CASE WHEN f.relkind IN ('r', 'p', 'v', 'm', 'f')
+                        THEN pg_catalog.has_any_column_privilege(f.reloid, 'SELECT')
                    END
-            FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 'i')
-              AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
-              AND position(lower($1) in lower(c.relname)) > 0
-            ORDER BY position(lower($1) in lower(c.relname)), length(c.relname), n.nspname, c.relname
-            LIMIT 200
+            FROM found f
+            ORDER BY f.hit, length(f.relname), f.nspname, f.relname
         """,
         row=lambda row: Table(
             schema=str(row[0]),

@@ -64,3 +64,40 @@ def test_a_restricted_column_is_offered_last(analyst_catalog: DbapiCatalog) -> N
     assert found[-1].text == 'password'
     assert found[-1].availability is Availability.RESTRICTED
     assert found[-1].reason == 'no SELECT privilege'
+
+
+def test_a_searched_column_keeps_its_privilege(analyst_catalog: DbapiCatalog) -> None:
+    """
+    `search_columns` reports availability, and computes it after the LIMIT.
+
+    The expensive per-row functions — `has_column_privilege` and `format_type` —
+    used to be evaluated for every matching column before the truncation, which
+    on a 5000-table schema meant 55 000 privilege checks to return 500 rows: 251 ms
+    against 34 ms, at the one-character prefix where matches are most numerous.
+
+    Moving them after the LIMIT is a change of query shape and not of answer, and
+    this is the assertion that says so. The rewrite's two hazards are exactly
+    here: the privilege has to be computed against the relation the column really
+    belongs to, and the outer ordering has to reproduce the inner one.
+    """
+    found = {(c.table, c.name): c.availability for c in analyst_catalog.search_columns('password', 500)}
+    assert found, 'the fixture has no column matching "password"'
+    assert found[('reports_database', 'password')] is Availability.RESTRICTED, found
+
+
+def test_searched_columns_come_back_closest_first(analyst_catalog: DbapiCatalog) -> None:
+    """
+    The port's ordering contract, which the truncation makes load-bearing.
+
+    Rows are cut on the server before ranking sees them, so a query returning
+    storage order can hide an exact match behind three hundred near-misses. A
+    name beginning with the prefix must therefore precede one merely containing
+    it — and that ordering is decided in the subquery now, then repeated outside
+    it, which is the part a rewrite can silently drop.
+    """
+    names = [c.name for c in analyst_catalog.search_columns('name', 500)]
+    assert names, 'the fixture has no column matching "name"'
+    leading = [index for index, name in enumerate(names) if name.lower().startswith('name')]
+    trailing = [index for index, name in enumerate(names) if not name.lower().startswith('name')]
+    if leading and trailing:
+        assert max(leading) < min(trailing), names

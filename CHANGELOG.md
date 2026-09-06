@@ -6,6 +6,29 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Searching for a column by name stops checking privileges it will discard
+
+`SELECT user⌶`, before any FROM clause, searches every relation in the database
+for a matching column. On a 5000-table schema that matched 55 000 columns at a
+one-character prefix, and the query computed `has_column_privilege` and
+`format_type` for every one of them *before* truncating to 500.
+
+| `search_columns` | before | after |
+| --- | --- | --- |
+| `'u'` | 238 ms | **40.9 ms** |
+| `'user'` | 41.7 ms | 33.6 ms |
+
+The narrowing now happens first and those two functions are computed on the 500
+rows that survive it. Identical rows in identical order — this is a change of
+query shape, not of answer.
+
+Worth knowing if you maintain a dialect: the sort was not the problem, though it
+is the obvious suspect. Postgres uses a top-N heapsort for `ORDER BY … LIMIT` and
+it costs nothing worth naming; removing only the privilege column took the same
+query to 36 ms, which is how the cause was identified rather than guessed. A
+per-row function in the select list of a query with a LIMIT is evaluated before
+the limit applies.
+
 ### Ranking renders the suggestions it shows, not the ones it discards
 
 A `FROM ⌶` on a 5000-relation schema built five thousand suggestions — each with

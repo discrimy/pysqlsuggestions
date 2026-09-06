@@ -1,7 +1,7 @@
 # Catalog reads on large schemas — design
 
 Date: 2026-09-06
-Status: §4, §5 and §6 **built**. §7 stands as written.
+Status: §4, §5 and §6 **built**, and §7 was wrong about the prefix searches.
 
 Two of the four findings that prompted this are already fixed and shipped on
 this branch; they are recorded in §2 as evidence rather than as work. What is
@@ -367,12 +367,32 @@ where it would matter: on the 5 000-table schema `search_columns('u')` matched
 always, and filtering it silently returns a subset of the right answer. Recorded
 so it is not rediscovered.
 
-**Anything about the prefix searches themselves.** `search_columns('u')` costs
-247 ms and even a prefix matching nothing costs 28 ms, because the cost is the
-unindexable `position(lower($1) in lower(attname))` scan rather than the result
-size. The fix is a minimum prefix length or a different index strategy, both of
-which change what the user is offered rather than how fast it arrives. It is a
-product decision and belongs in its own document.
+**~~Anything about the prefix searches themselves.~~** This entry was wrong, and
+the way it was wrong is the useful part.
+
+It reasoned that `search_columns('u')` costs 247 ms because of an unindexable
+`position(lower($1) in lower(attname))` scan, concluded the only fixes were a
+minimum prefix length or a different index strategy, and filed it as a product
+decision because both change what the user is offered.
+
+Measuring it found something else. The scan is cheap and so is the sort — the
+planner uses a top-N heapsort. The cost was `has_column_privilege` and
+`format_type`, per-row functions in the select list, evaluated for all 55 000
+matches *before* the LIMIT cut them to 500. Narrowing first and computing them on
+the survivors took it to 34 ms with byte-identical output. No product decision
+was involved at any point.
+
+The minimum-prefix idea it proposed would also have been the wrong fix on its own
+terms. The measurement that killed it: truncation is universal at *every* prefix
+length on a large schema — `'user'` returns 500 of 5000 — so a longer prefix does
+not make the results less arbitrary, it only delays the arbitrariness. And on a
+small schema every prefix is complete and costs 2-4 ms, so a threshold would have
+degraded the only case that was working.
+
+What remains genuinely open is the quality question underneath: a truncated
+substring search returns 500 arbitrary rows of 5000, and ranking cannot repair
+what the server already discarded. That *is* a product decision, and it is not
+about latency at all.
 
 ---
 
