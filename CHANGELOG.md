@@ -4,6 +4,32 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## Unreleased
+
+### A Trino caret no longer offers another catalog's columns
+
+`SELECT * FROM orders o WHERE o.⌶` asked `system.jdbc.columns` for a relation by
+name with nothing constraining the catalog, so it answered from every connector
+the coordinator federates. A catalog bound to `postgresql` returned ClickHouse's
+columns for a table Postgres does not have — and where two backends hold a
+same-named table, the caret offered a mixture of both relations' columns as
+though they were one.
+
+The unqualified position is now bound to `current_catalog`, which is what an
+unqualified name means. Naming a schema still reaches across catalogs, because
+that is what Trino is for: `FROM postgresql.public.reports_report p JOIN
+clickhouse.analytics.report_executions c ON c.⌶` is unchanged.
+
+It was also the slowest read in the library. Bounding the scan takes that
+position from **9.8 s to 0.05 s** — the query had been reaching every
+connector's metadata in turn — and the integration suite from 84 s to 60 s.
+
+Worth knowing if you maintain a dialect: the filter has to be spelled as a
+top-level conjunct. The disjunction that reads more naturally is equally correct
+and entirely useless, because Trino pushes conjuncts into a connector and cannot
+push a disjunction. Both the comment in `dialects/trino.py` and a timing test say
+so, since nothing else can tell the two apart.
+
 ## 0.10.0
 
 ### A caret sees a CREATE TABLE without a restart
