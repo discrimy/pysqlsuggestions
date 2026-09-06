@@ -4,6 +4,67 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## 0.10.0
+
+### A caret sees a CREATE TABLE without a restart
+
+`MemoryCache` entries now expire after five minutes by default, where 0.9.0 kept
+them for the life of the process. Nothing in this library hears about DDL, so an
+editor session that had already read `public` would go on offering the same
+relation list until somebody restarted the server — a table created ten minutes
+ago was simply not there.
+
+Five minutes is invisible to a person: `_Reader` collapses repeated reads inside
+one request, so an expiry costs at most one query per read kind per completion.
+`MemoryCache(default_ttl=None)` restores the old behaviour.
+
+### Nothing else changes at a caret
+
+Every position answers what it answered in 0.9.0, with the same ranking and the
+same degradations. The rest of this release is about what the cache does while
+nobody is looking at it.
+
+### The in-memory cache is bounded
+
+`MemoryCache` holds 1024 entries and evicts least-recently-used. 0.9.0 was
+unbounded, on the argument that entries are bounded by the size of the catalog
+times the number of roles a process serves — which is true, and is not a bound:
+it says the ceiling exists, not that it is low enough for an editor plugin to be
+free to reach.
+
+`maxsize` counts entries rather than bytes, and one entry can be a
+fifty-thousand-row column list. What it bounds is the number of distinct
+namespace paths a session accumulates, which is the thing that grows while
+somebody types. `MemoryCache(maxsize=None)` is the old behaviour.
+
+### The in-memory cache is safe to share between threads
+
+`MemoryCache.get` checked an entry's expiry and then deleted it, and two threads
+through that window raced into `KeyError`. Every operation now takes a lock.
+
+The failure was real but quiet in two ways. It needs a narrow window — at the
+default 5 ms switch interval it did not appear in 40 000 operations, and at 10 us
+it appeared on every run of 4 000 — and `resolve.py` catches everything a cache
+raises, so the symptom was not an error but caching that silently stopped for
+the rest of a request. The bound had the same problem in a different shape:
+eight concurrent writers pushed a cache of four entries to a peak of ten before
+the evictions caught up.
+
+`lsp/` was never exposed to either, because every cache access there already
+happens inside the session lock.
+
+### The in-memory cache can be invalidated and measured
+
+`clear()` drops everything, for the caller who has just changed the schema and
+would rather not name what went stale. `delete(key)` drops one entry, addressed
+by a key from `cache_key` — deliberately not a prefix, because matching on part
+of the key would make its grammar a format, and it is not one.
+
+`stats()` returns hits, misses, expiries, evictions, entries and maxsize.
+Expiries are counted as misses as well as separately: the caller re-read either
+way, so the hit rate has to include them, but a cold miss and a five-minute
+expiry say opposite things about whether the TTL is right.
+
 ## 0.9.0
 
 ### Nothing changes at a caret

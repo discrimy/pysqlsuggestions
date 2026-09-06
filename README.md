@@ -93,7 +93,26 @@ everything across a process boundary; the library encodes and decodes, so an
 implementation never sees a `Table`.
 
 A plain dict satisfies neither and `complete` says so rather than silently
-caching nothing. `MemoryCache` is the dict it used to be.
+caching nothing. `MemoryCache` is what to pass instead.
+
+`MemoryCache` is bounded, expiring and safe to share between threads. It holds
+1024 entries and evicts least-recently-used, expires an entry after five
+minutes, and takes a lock on every operation — pass `maxsize=None` or
+`default_ttl=None` to turn either off for a catalog whose size and churn you
+know. The expiry is what makes a `CREATE TABLE` visible to a long-lived session
+without a restart, since nothing in the process hears about DDL.
+
+```python
+cache = MemoryCache(default_ttl=300, maxsize=1024)   # the defaults
+
+cache.delete(cache_key('analyst', 'postgres', 'tables', 'public'))   # after DDL
+cache.clear()                                                        # or all of it
+
+cache.stats()   # hits, misses, expiries, evictions, entries, maxsize
+```
+
+`delete` takes a key from `cache_key` rather than a prefix: the key's grammar is
+not a format, and matching on part of it would make it one.
 
 For redis:
 
