@@ -115,6 +115,45 @@ class SupportsRelationSearch(Protocol):
 
 
 @runtime_checkable
+class SupportsQueryableRelations(Protocol):
+    """
+    The relations a FROM clause could name, without the ones it never could.
+
+    Absent: `Catalog.tables` is read and filtered here, which is what happened
+    before this existed. Correct, and it moves every index in the database across
+    the wire to answer a keystroke.
+
+    `tables` cannot simply be narrowed instead, and the reason is `DROP INDEX ⌶`:
+    it reads the same list and wants precisely what every other position exists
+    to hide, as do the sequence positions. So the broad read keeps its meaning
+    and this is added beside it — which also means an adapter that has never
+    heard of this goes on working exactly as it did.
+
+    The cost it removes is fetching and holding what will be discarded. On a
+    5000-table schema `tables()` returns 20 000 rows to serve 5000: three times
+    the query, four times the cached payload, and 24 ms of JSON decode on every
+    keystroke where the cache is a `ByteCache` across a socket.
+
+    Prefix-independent, and cached under a key of its own. Sharing one with
+    `tables` would be silent and one-directional — a `FROM ⌶` writing its
+    index-free list where `DROP INDEX ⌶` looks would empty that position for as
+    long as the entry lived.
+    """
+
+    def queryable_tables(self, schema: str | None = None) -> Sequence[Table]:
+        """
+        Relations in `schema` that a query could select from, or those visible by default.
+
+        Same shape and ordering as `Catalog.tables`; what differs is only what is
+        left out. An implementation decides for itself what cannot be selected
+        from, because the answer is per backend: on Postgres it is indexes and
+        sequences, and on ClickHouse `Table.kind` is the storage engine name, so
+        no list written here could enumerate what a given installation has.
+        """
+        ...
+
+
+@runtime_checkable
 class SupportsBulkColumns(Protocol):
     """
     The columns of several relations at once — every relation a statement joins.

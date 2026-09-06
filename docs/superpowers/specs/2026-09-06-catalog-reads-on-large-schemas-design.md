@@ -1,7 +1,7 @@
 # Catalog reads on large schemas — design
 
 Date: 2026-09-06
-Status: §4 **built**. §5 and §6 specified, nothing built.
+Status: §4 and §5 **built**. §6 specified, nothing built.
 
 Two of the four findings that prompted this are already fixed and shipped on
 this branch; they are recorded in §2 as evidence rather than as work. What is
@@ -195,6 +195,24 @@ relation's columns rather than failing.
 ---
 
 ## 5. Kind-scoped relation reads
+
+**Built, and not as specified.** §5.3 proposed `tables_of_kinds(schema, kinds)`,
+which needs the kinds a clause names — `index`, `materialized view`, this
+library's own vocabulary — to reach SQL that filters on `relkind` letters. That
+mapping already exists inside each dialect's row lambda, and parameterising the
+query would have meant carrying a second copy of it into the SQL and keeping the
+two in step.
+
+What shipped instead is `SupportsQueryableRelations.queryable_tables(schema)`:
+one extra read that is `tables` minus what no query can name, with `tables` left
+exactly as it was. Purely additive, no kind vocabulary crosses into SQL, and the
+common caret gets the whole prize. The rare ones — `DROP INDEX`, the sequence
+positions — keep reading the broad list, which is the right answer for them.
+
+One thing the measurement caught that the design did not predict: the JOIN caret
+briefly got *slower*, because `unreadable_relations` still read the broad list
+and that position ended up fetching both. It reads the narrow one now, since a
+join proposal can only ever name a relation a query could select from.
 
 ### 5.1 The problem
 

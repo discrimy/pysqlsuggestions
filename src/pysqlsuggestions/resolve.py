@@ -32,6 +32,7 @@ from pysqlsuggestions.ports import (
     SupportsColumnValues,
     SupportsForeignKeys,
     SupportsKeywords,
+    SupportsQueryableRelations,
     SupportsRelationSearch,
 )
 from pysqlsuggestions.types import (
@@ -434,6 +435,26 @@ class _Reader:
         """
         return self._read(self._key('tables', schema), lambda: self._catalog.tables(schema))
 
+    def queryable_tables(self, schema: str | None = None) -> Sequence[Table]:
+        """
+        Relations a query could name, from the narrow read where the catalog has one.
+
+        Falls back to `tables`, which is what every position did before this
+        capability existed — and note that the fallback is not merely correct but
+        free where a cache is warm, since that entry is the one the other
+        positions are filling anyway.
+
+        Cached under its own kind. Sharing `tables`'s key would let this list,
+        which is deliberately missing every index, answer `DROP INDEX ⌶`.
+        """
+        if not isinstance(self._catalog, SupportsQueryableRelations) or not _declared(
+            self._catalog,
+            'queryable_tables',
+        ):
+            return self.tables(schema)
+        narrow = self._catalog.queryable_tables
+        return self._read(self._key('queryable', schema), lambda: narrow(schema))
+
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
         return self._read(self._key('columns', schema, table), lambda: self._catalog.columns(schema, table))
@@ -499,9 +520,18 @@ class _Reader:
 
         Free at a JOIN caret: the same relation list already answers the TABLE
         candidates there, and `_read` remembers it within the request.
+
+        Which is why it reads the *narrow* list. A join proposal can only ever
+        name a relation a query could select from, so the broad list answers a
+        question this never asks — and reading it here would cost the JOIN caret
+        a second fetch of every index in the database purely to discard them,
+        turning the one position that had been getting this list for nothing into
+        the only one paying for two.
         """
         return frozenset(
-            (table.schema, table.name) for table in self.tables(schema) if table.availability is Availability.RESTRICTED
+            (table.schema, table.name)
+            for table in self.queryable_tables(schema)
+            if table.availability is Availability.RESTRICTED
         )
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
@@ -709,7 +739,9 @@ def _loose_columns(request: Request, reader: _Reader, limit: int) -> list[Candid
     schemas: dict[tuple[str, str], set[str]] = {}
     for column in columns:
         schemas.setdefault((column.table, column.name), set()).add(column.schema)
-    here = {(table.schema, table.name) for table in reader.tables(None)}
+    # Only asked whether a column's relation is reachable unqualified, so the
+    # narrow read answers it: nobody writes a FROM clause naming an index.
+    here = {(table.schema, table.name) for table in reader.queryable_tables(None)}
     return [
         _column_candidate(
             column,
@@ -803,7 +835,12 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
 
     if Kind.TABLE in request.kinds:
         wanted = _relation_kinds(request, dialect)
-        listed = [table for table in reader.tables(None) if _admits(table, wanted)]
+        # The narrow read only when the clause names no kinds. A clause that does
+        # name them wants what the exclusion hides — `DROP INDEX` is the whole
+        # reason the broad read keeps its meaning — so it has to ask for
+        # everything and filter, exactly as this position always did.
+        source = reader.tables(None) if wanted else reader.queryable_tables(None)
+        listed = [table for table in source if _admits(table, wanted)]
         candidates += [_table_candidate(table) for table in listed]
         # A relation in the default namespace comes back from both calls, and
         # the two render differently — `invoices` and `public.invoices` — so

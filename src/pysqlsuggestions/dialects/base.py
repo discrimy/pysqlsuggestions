@@ -469,6 +469,16 @@ class CatalogQueries:
     functions: Query | None = None
     values: Query | None = None
     """Frequent values of one column, from the backend's own planner statistics."""
+    queryable_tables: Query | None = None
+    """
+    Relations a query could select from — `tables` without what it can never name.
+
+    Absent means `tables` is read and filtered instead, which is what every
+    position did before this existed. Shipping it is worth 15 000 rows of the
+    20 000 a 5000-table schema returns, on the read that runs at every FROM
+    caret; `tables` keeps its broad meaning because `DROP INDEX` and the sequence
+    positions need exactly what this leaves out.
+    """
     columns_in: Query | None = None
     """
     Columns of several named relations at once. `$1` is the schema, `$2...` the names.

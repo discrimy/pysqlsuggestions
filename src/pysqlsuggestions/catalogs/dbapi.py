@@ -256,6 +256,19 @@ class DbapiCatalog:
         """Relations in `schema`, or those visible by default."""
         return [row for row in self._rows(self._dialect.catalog_queries.tables, schema or '') if isinstance(row, Table)]
 
+    def queryable_tables(self, schema: str | None = None) -> Sequence[Table]:
+        """
+        Relations a query could select from, when the dialect ships the narrower query.
+
+        Falls back to `tables` when it does not, which is a dialect declining the
+        capability the way Trino declines `relation_search` — the caller sees the
+        same relations either way and only the row count over the wire differs.
+        """
+        query = self._dialect.catalog_queries.queryable_tables
+        if query is None:
+            return self.tables(schema)
+        return [row for row in self._rows(query, schema or '') if isinstance(row, Table)]
+
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation, in declaration order."""
         rows = self._rows(self._dialect.catalog_queries.columns, schema or '', table)

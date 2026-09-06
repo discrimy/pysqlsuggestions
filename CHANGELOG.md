@@ -6,6 +6,32 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A relation caret stops fetching every index in the database
+
+`Catalog.tables` returns everything in the catalog, because `DROP INDEX ⌶` reads
+that same list and wants precisely what every other position exists to hide. On
+a 5000-table schema that is 20 000 rows fetched to serve 5000 — a table carries a
+primary key index and usually more — so `FROM ⌶` was moving fifteen thousand
+indexes across the wire in order to discard them.
+
+`SupportsQueryableRelations` is a new capability for the narrower read, and the
+broad one is untouched, so `DROP INDEX` and the sequence positions go on working
+and no existing adapter changes. Cold, on a 5000-table Postgres:
+
+| caret | before | after |
+| --- | --- | --- |
+| `SELECT * FROM ⌶` | 84.8 ms | 45.0 ms |
+| `SELECT ⌶` | 82.5 ms | 36.2 ms |
+| `... JOIN ⌶` | 185.9 ms | 146.9 ms |
+
+The cached payload for that read drops from 1991 KiB to 498, which is what a
+`ByteCache` across a socket decodes on **every** keystroke — 24 ms of it before.
+
+The two reads are cached under separate keys, which matters more than it looks:
+one key would let a `FROM` caret write its index-free list where the `DROP INDEX`
+caret looks, emptying that position for as long as the entry lived and saying
+nothing about why.
+
 ### A caret in a joined statement reads every relation at once
 
 `SELECT * FROM a JOIN b JOIN c … WHERE ⌶` asked the catalog for one relation's
