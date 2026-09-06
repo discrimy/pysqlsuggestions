@@ -149,6 +149,50 @@ those points.
 against six rather than against sixty. Worth measuring against a remote store
 before building; not worth building on the argument alone.
 
+**One case has since been carved out of this, and it is the exception that
+proves the rule.** `SupportsBulkColumns` batches the column reads for every
+relation in a statement, and it is reachable precisely because its keys are *not*
+discovered as the request resolves: `request.scope` names every relation before
+any I/O happens. Nothing else here has that property — `common_values` needs the
+comparand's type, which needs a column read to determine — so the argument above
+stands for the rest of them.
+
+Note also what that one did not do. It removed *database* round trips and left
+the cache being asked once per relation, because that is this entry's problem and
+not that one's.
+
+---
+
+## 6. Search-path visibility in the server's ordering
+
+A cross-relation search truncates on the server, and the server cannot rank. It
+orders by match position, name length and then the alphabet; the engine also
+knows declaration order and whether a relation is reachable without qualifying
+it, and cannot apply either to a row it never received.
+
+The failure is narrow and real. 700 relations in an off-search-path schema named
+`aaa_*`, each with a `user_ref` column, hide the one `public.zzz_orders` column
+that a bare `SELECT user_ref` could actually reference — the engine ranks it
+first and the server never sends it. An `archive` or `staging` schema full of
+dated copies is an ordinary shape and sorts before `public`.
+
+`SEARCH_ROWS` at 1000 narrows this and does not close it: the wanted row appears
+at 701 and not at 700, so the boundary moved rather than went away.
+
+Closing it means ordering by visibility on the server —
+`pg_table_is_visible(c.oid) DESC` immediately after the match position. It works,
+and it costs: 37 ms against 67 ms on a 5000-table schema at a one-character
+prefix, because it reintroduces a per-row function over the whole match set,
+which is the same trap that made that query 251 ms before it was restructured.
+`n.nspname = ANY(current_schemas(true))` was measured as the cheaper spelling and
+is not — 72 ms.
+
+Not built, because roughly doubling the worst prefix search to repair a case that
+needs several hundred same-named columns in an off-path schema is a poor trade at
+present, and because `isIncomplete` now makes every truncation self-correcting as
+more is typed. Worth revisiting for a deployment known to have large archive
+schemas — the reproduction is `bench_catalog.CROWDED`, kept for that.
+
 ---
 
 ## Closed since this list was written

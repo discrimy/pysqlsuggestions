@@ -12,9 +12,10 @@ its own.
 
 from __future__ import annotations
 
+import heapq
 import re
 from collections.abc import Iterable, Sequence
-from functools import cache
+from functools import cache, lru_cache
 
 from pysqlsuggestions.dialects.base import Dialect, Syntax
 from pysqlsuggestions.engine.lex import reads_as_one_identifier
@@ -70,9 +71,29 @@ def rank(
     dialect: Dialect,
     limit: int | None = None,
 ) -> list[Suggestion]:
-    """Score, sort and render `candidates` for `request`."""
+    """
+    Score, sort and render `candidates` for `request`.
+
+    Scoring runs over everything; rendering runs over what is going to be shown.
+    A `FROM ⌶` on a 5000-relation schema built five thousand `Suggestion`s, each
+    with its quoting decided, in order to return forty — about half the cost of
+    ranking, spent entirely on rows nobody would see.
+
+    The split is possible because the sort key's first three elements —
+    availability, score, name length — come from the `Candidate` alone, and only
+    the fourth is the rendered text. So the shortlist is chosen on the first
+    three, and `_finish` renders what survives.
+
+    Exact rather than approximate, which took two things. Every candidate tying
+    with the last of the shortlist comes too, since the rendered text is what
+    decides between them; and the shortlist grows if deduplication leaves fewer
+    suggestions than were asked for, because duplicates can only be found after
+    rendering. `tests/test_rank_shortlist.py` holds the answer against an
+    unlimited ranking cut to size, which is the path that still renders
+    everything.
+    """
     kind_rank = {kind: index for index, kind in enumerate(request.kinds)}
-    scored: list[tuple[int, float, int, str, Suggestion]] = []
+    prepared: list[_Scored] = []
 
     for candidate in candidates:
         # What is hunted for is not always what is shown, and neither is always
@@ -92,12 +113,106 @@ def rank(
             score += _LOCAL_BONUS
         if candidate.kind is Kind.JOIN:
             score += _JOIN_BONUS
-        text, stops = _render(candidate, request, dialect)
-        scored.append(
+        prepared.append(
             (
                 1 if candidate.availability is Availability.RESTRICTED else 0,
                 -score,
                 len(candidate.text),
+                score,
+                candidate,
+            ),
+        )
+
+    if limit is None:
+        return _finish(prepared, request, dialect, None)
+
+    # Clamped, because a negative limit is a Python slice from the *end* — it
+    # quietly dropped the last N suggestions instead of the first N, and
+    # `api.complete` forwards `limit * 5` to `resolve`, which ignores a negative
+    # value entirely, so the two layers disagreed about what had happened. Zero
+    # already answers with nothing, which is the boundary this meets.
+    wanted = max(limit, 0)
+    take = wanted
+    while True:
+        shortlist = _shortlist(prepared, take)
+        found = _finish(shortlist, request, dialect, wanted)
+        # Short only when deduplication collapsed the shortlist, which cannot be
+        # known before rendering. Growing and rendering again costs a repeat of
+        # work bounded by the shortlist, and the degenerate case — every
+        # candidate rendering to the same handful of texts — converges on
+        # rendering everything, which is what this used to do unconditionally.
+        if len(found) >= wanted or len(shortlist) >= len(prepared):
+            return found
+        take = min(max(take * 4, 1), len(prepared))
+
+
+_Scored = tuple[int, float, int, float, Candidate]
+"""
+One scored candidate: (restricted, -score, name length, score, candidate).
+
+The score appears twice because the two uses want opposite signs. Sorting wants
+it negated, so that ascending order puts the best first alongside the two fields
+that genuinely ascend; `Suggestion.score` wants it as scored. Deriving one from
+the other at the point of use reads as a sign error every time it is looked at.
+"""
+
+
+def _order(row: _Scored) -> tuple[int, float, int]:
+    """
+    The part of the sort key that needs no rendering.
+
+    Among equal-strength matches, the shorter name is the closer one: the same
+    prefix covers more of it. `no` should reach `now` before `normalize`, and
+    alphabetical order alone would not.
+
+    Availability leads, so a restricted candidate is last whatever it matched.
+    Not "bottom of its kind group", which is what the feature was first specified
+    as and which no constant expresses: `_KIND_STEP` is 5.0 against match
+    strengths spanning 25 to 100, so any penalty small enough to keep an item
+    inside its kind leaves a restricted exact-prefix match above an available
+    substring one — which is not sunk. It also settles the dedupe in `_finish` in
+    the readable candidate's favour, where two relations in scope share a column
+    name and only one of them can be read.
+    """
+    return row[0], row[1], row[2]
+
+
+def _shortlist(prepared: list[_Scored], take: int) -> list[_Scored]:
+    """
+    The `take` best by everything that can be known without rendering, plus every tie.
+
+    The ties are not a refinement. Rendered text is the fourth element of the
+    sort key, so a run of candidates identical on the first three is ordered by
+    something this function cannot see — and a large catalog produces long runs
+    of them, since scores come from a handful of match strengths and a kind
+    bonus. Cutting such a run at `take` would pick from it arbitrarily.
+
+    `nsmallest` with a key rather than on the rows themselves: the last element
+    is a `Candidate`, which has no ordering, and a tie reaching it raises.
+    """
+    if take <= 0:
+        return []
+    if take >= len(prepared):
+        return prepared
+    boundary = _order(heapq.nsmallest(take, prepared, key=_order)[-1])
+    return [row for row in prepared if _order(row) <= boundary]
+
+
+def _finish(
+    prepared: list[_Scored],
+    request: Request,
+    dialect: Dialect,
+    limit: int | None,
+) -> list[Suggestion]:
+    """Render, order, drop duplicates and cut to `limit`."""
+    scored: list[tuple[int, float, int, str, Suggestion]] = []
+    for restricted, negated, length, score, candidate in prepared:
+        text, stops = _render(candidate, request, dialect)
+        scored.append(
+            (
+                restricted,
+                negated,
+                length,
                 text.lower(),
                 Suggestion(
                     text=text,
@@ -118,18 +233,6 @@ def rank(
             ),
         )
 
-    # Among equal-strength matches, the shorter name is the closer one: the same
-    # prefix covers more of it. `no` should reach `now` before `normalize`, and
-    # alphabetical order alone would not.
-    #
-    # Availability leads, so a restricted candidate is last whatever it matched.
-    # Not "bottom of its kind group", which is what the feature was first
-    # specified as and which no constant expresses: `_KIND_STEP` is 5.0 against
-    # match strengths spanning 25 to 100, so any penalty small enough to keep an
-    # item inside its kind leaves a restricted exact-prefix match above an
-    # available substring one — which is not sunk. It also settles the dedupe
-    # below in the readable candidate's favour, where two relations in scope
-    # share a column name and only one of them can be read.
     scored.sort(key=lambda row: (row[0], row[1], row[2], row[3]))
 
     # Two relations in scope often share a column name. Offering `id` twice is
@@ -145,12 +248,7 @@ def rank(
         seen.add(key)
         ordered.append(suggestion)
 
-    # Clamped, because a negative limit is a Python slice from the *end* — it
-    # quietly dropped the last N suggestions instead of the first N, and
-    # `api.complete` forwards `limit * 5` to `resolve`, which ignores a negative
-    # value entirely, so the two layers disagreed about what had happened. Zero
-    # already answers with nothing, which is the boundary this meets.
-    return ordered[: max(limit, 0)] if limit is not None else ordered
+    return ordered[:limit] if limit is not None else ordered
 
 
 def expand_snippet(snippet: str) -> tuple[str, tuple[int, ...]]:
@@ -219,12 +317,33 @@ def _match_strength(text: str, prefix: str, kind: Kind = Kind.COLUMN) -> float |
     return None
 
 
-def _words(text: str) -> list[str]:
+_WORD_MEMO = 1 << 16
+"""
+How many identifiers the word split remembers.
+
+The same order of thing as the lexer's `_NAME_MEMO`, sized the same way and
+bounded for the same reason: a prefix that matched nothing is still a name this
+was asked about, and `lsp/` keeps one process alive for a working day.
+"""
+
+
+@lru_cache(maxsize=_WORD_MEMO)
+def _words(text: str) -> tuple[str, ...]:
     """
     The lowercased word components of an identifier.
 
     Split on underscores and dollars, and on a lower-to-upper transition so
     `MonthlyTotals` reads as two words rather than one.
+
+    Memoised on the text alone, which is all it depends on. Matching asks this
+    once per candidate, so on a 5000-relation schema it is the hot function the
+    moment a prefix exists — 59% of the ranking cost, against
+    `reads_as_one_identifier`'s 45% at an empty prefix where no matching runs.
+
+    A tuple rather than the list this used to build. A memo hands every caller
+    the same object, and both callers merely iterate it — but that is a fact
+    about them rather than a property of the design, and a shared list quietly
+    edited by one ranking would change how every later one scored.
     """
     words: list[str] = []
     current: list[str] = []
@@ -243,7 +362,7 @@ def _words(text: str) -> list[str]:
         previous = char
     if current:
         words.append(''.join(current).lower())
-    return words
+    return tuple(words)
 
 
 def _initials(text: str) -> str:

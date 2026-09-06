@@ -40,7 +40,9 @@ from pysqlsuggestions.types import Function, Kind
 _QUERY_ARITY = {
     'schemas': 1,
     'tables': 1,
+    'queryable_tables': 1,
     'columns': 2,
+    'columns_in': 2,
     'functions': 1,
     'column_search': 1,
     'relation_search': 1,
@@ -54,6 +56,11 @@ Duplicated from that module rather than derived from it, deliberately: this
 package is shipped so a third-party dialect can check itself, and a table that
 silently followed a refactor of the caller would stop catching the mistake it
 exists for. A change to either has to be a change to both, which is the point.
+
+`columns_in` is the least of what it is given, not the most: its last marker is a
+spread and takes as many relation names as the statement holds. Two is therefore
+the floor — a schema and at least one name — and the check below is what says the
+spread is where a spread may be.
 """
 
 __all__ = ['CacheConformance', 'Case', 'DialectConformance', 'InMemoryByteCache']
@@ -438,6 +445,24 @@ class DialectConformance:
                 # `render` refuses outright — so a dialect carrying it passed
                 # every check here and raised on its first catalog read.
                 problems.append(f'catalog query {name!r} uses $0, and markers are one-based')
+            # A spread claims every value from its own position on, so anything
+            # after it binds what the spread already took. `render` refuses that
+            # too, but only against a live server on the first catalog read —
+            # and a dialect contradicting itself is exactly what this harness is
+            # for seeing without one.
+            spreads = [
+                marker for marker in _markers(query.sql, _quoted_spans(query.sql, dialect.syntax)) if marker.group(2)
+            ]
+            if len(spreads) > 1:
+                problems.append(f'catalog query {name!r} holds {len(spreads)} spread markers, and one is the most')
+            elif spreads and any(
+                other.start() > spreads[0].start()
+                for other in _markers(query.sql, _quoted_spans(query.sql, dialect.syntax))
+            ):
+                problems.append(
+                    f'catalog query {name!r} has a marker after its spread, which binds what the spread took',
+                )
+
             wanted = max(found, default=0)
             if wanted > given:
                 problems.append(

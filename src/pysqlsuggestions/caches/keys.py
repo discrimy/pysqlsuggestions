@@ -26,7 +26,7 @@ from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Ta
 KEY_VERSION = '1'
 """The grammar's version. Bumped by hand when the *shape* of the key changes, not its contents."""
 
-ReadKind = Literal['schemas', 'tables', 'columns', 'functions', 'values', 'fk']
+ReadKind = Literal['schemas', 'tables', 'queryable', 'columns', 'functions', 'values', 'fk']
 """
 Which read a key belongs to.
 
@@ -37,6 +37,12 @@ is. One library with two `Kind`s would be a shadowed import waiting to happen �
 A field of the grammar rather than a sentinel folded into the data, which is
 what makes `tables(None)` against `columns(None, '')` structurally impossible
 rather than merely avoided.
+
+`queryable` is `tables` minus what a query could never name, and it is a kind of
+its own for the same reason. The two answer the same question with different
+scopes — `DROP INDEX ⌶` reads one and `FROM ⌶` the other — and sharing a key
+would let a `FROM` caret write its index-free list where the `DROP` caret looks,
+emptying that position for as long as the entry lived and saying nothing.
 """
 
 CACHED_TYPES: tuple[Any, ...] = (Column, ColumnValue, ForeignKey, Function, Table)

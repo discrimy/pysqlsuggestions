@@ -26,12 +26,14 @@ uv run uvicorn demo.app:app --port 8000                 # server demo, needs doc
 uv build --wheel && uv run python -m scripts.build_pages    # browser demo into site/
 uv run --with pip python -m scripts.build_vsix          # the extension's wheel bundle + VSIX
 uv run python -m pysqlsuggestions_lsp                   # the language server, on stdio
+uv run python -m scripts.bench_catalog --build          # catalog latency on 100/1k/5k-table schemas
 cd editors/vscode && npm run check                      # tsc + node --test unit tests
 cd editors/vscode && npm run test:integration           # downloads a VS Code, not run in CI
 ```
 
-`scripts/build_pages.py` and `scripts/build_vsix.py` must be run as modules (`-m scripts.x`), not by
-path: they import each other through the repository root on `sys.path`.
+`scripts/build_pages.py`, `scripts/build_vsix.py` and `scripts/bench_catalog.py` must be run as modules
+(`-m scripts.x`), not by path: they import each other, or are imported by tests, through the repository
+root on `sys.path`.
 
 ## Architecture
 

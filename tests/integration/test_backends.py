@@ -8,6 +8,8 @@ SQL. A fixture cannot.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from pysqlsuggestions.api import apply_suggestion, complete
@@ -428,6 +430,57 @@ def test_trino_federated_join_across_catalogs(trino_catalog: DbapiCatalog) -> No
     assert 'executions' not in found
 
 
+def test_trino_unqualified_columns_stay_inside_the_session_catalog(trino_catalog: DbapiCatalog) -> None:
+    """
+    `columns(None, ...)` means the catalog this connection is bound to, not every catalog.
+
+    The predicate used to read `($1 = '' OR table_schem = $1)`, and an empty `$1`
+    makes that OR vacuously true — so nothing constrained `table_cat` and
+    `system.jdbc.columns` answered from every connector at once. This fixture has
+    `report_executions` in ClickHouse and nowhere in Postgres, so a
+    postgresql-bound catalog came back with ClickHouse's twelve columns for a
+    relation Postgres does not have: `FROM some_pg_table o WHERE o.<caret>`
+    could offer columns that are not in the relation being queried.
+
+    It was also the slowest read anywhere in the library — 9.8s against 0.06s
+    once the catalog is named, because the scan reaches each connector's
+    metadata in turn.
+
+    Bound in this branch only. The qualified branch stays unconstrained on
+    purpose, because federating across catalogs is what Trino is for; the test
+    below joins two of them and would fail if this filter were applied there.
+    """
+    assert trino_catalog.columns(None, 'report_executions') == []
+
+
+def test_trino_unqualified_columns_push_the_catalog_filter_down(trino_catalog: DbapiCatalog) -> None:
+    """
+    The catalog filter has to be a top-level conjunct, or it does not push down.
+
+    A timing assertion, which needs justifying. The correct-looking spelling of
+    the test above is one disjunction —
+
+        ($1 = '' AND table_cat = current_catalog OR table_schem = $1)
+
+    — and it passes that test while being *no faster than having no filter at
+    all*: Trino pushes conjuncts into a connector and cannot push a disjunction,
+    so the scan still reaches every catalog and `table_cat` is applied to the
+    rows afterwards. The shipped form spells the same logic as two guarded
+    conjuncts precisely so each one can be folded and pushed.
+
+    Nothing but elapsed time can tell those two apart, and the gap they are told
+    apart by is 46ms against 9.8s. The budget is therefore two orders of
+    magnitude looser than the measurement, in the register `tests/test_scale.py`
+    uses: it asserts the shape of the cost, not a benchmark figure, and only a
+    genuine loss of pushdown can reach it.
+    """
+    started = time.perf_counter()
+    columns = trino_catalog.columns(None, 'reports_report')
+    elapsed = time.perf_counter() - started
+    assert columns, 'the query came back empty, so the timing below means nothing'
+    assert elapsed < 3.0, f'{elapsed:.1f}s: the catalog filter is no longer pushed down'
+
+
 def test_trino_columns_have_positions(trino_catalog: DbapiCatalog) -> None:
     """ordinal_position from system.jdbc.columns, so ranking keeps declaration order."""
     columns = trino_catalog.columns('public', 'reports_database')
@@ -658,3 +711,34 @@ def test_trino_pages_through_a_result_larger_than_one_response(trino_catalog: Db
     """
     functions = trino_catalog.functions()
     assert len(functions) > 500
+
+
+def test_a_join_reads_every_relation_in_one_query(
+    counting_postgres: tuple[DbapiCatalog, list[str]],
+) -> None:
+    """
+    The N+1 this capability exists to remove, asserted as round trips.
+
+    A count rather than a duration. The cost is one query per relation, which is
+    free against a fixture on this machine and is the whole latency budget
+    against a real server — 55ms here and 495ms at a 20ms round trip — so the
+    query count is the honest thing to hold, and it holds at any distance.
+
+    Three relations, one `pg_attribute` read. Without the capability it is three,
+    and `tests/test_bulk_columns.py` is where that fallback is pinned; this one
+    is here because only a real server can say the spread marker renders to SQL
+    Postgres will actually bind and plan.
+    """
+    catalog, log = counting_postgres
+    sql = (
+        'SELECT * FROM auth_user u '
+        'JOIN reports_report r ON r.user_id = u.id '
+        'JOIN reports_database d ON d.id = r.database_id '
+        'WHERE '
+    )
+    found = complete(sql, len(sql), POSTGRES, catalog)
+
+    reads = [text for text in log if 'pg_attribute' in text]
+    assert len(reads) == 1, reads
+    texts = {suggestion.text for suggestion in found}
+    assert {'u.username', 'r.name', 'd.title'} <= texts, sorted(texts)[:20]

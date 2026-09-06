@@ -18,7 +18,7 @@ from typing import Any, TypeVar, cast
 
 from pysqlsuggestions.caches import codec
 from pysqlsuggestions.caches.keys import ReadKind, cache_key
-from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
+from pysqlsuggestions.dialects.base import EXCLUSIVE, SEARCH_ROWS, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
 from pysqlsuggestions.engine.analyse import SET_OPERATION_TAIL
 from pysqlsuggestions.engine.rank import MAX_POSITION_PENALTY, quote_if_needed
@@ -27,10 +27,12 @@ from pysqlsuggestions.ports import (
     Cache,
     Catalog,
     ObjectCache,
+    SupportsBulkColumns,
     SupportsColumnSearch,
     SupportsColumnValues,
     SupportsForeignKeys,
     SupportsKeywords,
+    SupportsQueryableRelations,
     SupportsRelationSearch,
 )
 from pysqlsuggestions.types import (
@@ -48,7 +50,6 @@ from pysqlsuggestions.types import (
     Table,
 )
 
-_DEFAULT_SEARCH_LIMIT = 200
 _MAX_VALUES = 30
 """How many frequent values are worth offering. `pg_stats` keeps up to a hundred."""
 
@@ -121,14 +122,69 @@ def resolve(
     *,
     cache: Cache | None = None,
     identity: str | None = None,
-    limit: int = _DEFAULT_SEARCH_LIMIT,
 ) -> list[Candidate]:
-    """Fetch what `request` asked for. Returns candidates; ranking happens after."""
+    """
+    Fetch what `request` asked for. Returns candidates; ranking happens after.
+
+    No limit, deliberately. This used to take one and thread it down to the
+    prefix searches, so a caller asking for five suggestions searched a smaller
+    part of the database than one asking for forty — a shorter list *and* a
+    possibly worse best answer. How many rows a search reads is
+    `dialect.base.SEARCH_ROWS`, which is a property of what can be ranked
+    affordably rather than of what a front end means to display, and ranking is
+    where the display limit belongs.
+    """
     if not request.kinds:
         return []
     reader = _Reader(catalog, dialect, cache, identity)
+    _prefetch_scope_columns(request, reader)
     fetch = _qualified if request.qualifier else _unqualified
-    return _of_comparable_type(fetch(request, reader, dialect, limit), request, reader)
+    return _of_comparable_type(fetch(request, reader, dialect), request, reader)
+
+
+_WANTS_EVERY_RELATION = (Kind.COLUMN, Kind.EXPANSION, Kind.VALUE)
+"""
+The kinds whose candidates are drawn from every relation in scope at once.
+
+COLUMN offers all of them, EXPANSION writes a star out as all of them, and VALUE
+has to find the comparand's type among all of them. Every other kind either reads
+no columns or reads one relation's.
+"""
+
+
+def _prefetch_scope_columns(request: Request, reader: _Reader) -> None:
+    """
+    Ask for the columns of every relation in scope in one read, before anything asks for one.
+
+    Nothing below changes: the readers still ask per relation, and still find
+    what they ask for. This only moves the round trips, from one per relation to
+    one for the statement.
+
+    Deliberately narrow about when it runs. A qualified caret — `SELECT o.⌶` —
+    wants one relation and would pay for the other nineteen; a caret wanting only
+    relation names reads no columns at all. Both would turn a batch into waste,
+    which is worse than the N+1 it replaces because it is work nobody asked for.
+    """
+    scope = request.scope
+    if scope is None or request.qualifier:
+        return
+    if not any(kind in request.kinds for kind in _WANTS_EVERY_RELATION) and request.comparand is None:
+        return
+
+    wanted: list[tuple[str | None, str]] = []
+    seen: set[tuple[str | None, str]] = set()
+    for relation in scope.visible():
+        # A projection describes itself, so it needs no catalog call and must not
+        # be counted towards the batch — a statement of five CTEs would otherwise
+        # look like five relations worth fetching and produce a query for none.
+        if relation.projection is not None:
+            continue
+        schema, table = _split_path(relation.path)
+        if table is None or (schema, table) in seen:
+            continue
+        seen.add((schema, table))
+        wanted.append((schema, table))
+    reader.prefetch_columns(wanted)
 
 
 def _of_comparable_type(candidates: list[Candidate], request: Request, reader: _Reader) -> list[Candidate]:
@@ -387,9 +443,84 @@ class _Reader:
         """
         return self._read(self._key('tables', schema), lambda: self._catalog.tables(schema))
 
+    def queryable_tables(self, schema: str | None = None) -> Sequence[Table]:
+        """
+        Relations a query could name, from the narrow read where the catalog has one.
+
+        Falls back to `tables`, which is what every position did before this
+        capability existed — and note that the fallback is not merely correct but
+        free where a cache is warm, since that entry is the one the other
+        positions are filling anyway.
+
+        Cached under its own kind. Sharing `tables`'s key would let this list,
+        which is deliberately missing every index, answer `DROP INDEX ⌶`.
+        """
+        if not isinstance(self._catalog, SupportsQueryableRelations) or not _declared(
+            self._catalog,
+            'queryable_tables',
+        ):
+            return self.tables(schema)
+        narrow = self._catalog.queryable_tables
+        return self._read(self._key('queryable', schema), lambda: narrow(schema))
+
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
         return self._read(self._key('columns', schema, table), lambda: self._catalog.columns(schema, table))
+
+    def prefetch_columns(self, relations: Sequence[tuple[str | None, str]]) -> None:
+        """
+        Warm every relation in `relations` with one read, where the catalog can.
+
+        Answers nothing itself. `columns` is still what the rest of this module
+        calls, and still keyed per relation; this only arranges for those calls
+        to find their answers already in `_memo`. That is what keeps a batch a
+        transport detail: the cache sees exactly the entries a request without
+        this capability would have written, so a later statement sharing two of
+        three relations pays for one rather than for three.
+
+        Silent about everything. A catalog without the capability, a batch that
+        turns out to be one relation, a cache that has already answered — each
+        simply leaves the per-relation path to do what it did before.
+        """
+        if len(relations) < 2 or not isinstance(self._catalog, SupportsBulkColumns):
+            return
+        if not _declared(self._catalog, 'columns_for'):
+            return
+
+        missing: list[tuple[str | None, str]] = []
+        for schema, table in relations:
+            key = self._key('columns', schema, table)
+            if key in self._memo:
+                continue
+            # The caller's cache is asked per relation, which is one `get` each
+            # rather than one for the batch. That is `docs/gaps.md` §5's problem
+            # and not this one: it is the *database* round trips this removes,
+            # and a cache get is not a catalog query.
+            cached = None if self._cache is None or self._failed else self._cached(key)
+            if cached is not None:
+                self._memo[key] = cached
+                continue
+            missing.append((schema, table))
+
+        # One left is not a batch. Falling through leaves it to `columns`, which
+        # is the same single read spelled by the query whose text does not vary
+        # with the batch size — so the commonest statement of all keeps its
+        # server-side plan.
+        if len(missing) < 2:
+            return
+
+        found = self._catalog.columns_for(missing)
+        for schema, table in missing:
+            # `list`, and defaulting to empty: a relation the catalog left out of
+            # the mapping is one the role cannot see, and the per-relation path
+            # would have cached the same empty answer for it. Memoised either
+            # way, so an omission costs one read rather than one per position
+            # that asks again within this request.
+            columns = list(found.get((schema, table), ()))
+            key = self._key('columns', schema, table)
+            self._memo[key] = columns
+            if self._cache is not None and not self._failed:
+                self._store(key, columns)
 
     def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
         """
@@ -397,9 +528,18 @@ class _Reader:
 
         Free at a JOIN caret: the same relation list already answers the TABLE
         candidates there, and `_read` remembers it within the request.
+
+        Which is why it reads the *narrow* list. A join proposal can only ever
+        name a relation a query could select from, so the broad list answers a
+        question this never asks — and reading it here would cost the JOIN caret
+        a second fetch of every index in the database purely to discard them,
+        turning the one position that had been getting this list for nothing into
+        the only one paying for two.
         """
         return frozenset(
-            (table.schema, table.name) for table in self.tables(schema) if table.availability is Availability.RESTRICTED
+            (table.schema, table.name)
+            for table in self.queryable_tables(schema)
+            if table.availability is Availability.RESTRICTED
         )
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
@@ -506,7 +646,7 @@ def _names_a_relation(scope: Scope | None, qualifier: tuple[str, ...]) -> bool:
     return bool(visible)
 
 
-def _qualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
+def _qualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
     """A dotted path narrows hard: either one relation's columns, or one namespace's contents."""
     scope = request.scope
     head = request.qualifier[0]
@@ -588,7 +728,7 @@ price for not inventing a second ranking signal.
 """
 
 
-def _loose_columns(request: Request, reader: _Reader, limit: int) -> list[Candidate]:
+def _loose_columns(request: Request, reader: _Reader) -> list[Candidate]:
     """
     Columns with no relation in scope — `SELECT <caret>` before any FROM.
 
@@ -603,11 +743,13 @@ def _loose_columns(request: Request, reader: _Reader, limit: int) -> list[Candid
     `public.invoices.amount` and `billing.invoices.period` can never render
     alike, so neither is touched.
     """
-    columns = list(reader.loose_columns(request.prefix, limit))
+    columns = list(reader.loose_columns(request.prefix, SEARCH_ROWS))
     schemas: dict[tuple[str, str], set[str]] = {}
     for column in columns:
         schemas.setdefault((column.table, column.name), set()).add(column.schema)
-    here = {(table.schema, table.name) for table in reader.tables(None)}
+    # Only asked whether a column's relation is reachable unqualified, so the
+    # narrow read answers it: nobody writes a FROM clause naming an index.
+    here = {(table.schema, table.name) for table in reader.queryable_tables(None)}
     return [
         _column_candidate(
             column,
@@ -650,7 +792,7 @@ def _qualifier_for(relation: Relation, ambiguous: frozenset[str]) -> tuple[str, 
     return (relation.label,) if relation.label else ()
 
 
-def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
+def _unqualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
     """No dot typed: everything the clause admits, from whatever is in scope."""
     candidates: list[Candidate] = []
     scope = request.scope
@@ -697,11 +839,16 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
             # answers to its relation name, so `SELECT invoices.amount FROM
             # billing.invoices` is what this writes and what Postgres plans. It
             # lengthens only when two schemas would render the same reference.
-            candidates += _loose_columns(request, reader, limit)
+            candidates += _loose_columns(request, reader)
 
     if Kind.TABLE in request.kinds:
         wanted = _relation_kinds(request, dialect)
-        listed = [table for table in reader.tables(None) if _admits(table, wanted)]
+        # The narrow read only when the clause names no kinds. A clause that does
+        # name them wants what the exclusion hides — `DROP INDEX` is the whole
+        # reason the broad read keeps its meaning — so it has to ask for
+        # everything and filter, exactly as this position always did.
+        source = reader.tables(None) if wanted else reader.queryable_tables(None)
+        listed = [table for table in source if _admits(table, wanted)]
         candidates += [_table_candidate(table) for table in listed]
         # A relation in the default namespace comes back from both calls, and
         # the two render differently — `invoices` and `public.invoices` — so
@@ -709,7 +856,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         here = {(table.schema, table.name) for table in listed}
         candidates += [
             _table_candidate(table, qualify=(table.schema,))
-            for table in reader.search_relations(request.prefix, limit)
+            for table in reader.search_relations(request.prefix, SEARCH_ROWS)
             if _admits(table, wanted) and (table.schema, table.name) not in here
         ]
         candidates += [
@@ -717,7 +864,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         ]
 
     if Kind.SEQUENCE in request.kinds:
-        candidates += _sequences(request, reader, dialect, limit)
+        candidates += _sequences(request, reader, dialect)
 
     if Kind.SCHEMA in request.kinds:
         candidates += [_schema_candidate(name) for name in reader.schemas()]
@@ -763,8 +910,8 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
 
     # Deliberately not truncated: ranking has to see every candidate, or a
     # perfect match sitting past the cut is dropped before it is ever scored.
-    # `limit` reaches only the prefix-dependent column search, which is bounded
-    # server-side because it cannot be cached.
+    # The prefix-dependent searches are the one exception and bound themselves,
+    # server-side at `SEARCH_ROWS`, because they cannot be cached.
     return candidates
 
 
@@ -1010,7 +1157,7 @@ def _omission(omitted: int) -> str | None:
     return f'{omitted} column{"" if omitted == 1 else "s"} omitted: {_NO_PRIVILEGE}'
 
 
-def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) -> list[Candidate]:
+def _sequences(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
     """
     Sequences by name, from the default namespace and from a prefix search.
 
@@ -1030,7 +1177,7 @@ def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     found: list[tuple[Table, str | None]] = [(table, None) for table in listed]
     found += [
         (table, table.schema)
-        for table in reader.search_relations(request.prefix, limit)
+        for table in reader.search_relations(request.prefix, SEARCH_ROWS)
         if table.kind == _SEQUENCE and (table.schema, table.name) not in here
     ]
     if not request.writes_a_literal:

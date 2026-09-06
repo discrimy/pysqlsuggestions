@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pysqlsuggestions.dialects.base import TEMPLATE_PLACEHOLDER, Placeholder, Syntax
-from pysqlsuggestions.engine.lex import Token, TokenType, lex
+from pysqlsuggestions.engine.lex import Token, TokenType, lex, reads_as_one_identifier
 
 
 def significant(src: str, syntax: Syntax | None = None) -> list[Token]:
@@ -151,3 +151,37 @@ def test_a_placeholder_inside_a_literal_is_text() -> None:
 def test_a_dialect_declaring_none_lexes_as_it_always_did() -> None:
     """The default is an empty tuple, and it must change nothing."""
     assert [t.type for t in significant(':us')] == [TokenType.OPERATOR, TokenType.IDENT]
+
+
+def test_reading_a_name_back_is_memoised_within_a_bound() -> None:
+    """
+    The hot path asks this about the same catalog names on every keystroke.
+
+    `rank` calls it once per candidate to decide whether a name survives
+    unquoted, and it walks the string a character at a time. On a 5000-relation
+    schema that is 5000 walks over names that have not changed since the last
+    keystroke — 45% of the whole ranking cost, measured, and the reason a warm
+    cache still spent 23ms per completion with no I/O at all.
+
+    Bounded rather than unbounded, which is the half that can actually go wrong.
+    The names come from a catalog and so are bounded in principle, but this is
+    also asked about whatever the user has typed, and `lsp/` keeps one process
+    alive for a working day. 0.10.0 spent a release putting a bound on
+    `MemoryCache` for that exact reason; an unbounded memo here would reintroduce
+    it one module lower down.
+    """
+    memo = reads_as_one_identifier.cache_info()
+    assert memo.maxsize is not None, 'an unbounded memo is a slow leak in a long session'
+
+    for index in range(memo.maxsize * 2):
+        reads_as_one_identifier(f'name_{index}')
+
+    assert reads_as_one_identifier.cache_info().currsize <= memo.maxsize
+
+
+def test_memoising_does_not_change_what_reads_as_one_identifier_answers() -> None:
+    """The names the quoting decision turns on, asked twice so a memo has to agree with itself."""
+    names = ['orders', '_leading', 'a$b', 'café', 'total\xa0due', 'a\u200bb', '', ' ', '9lives', 'a\nb']
+    first = [reads_as_one_identifier(name) for name in names]
+    assert first == [reads_as_one_identifier(name) for name in names]
+    assert first == [True, True, True, True, False, False, False, False, False, False]

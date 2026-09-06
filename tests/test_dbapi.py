@@ -298,3 +298,76 @@ def test_numeric_refuses_a_marker_it_cannot_bind_like_every_other_style() -> Non
     for style in ('qmark', 'format', 'named', 'pyformat', 'numeric'):
         with pytest.raises(IndexError):
             render('SELECT $2', ('only',), style)
+
+
+SPREAD = 'SELECT a FROM t WHERE s = $1 AND n IN ($2...)'
+"""
+A query wanting one scalar and a list whose length is not known until it is asked.
+
+`columns_for` is the reason this exists: one query for every relation in scope
+rather than one per relation, and how many there are is a property of the
+statement being completed.
+"""
+
+
+def test_a_spread_marker_becomes_one_placeholder_per_value() -> None:
+    """The whole point: `$2...` is as many placeholders as there are values from 2 on."""
+    assert render(SPREAD, ('public', 'a', 'b', 'c'), 'qmark') == (
+        'SELECT a FROM t WHERE s = ? AND n IN (?, ?, ?)',
+        ('public', 'a', 'b', 'c'),
+    )
+
+
+def test_a_spread_of_one_is_a_single_placeholder() -> None:
+    """The boundary a list always eventually hits, and the one an `IN` still has to accept."""
+    assert render(SPREAD, ('public', 'only'), 'format') == (
+        'SELECT a FROM t WHERE s = %s AND n IN (%s)',
+        ('public', 'only'),
+    )
+
+
+def test_a_spread_names_each_value_for_the_keyed_styles() -> None:
+    """pyformat wants a mapping, so every spread value needs a name of its own."""
+    assert render(SPREAD, ('public', 'a', 'b'), 'pyformat') == (
+        'SELECT a FROM t WHERE s = %(p1)s AND n IN (%(p2)s, %(p3)s)',
+        {'p1': 'public', 'p2': 'a', 'p3': 'b'},
+    )
+
+
+def test_a_spread_binds_positionally_for_numeric() -> None:
+    """`:N` indexes the sequence, so a spread has to number its values consecutively."""
+    assert render(SPREAD, ('public', 'a', 'b'), 'numeric') == (
+        'SELECT a FROM t WHERE s = :1 AND n IN (:2, :3)',
+        ('public', 'a', 'b'),
+    )
+
+
+def test_an_empty_spread_is_refused_rather_than_rendered() -> None:
+    """
+    `IN ()` is a syntax error in all three backends, so this fails here instead.
+
+    Loudly, because the alternative — rendering something that happens to parse,
+    like `IN (NULL)` — answers the question "which of no relations" with silence
+    that looks exactly like a relation having no columns.
+    """
+    with pytest.raises(ValueError, match='spread'):
+        render(SPREAD, ('public',), 'qmark')
+
+
+def test_a_spread_must_be_the_last_marker() -> None:
+    """
+    It takes every value from its own position on, so nothing can follow it.
+
+    A query written the other way round would bind its trailing scalar into the
+    list and run anyway, one value short and one relation too many.
+    """
+    with pytest.raises(ValueError, match='spread'):
+        render('SELECT a FROM t WHERE n IN ($1...) AND s = $2', ('a', 'b'), 'qmark')
+
+
+def test_a_spread_inside_a_literal_is_text_like_any_other_marker() -> None:
+    """The protection `_quoted_spans` gives ordinary markers has to cover this one."""
+    sql = "SELECT '$1...' AS note, x FROM t WHERE n IN ($1...)"
+    rendered, parameters = render(sql, ('a', 'b'), 'qmark', POSTGRES.syntax)
+    assert rendered == "SELECT '$1...' AS note, x FROM t WHERE n IN (?, ?)"
+    assert parameters == ('a', 'b')

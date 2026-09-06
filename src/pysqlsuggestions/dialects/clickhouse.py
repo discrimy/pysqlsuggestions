@@ -6,7 +6,15 @@ from dataclasses import replace
 
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
-from pysqlsuggestions.dialects.base import CatalogQueries, Clause, Namespace, Placeholder, Query, Syntax
+from pysqlsuggestions.dialects.base import (
+    SEARCH_ROWS,
+    CatalogQueries,
+    Clause,
+    Namespace,
+    Placeholder,
+    Query,
+    Syntax,
+)
 from pysqlsuggestions.types import Column, Function, Kind, Table
 
 _INTERNAL = "('system', 'INFORMATION_SCHEMA', 'information_schema')"
@@ -49,6 +57,23 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
+    # Every relation a FROM clause names, in one read. `$2...` is a spread and
+    # claims every remaining value, so it has to come last.
+    columns_in=Query(
+        sql="""
+            SELECT database, table, name, type, position FROM system.columns
+            WHERE ($1 = '' AND database = currentDatabase() OR database = $1)
+              AND table IN ($2...)
+            ORDER BY database, table, position
+        """,
+        row=lambda row: Column(
+            schema=str(row[0]),
+            table=str(row[1]),
+            name=str(row[2]),
+            type=str(row[3]),
+            position=int(row[4]),
+        ),
+    ),
     # ClickHouse exposes thousands of functions and no signatures, so they are
     # introspected rather than shipped, and the detail column stays empty.
     column_search=Query(
@@ -57,7 +82,7 @@ QUERIES = CatalogQueries(
             WHERE database NOT IN {_INTERNAL}
               AND position(lower(name), lower($1)) > 0
             ORDER BY position(lower(name), lower($1)), length(name), database, table, name
-            LIMIT 500
+            LIMIT {SEARCH_ROWS}
         """,
         row=lambda row: Column(
             schema=str(row[0]),
@@ -75,7 +100,7 @@ QUERIES = CatalogQueries(
             WHERE database NOT IN {_INTERNAL}
               AND position(lower(name), lower($1)) > 0
             ORDER BY position(lower(name), lower($1)), length(name), database, name
-            LIMIT 200
+            LIMIT {SEARCH_ROWS}
         """,
         row=lambda row: Table(
             schema=str(row[0]),

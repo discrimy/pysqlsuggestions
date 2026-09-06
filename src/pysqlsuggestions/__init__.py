@@ -8,10 +8,13 @@ from pysqlsuggestions.ports import (
     Cache,
     Catalog,
     ObjectCache,
+    SupportsBulkColumns,
     SupportsColumnSearch,
     SupportsColumnValues,
     SupportsForeignKeys,
     SupportsKeywords,
+    SupportsQueryableRelations,
+    SupportsRelationSearch,
 )
 from pysqlsuggestions.types import (
     Availability,
@@ -30,7 +33,7 @@ from pysqlsuggestions.types import (
     Table,
 )
 
-__version__ = '0.10.0'
+__version__ = '0.11.0'
 
 __all__ = [
     'Availability',
@@ -50,10 +53,13 @@ __all__ = [
     'Request',
     'Scope',
     'Suggestion',
+    'SupportsBulkColumns',
     'SupportsColumnSearch',
     'SupportsColumnValues',
     'SupportsForeignKeys',
     'SupportsKeywords',
+    'SupportsQueryableRelations',
+    'SupportsRelationSearch',
     'Table',
     '__version__',
     'apply_suggestion',

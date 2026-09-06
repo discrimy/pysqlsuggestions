@@ -11,7 +11,7 @@ where the degradation lives so no adapter has to repeat it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
@@ -110,6 +110,94 @@ class SupportsRelationSearch(Protocol):
         exact match behind two hundred near-misses. `Table.schema` travels with
         each row, because a relation the search path does not cover has to be
         written qualified.
+        """
+        ...
+
+
+@runtime_checkable
+class SupportsQueryableRelations(Protocol):
+    """
+    The relations a FROM clause could name, without the ones it never could.
+
+    Absent: `Catalog.tables` is read and filtered here, which is what happened
+    before this existed. Correct, and it moves every index in the database across
+    the wire to answer a keystroke.
+
+    `tables` cannot simply be narrowed instead, and the reason is `DROP INDEX ⌶`:
+    it reads the same list and wants precisely what every other position exists
+    to hide, as do the sequence positions. So the broad read keeps its meaning
+    and this is added beside it — which also means an adapter that has never
+    heard of this goes on working exactly as it did.
+
+    The cost it removes is fetching and holding what will be discarded. On a
+    5000-table schema `tables()` returns 20 000 rows to serve 5000: three times
+    the query, four times the cached payload, and 24 ms of JSON decode on every
+    keystroke where the cache is a `ByteCache` across a socket.
+
+    Prefix-independent, and cached under a key of its own. Sharing one with
+    `tables` would be silent and one-directional — a `FROM ⌶` writing its
+    index-free list where `DROP INDEX ⌶` looks would empty that position for as
+    long as the entry lived.
+    """
+
+    def queryable_tables(self, schema: str | None = None) -> Sequence[Table]:
+        """
+        Relations in `schema` that a query could select from, or those visible by default.
+
+        Same shape and ordering as `Catalog.tables`; what differs is only what is
+        left out. An implementation decides for itself what cannot be selected
+        from, because the answer is per backend: on Postgres it is indexes and
+        sequences, and on ClickHouse `Table.kind` is the storage engine name, so
+        no list written here could enumerate what a given installation has.
+        """
+        ...
+
+
+@runtime_checkable
+class SupportsBulkColumns(Protocol):
+    """
+    The columns of several relations at once — every relation a statement joins.
+
+    Absent: one `Catalog.columns` call per relation, which is what happened
+    before this existed. Correct, and one round trip per relation in scope.
+
+    A twenty-way join issued twenty-one queries for one keystroke. That is free
+    against a server on the same machine and is the whole latency budget against
+    a real one — 55 ms locally, 495 ms at a 20 ms round trip — and it is *flat in
+    the size of the catalog*, because the cost is the join count. A hundred-table
+    database pays exactly what a warehouse does.
+
+    Unlike almost everything else `resolve` fetches, these keys are known before
+    any I/O happens: the statement's scope names every relation. `docs/gaps.md`
+    §5 argues batching is unreachable because `_Reader` discovers its keys as the
+    request resolves, and that argument is sound — it is simply not true here,
+    which is why this one capability exists and a general bulk read does not.
+
+    Prefix-independent, so what it returns caches. It is nonetheless *not* a
+    cache key: `resolve` stores each relation under the key a single read would
+    have used, so a later statement sharing two of three relations pays for one.
+    Keyed per batch, this optimisation and the cache would compete instead of
+    compounding.
+    """
+
+    def columns_for(
+        self,
+        relations: Sequence[tuple[str | None, str]],
+    ) -> Mapping[tuple[str | None, str], Sequence[Column]]:
+        """
+        Columns for each of `relations`, keyed by the (schema, table) asked for.
+
+        Keyed as asked, not as found: the caller has to match answers to
+        questions, and a relation reached through the search path comes back
+        knowing a schema the question did not name.
+
+        A mapping rather than a flat sequence, so a relation that yielded nothing
+        can be told from one that was never asked about. A role that may not read
+        a relation produces an absent key, and answering that with an empty list
+        would be a claim — that the relation exists and has no columns — which
+        `Availability` exists precisely to avoid making.
+
+        Ordering within each relation is `Catalog.columns`'s: declaration order.
         """
         ...
 

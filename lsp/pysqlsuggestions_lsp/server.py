@@ -48,6 +48,7 @@ from lsprotocol.types import (
 from pygls.lsp.server import LanguageServer
 
 from pysqlsuggestions import complete
+from pysqlsuggestions.api import DEFAULT_LIMIT
 from pysqlsuggestions.caches import MemoryCache
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.base import Dialect
@@ -187,6 +188,28 @@ class Session:
                 self._announced = True
                 self.on_degrade(why)
 
+    @staticmethod
+    def truncated(items: list[CompletionItem]) -> bool:
+        """
+        Whether the engine had more to offer than it returned.
+
+        Reported to the client as `isIncomplete`, which is not decoration: the
+        specification says a list is recomputed on further typing only when this
+        is true, so a client told `false` caches the items and filters them itself
+        as the user keeps typing. On a large schema every answer is cut to
+        `limit`, and one truncated list at `SELECT u` therefore stayed wrong
+        through `user`, `user_r` and `user_ref` — the server was never asked
+        again, so the column the user was reaching for could not appear however
+        much more of it they typed.
+
+        A full list is the whole signal. The engine does not say how much it
+        discarded, and inferring it from the length is right-biased on purpose: a
+        list that is exactly `limit` long and complete is re-queried once for
+        nothing, at a few milliseconds. The opposite mistake is silent and lasts
+        for the rest of the word.
+        """
+        return len(items) >= DEFAULT_LIMIT
+
     def suggest(
         self,
         text: str,
@@ -318,7 +341,8 @@ def create_server(connect: Connect | None = None) -> SqlServer:
         except AttributeError:
             capabilities = None
         snippets = snippet_support(capabilities)
-        return CompletionList(is_incomplete=False, items=server.session.suggest(text, offset, units, snippets))
+        items = server.session.suggest(text, offset, units, snippets)
+        return CompletionList(is_incomplete=Session.truncated(items), items=items)
 
     del initialize, completion
     return server

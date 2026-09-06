@@ -4,6 +4,220 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## 0.11.0
+
+### `resolve` no longer takes a `limit`
+
+Nothing in `complete`'s signature changes, and no caret answers differently. This
+is for anyone using the lower-level entry point directly.
+
+The parameter bounded the prefix searches, which now bound themselves at
+`SEARCH_ROWS`, so it had become an argument that was accepted and ignored. That
+is worse than removing it: a caller asking for five suggestions used to search a
+smaller part of the database than one asking for forty, and would have gone on
+believing they still could.
+
+### A truncated completion list now says it is truncated
+
+The language server reported `isIncomplete: false` on every answer. The LSP
+specification says a list is recomputed on further typing only when that flag is
+true, so a client told `false` caches the items and filters them itself — and on
+a large schema every answer is cut to `limit`. One truncated list at `SELECT u`
+therefore stayed wrong through `user`, `user_r` and `user_ref`: the server was
+never asked again, and the column being reached for could not appear however much
+more of it you typed.
+
+A full list is now reported as incomplete. The signal is right-biased on purpose:
+a list that happens to be exactly `limit` long and is genuinely complete gets
+re-queried once for nothing, at a few milliseconds. The opposite mistake is
+silent and lasts for the rest of the word.
+
+### A cross-relation search ranks a thousand rows instead of two hundred
+
+The search that answers `SELECT user⌶` before any FROM truncates on the server,
+and the server cannot rank: it orders by match position, name length and then the
+alphabet, while the engine also knows declaration order and — most decisively —
+whether a relation can be referenced without qualifying it.
+
+Those two numbers used to disagree. The queries stopped at 500 rows while
+`resolve` asked for `limit × 5`, which is 200 by default, so three hundred rows
+were ordered, returned and discarded unranked. They are one number now,
+`SEARCH_ROWS`, interpolated into every shipped search query so a dialect and the
+engine cannot drift apart.
+
+Raised to 1000 with it. Measured on a 5000-table schema at the worst prefix there
+is: 200 rows cost 65 ms, 1000 cost 72 ms, 2000 cost 84 ms — five times the
+headroom for about a tenth of the time.
+
+**This narrows the failure rather than removing it, and is not offered as a
+fix.** 700 relations in an off-search-path schema named `aaa_*` will still hide
+the one `public` column a bare reference could have used; the wanted row appears
+at 701 and not at 700. What closes it properly is putting search-path visibility
+into the server's ordering, which costs about 30 ms on the worst prefix and is
+not currently thought worth it — `docs/gaps.md` records that with the numbers.
+
+### Searching for a column by name stops checking privileges it will discard
+
+`SELECT user⌶`, before any FROM clause, searches every relation in the database
+for a matching column. On a 5000-table schema that matched 55 000 columns at a
+one-character prefix, and the query computed `has_column_privilege` and
+`format_type` for every one of them *before* truncating to 500.
+
+| `search_columns` | before | after |
+| --- | --- | --- |
+| `'u'` | 238 ms | **40.9 ms** |
+| `'user'` | 41.7 ms | 33.6 ms |
+
+The narrowing now happens first and those two functions are computed on the 500
+rows that survive it. Identical rows in identical order — this is a change of
+query shape, not of answer.
+
+Worth knowing if you maintain a dialect: the sort was not the problem, though it
+is the obvious suspect. Postgres uses a top-N heapsort for `ORDER BY … LIMIT` and
+it costs nothing worth naming; removing only the privilege column took the same
+query to 36 ms, which is how the cause was identified rather than guessed. A
+per-row function in the select list of a query with a LIMIT is evaluated before
+the limit applies.
+
+### Ranking renders the suggestions it shows, not the ones it discards
+
+A `FROM ⌶` on a 5000-relation schema built five thousand suggestions — each with
+its quoting decided and its text rendered — in order to return forty. That was
+about half of what ranking cost, and none of it was needed.
+
+The sort key's first three elements are availability, score and name length, all
+of which come from the candidate itself; only the fourth is the rendered text. So
+the shortlist is chosen on the first three and only what survives is rendered.
+
+| warm caret, 5000 tables | before | after |
+| --- | --- | --- |
+| `SELECT * FROM ⌶` | 38.0 ms | 12.9 ms |
+| `SELECT ⌶` | 18.6 ms | 7.4 ms |
+| `... JOIN ⌶` | 42.5 ms | 14.9 ms |
+| `WHERE ⌶`, 20 relations | 24.3 ms | 8.7 ms |
+
+Ranking itself went from 21.3 ms to 2.5 ms at that first caret, and no longer
+grows with the catalog.
+
+**The output is identical**, which is the only thing that matters here and took
+two things to be true rather than nearly true. Every candidate tying with the
+last of the shortlist is rendered too, because the rendered text is what decides
+between them and a large catalog produces long runs of ties. And the shortlist
+grows if deduplication leaves fewer suggestions than were asked for, since
+duplicates can only be found after rendering.
+
+### A relation caret stops fetching every index in the database
+
+`Catalog.tables` returns everything in the catalog, because `DROP INDEX ⌶` reads
+that same list and wants precisely what every other position exists to hide. On
+a 5000-table schema that is 20 000 rows fetched to serve 5000 — a table carries a
+primary key index and usually more — so `FROM ⌶` was moving fifteen thousand
+indexes across the wire in order to discard them.
+
+`SupportsQueryableRelations` is a new capability for the narrower read, and the
+broad one is untouched, so `DROP INDEX` and the sequence positions go on working
+and no existing adapter changes. Cold, on a 5000-table Postgres:
+
+| caret | before | after |
+| --- | --- | --- |
+| `SELECT * FROM ⌶` | 84.8 ms | 45.0 ms |
+| `SELECT ⌶` | 82.5 ms | 36.2 ms |
+| `... JOIN ⌶` | 185.9 ms | 146.9 ms |
+
+The cached payload for that read drops from 1991 KiB to 498, which is what a
+`ByteCache` across a socket decodes on **every** keystroke — 24 ms of it before.
+
+The two reads are cached under separate keys, which matters more than it looks:
+one key would let a `FROM` caret write its index-free list where the `DROP INDEX`
+caret looks, emptying that position for as long as the entry lived and saying
+nothing about why.
+
+### A caret in a joined statement reads every relation at once
+
+`SELECT * FROM a JOIN b JOIN c … WHERE ⌶` asked the catalog for one relation's
+columns at a time, so a twenty-way join issued twenty-one queries for a single
+keystroke. Now it issues two.
+
+This is worth stating in latency rather than in queries, because a server on the
+same machine hides it completely:
+
+| `WHERE ⌶`, 20 relations in scope | before | after |
+| --- | --- | --- |
+| local server | 52.6 ms | 31.2 ms |
+| 20 ms round trip | 494.9 ms | 73.4 ms |
+
+It is also **flat in the size of the catalog** — 490 ms against a 100-table
+schema, 495 ms against 5000 — because the cost was the join count and nothing
+else. So this is not a large-schema fix: every wide query paid it, on every
+database, and a small one never grew out of it.
+
+`SupportsBulkColumns` is a new capability, so nothing an existing adapter does
+changes. Absent, the reads happen one at a time exactly as before and the
+suggestions are identical; `DbapiCatalog` implements it for all three shipped
+dialects, and a dialect that ships no `columns_in` query falls back the same way.
+
+A batch is a transport detail and deliberately not a cache key: each relation is
+stored under the key a single read would have used, so a later statement sharing
+two of its three relations still pays for one. Adding it to a `MemoryCache` keyed
+per batch would have made the two optimisations compete instead of compound.
+
+Dialect authors get one new piece of the marker language: `$2...` is a spread,
+expanding to as many placeholders as there are values. It must be the last marker
+in a query, since it claims every remaining value.
+
+### A keystroke on a large schema costs a quarter less, and offers the same thing
+
+Two pure functions in the hot path were recomputed on every keystroke over names
+that had not changed. `lex.reads_as_one_identifier` walks a name character by
+character to decide whether it survives unquoted, and `rank._words` splits one
+into its components for matching; ranking asks each of them once per candidate,
+so a 5000-relation schema paid 5000 walks and 5000 splits per completion. They
+measured as 45% and 59% of ranking respectively — the first dominating at an
+empty prefix, where no matching runs, and the second once something is typed.
+
+Both are now memoised on the string, which is all either depends on. Measured on
+a 5000-table Postgres with a warm cache and no I/O at all:
+
+| caret | before | after |
+| --- | --- | --- |
+| `SELECT * FROM ⌶` | 38.0 ms | 28.6 ms |
+| `SELECT * FROM ord⌶` | 36.7 ms | 26.5 ms |
+| `... JOIN ⌶` | 42.5 ms | 31.6 ms |
+| `WHERE ⌶`, 20 relations in scope | 24.3 ms | 19.2 ms |
+
+Output is unchanged everywhere — this is the same ranking, arrived at with less
+work. The memos are bounded rather than unbounded, for the reason 0.10.0 bounded
+`MemoryCache`: what reaches them is not only catalog names but whatever has been
+typed, and a language server stays up for a working day.
+
+What this does *not* fix is the shape underneath it: a caret still builds a
+candidate for all 5000 relations in order to show 40, so the cost still grows
+with the catalog. That is recorded in `docs/gaps.md` rather than fixed here.
+
+### A Trino caret no longer offers another catalog's columns
+
+`SELECT * FROM orders o WHERE o.⌶` asked `system.jdbc.columns` for a relation by
+name with nothing constraining the catalog, so it answered from every connector
+the coordinator federates. A catalog bound to `postgresql` returned ClickHouse's
+columns for a table Postgres does not have — and where two backends hold a
+same-named table, the caret offered a mixture of both relations' columns as
+though they were one.
+
+The unqualified position is now bound to `current_catalog`, which is what an
+unqualified name means. Naming a schema still reaches across catalogs, because
+that is what Trino is for: `FROM postgresql.public.reports_report p JOIN
+clickhouse.analytics.report_executions c ON c.⌶` is unchanged.
+
+It was also the slowest read in the library. Bounding the scan takes that
+position from **9.8 s to 0.05 s** — the query had been reaching every
+connector's metadata in turn — and the integration suite from 84 s to 60 s.
+
+Worth knowing if you maintain a dialect: the filter has to be spelled as a
+top-level conjunct. The disjunction that reads more naturally is equally correct
+and entirely useless, because Trino pushes conjuncts into a connector and cannot
+push a disjunction. Both the comment in `dialects/trino.py` and a timing test say
+so, since nothing else can tell the two apart.
+
 ## 0.10.0
 
 ### A caret sees a CREATE TABLE without a restart

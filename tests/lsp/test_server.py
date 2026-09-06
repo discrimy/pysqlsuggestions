@@ -17,9 +17,10 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from lsprotocol.types import INITIALIZE, TEXT_DOCUMENT_COMPLETION
+from lsprotocol.types import INITIALIZE, TEXT_DOCUMENT_COMPLETION, CompletionItem
 from pygls.feature_manager import is_thread_function
 
+from pysqlsuggestions.api import DEFAULT_LIMIT
 from pysqlsuggestions.dialects.ansi import ANSI
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions_lsp.connections import Profile
@@ -374,3 +375,39 @@ def test_a_session_told_there_are_no_snippets_emits_none() -> None:
         folded = [item for item in items if item.label == 'auth_user.id']
         assert folded, snippets
         assert folded[0].insert_text_format is expected, snippets
+
+
+def test_a_full_list_is_reported_as_incomplete() -> None:
+    """
+    A truncated list has to say so, or the client will never ask again.
+
+    `isIncomplete: false` means "this is everything" and clients act on it: the
+    LSP specification says a list is recomputed on further typing only when the
+    flag is true, so a client told `false` caches these items and filters them
+    itself as the user keeps typing. On a large schema every answer is cut to
+    `limit`, so one truncated list at `SELECT u` stayed wrong through `user`,
+    `user_r` and `user_ref` — the server was never asked a second time, and the
+    column the user was reaching for could not appear however much more of it
+    they typed.
+
+    Length against the limit is the whole signal, and it is right-biased on
+    purpose: a list that happens to hold exactly `limit` items and is in fact
+    complete gets re-queried once for nothing, at a few milliseconds. The
+    opposite mistake is silent and lasts for the rest of the word.
+    """
+    full = [CompletionItem(label=f'c{index}') for index in range(DEFAULT_LIMIT)]
+    assert Session.truncated(full) is True
+
+
+def test_a_short_list_is_reported_as_complete() -> None:
+    """Nothing was cut, so the client may filter it itself and save the round trips."""
+    assert Session.truncated([CompletionItem(label='recent')]) is False
+    assert Session.truncated([]) is False
+
+
+def test_a_real_answer_that_fits_is_complete() -> None:
+    """The flag is computed from what `suggest` actually returned, not from a guess."""
+    session = Session()
+    items = session.suggest(WITH_CTE, len(WITH_CTE))
+    assert 0 < len(items) < DEFAULT_LIMIT
+    assert Session.truncated(items) is False

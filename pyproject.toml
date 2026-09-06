@@ -1,6 +1,6 @@
 [project]
 name = 'pysqlsuggestions'
-version = '0.10.0'
+version = '0.11.0'
 description = 'Context-aware, schema-aware SQL completion as a library'
 readme = 'README.md'
 requires-python = '>=3.10'
@@ -122,6 +122,16 @@ quote-style = 'single'
 [tool.mypy]
 strict = true
 files = ['src', 'tests', 'lsp']
+
+[[tool.mypy.overrides]]
+module = ['psycopg2']
+ignore_missing_imports = true
+# `scripts/bench_catalog.py` needs a real driver, and its tests import it, which
+# drags it into `files` the way `demo.app` is dragged in below. Narrower than the
+# override below on purpose: only the driver goes unchecked, so the pure half of
+# that script — the generated schema, which the tests actually assert on — stays
+# type-checked. psycopg2 ships no stubs, and `tests/test_purity.py` is what keeps
+# the library itself clear of it, so nothing rests on mypy noticing here.
 
 [[tool.mypy.overrides]]
 module = ['demo.app']

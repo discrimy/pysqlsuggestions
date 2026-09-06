@@ -14,6 +14,36 @@ from typing import Any, Literal
 
 from pysqlsuggestions.types import Kind
 
+SEARCH_ROWS = 1000
+"""
+How many rows a prefix search asks the catalog for.
+
+One number, interpolated into every shipped search query and passed by `resolve`
+as the limit, because these used to be two and disagreed: the queries stopped at
+500 while `resolve` passed `limit * 5` — 200 at the default — so the server
+ordered and returned five hundred rows and the adapter discarded three hundred of
+them unranked. Work paid for and thrown away.
+
+Deliberately far larger than the number of suggestions anybody sees. The two are
+different questions: `limit` is how many to show, this is how many to *rank* in
+order to choose them, and the gap between them is the only defence against the
+server's ordering discarding a row the engine would have ranked first. The server
+orders by match position, name length and then the alphabet; the engine also
+knows declaration order and whether a relation is reachable without qualifying
+it, and cannot apply either to a row it never received. Seven hundred relations
+in an off-path schema named `aaa_*` are enough to hide the one `public` column a
+bare reference could have used.
+
+A thousand rather than five hundred for that reason, and not more than a thousand
+because the defence is probabilistic either way — it moves the boundary, it does
+not remove it. Measured on a 5000-table schema at the worst prefix there is: 200
+rows cost 65ms, 1000 cost 72ms and 2000 cost 84ms, so this buys five times the
+headroom for about a tenth of the time.
+
+Interpolated with an f-string rather than checked by a test, so a dialect and the
+engine cannot drift apart at all.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class Placeholder:
@@ -469,6 +499,29 @@ class CatalogQueries:
     functions: Query | None = None
     values: Query | None = None
     """Frequent values of one column, from the backend's own planner statistics."""
+    queryable_tables: Query | None = None
+    """
+    Relations a query could select from — `tables` without what it can never name.
+
+    Absent means `tables` is read and filtered instead, which is what every
+    position did before this existed. Shipping it is worth 15 000 rows of the
+    20 000 a 5000-table schema returns, on the read that runs at every FROM
+    caret; `tables` keeps its broad meaning because `DROP INDEX` and the sequence
+    positions need exactly what this leaves out.
+    """
+    columns_in: Query | None = None
+    """
+    Columns of several named relations at once. `$1` is the schema, `$2...` the names.
+
+    One read for a whole FROM clause rather than one per relation, which is what
+    `SupportsBulkColumns` exists to reach. Absent means the adapter falls back to
+    `columns` per relation and nothing else changes — the same suggestions, one
+    round trip each.
+
+    `$2...` is a spread marker: `catalogs/dbapi.py:render` expands it to as many
+    placeholders as there are names. It has to be the last marker in the query,
+    since it claims every remaining value.
+    """
     column_search: Query | None = None
     """
     Columns matching a substring, across every visible relation.
