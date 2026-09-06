@@ -27,6 +27,7 @@ from pysqlsuggestions.ports import (
     Cache,
     Catalog,
     ObjectCache,
+    SupportsBulkColumns,
     SupportsColumnSearch,
     SupportsColumnValues,
     SupportsForeignKeys,
@@ -127,8 +128,54 @@ def resolve(
     if not request.kinds:
         return []
     reader = _Reader(catalog, dialect, cache, identity)
+    _prefetch_scope_columns(request, reader)
     fetch = _qualified if request.qualifier else _unqualified
     return _of_comparable_type(fetch(request, reader, dialect, limit), request, reader)
+
+
+_WANTS_EVERY_RELATION = (Kind.COLUMN, Kind.EXPANSION, Kind.VALUE)
+"""
+The kinds whose candidates are drawn from every relation in scope at once.
+
+COLUMN offers all of them, EXPANSION writes a star out as all of them, and VALUE
+has to find the comparand's type among all of them. Every other kind either reads
+no columns or reads one relation's.
+"""
+
+
+def _prefetch_scope_columns(request: Request, reader: _Reader) -> None:
+    """
+    Ask for the columns of every relation in scope in one read, before anything asks for one.
+
+    Nothing below changes: the readers still ask per relation, and still find
+    what they ask for. This only moves the round trips, from one per relation to
+    one for the statement.
+
+    Deliberately narrow about when it runs. A qualified caret — `SELECT o.⌶` —
+    wants one relation and would pay for the other nineteen; a caret wanting only
+    relation names reads no columns at all. Both would turn a batch into waste,
+    which is worse than the N+1 it replaces because it is work nobody asked for.
+    """
+    scope = request.scope
+    if scope is None or request.qualifier:
+        return
+    if not any(kind in request.kinds for kind in _WANTS_EVERY_RELATION) and request.comparand is None:
+        return
+
+    wanted: list[tuple[str | None, str]] = []
+    seen: set[tuple[str | None, str]] = set()
+    for relation in scope.visible():
+        # A projection describes itself, so it needs no catalog call and must not
+        # be counted towards the batch — a statement of five CTEs would otherwise
+        # look like five relations worth fetching and produce a query for none.
+        if relation.projection is not None:
+            continue
+        schema, table = _split_path(relation.path)
+        if table is None or (schema, table) in seen:
+            continue
+        seen.add((schema, table))
+        wanted.append((schema, table))
+    reader.prefetch_columns(wanted)
 
 
 def _of_comparable_type(candidates: list[Candidate], request: Request, reader: _Reader) -> list[Candidate]:
@@ -390,6 +437,61 @@ class _Reader:
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
         """Columns of one relation."""
         return self._read(self._key('columns', schema, table), lambda: self._catalog.columns(schema, table))
+
+    def prefetch_columns(self, relations: Sequence[tuple[str | None, str]]) -> None:
+        """
+        Warm every relation in `relations` with one read, where the catalog can.
+
+        Answers nothing itself. `columns` is still what the rest of this module
+        calls, and still keyed per relation; this only arranges for those calls
+        to find their answers already in `_memo`. That is what keeps a batch a
+        transport detail: the cache sees exactly the entries a request without
+        this capability would have written, so a later statement sharing two of
+        three relations pays for one rather than for three.
+
+        Silent about everything. A catalog without the capability, a batch that
+        turns out to be one relation, a cache that has already answered — each
+        simply leaves the per-relation path to do what it did before.
+        """
+        if len(relations) < 2 or not isinstance(self._catalog, SupportsBulkColumns):
+            return
+        if not _declared(self._catalog, 'columns_for'):
+            return
+
+        missing: list[tuple[str | None, str]] = []
+        for schema, table in relations:
+            key = self._key('columns', schema, table)
+            if key in self._memo:
+                continue
+            # The caller's cache is asked per relation, which is one `get` each
+            # rather than one for the batch. That is `docs/gaps.md` §5's problem
+            # and not this one: it is the *database* round trips this removes,
+            # and a cache get is not a catalog query.
+            cached = None if self._cache is None or self._failed else self._cached(key)
+            if cached is not None:
+                self._memo[key] = cached
+                continue
+            missing.append((schema, table))
+
+        # One left is not a batch. Falling through leaves it to `columns`, which
+        # is the same single read spelled by the query whose text does not vary
+        # with the batch size — so the commonest statement of all keeps its
+        # server-side plan.
+        if len(missing) < 2:
+            return
+
+        found = self._catalog.columns_for(missing)
+        for schema, table in missing:
+            # `list`, and defaulting to empty: a relation the catalog left out of
+            # the mapping is one the role cannot see, and the per-relation path
+            # would have cached the same empty answer for it. Memoised either
+            # way, so an omission costs one read rather than one per position
+            # that asks again within this request.
+            columns = list(found.get((schema, table), ()))
+            key = self._key('columns', schema, table)
+            self._memo[key] = columns
+            if self._cache is not None and not self._failed:
+                self._store(key, columns)
 
     def unreadable_relations(self, schema: str | None = None) -> frozenset[tuple[str, str]]:
         """

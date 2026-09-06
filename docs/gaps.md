@@ -149,6 +149,18 @@ those points.
 against six rather than against sixty. Worth measuring against a remote store
 before building; not worth building on the argument alone.
 
+**One case has since been carved out of this, and it is the exception that
+proves the rule.** `SupportsBulkColumns` batches the column reads for every
+relation in a statement, and it is reachable precisely because its keys are *not*
+discovered as the request resolves: `request.scope` names every relation before
+any I/O happens. Nothing else here has that property — `common_values` needs the
+comparand's type, which needs a column read to determine — so the argument above
+stands for the rest of them.
+
+Note also what that one did not do. It removed *database* round trips and left
+the cache being asked once per relation, because that is this entry's problem and
+not that one's.
+
 ---
 
 ## Closed since this list was written

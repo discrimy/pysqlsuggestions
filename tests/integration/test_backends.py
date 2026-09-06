@@ -9,6 +9,7 @@ SQL. A fixture cannot.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import pytest
 
@@ -711,3 +712,59 @@ def test_trino_pages_through_a_result_larger_than_one_response(trino_catalog: Db
     """
     functions = trino_catalog.functions()
     assert len(functions) > 500
+
+
+class _Counting:
+    """A cursor that records what it was asked, since psycopg2's will not be patched."""
+
+    def __init__(self, inner: Any, log: list[str]) -> None:
+        self._inner = inner
+        self._log = log
+
+    def execute(self, operation: str, parameters: Any = None) -> Any:
+        """Record, then run."""
+        self._log.append(operation)
+        return self._inner.execute(operation, parameters)
+
+    def fetchall(self) -> Any:
+        """Every remaining row."""
+        return self._inner.fetchall()
+
+
+def test_a_join_reads_every_relation_in_one_query() -> None:
+    """
+    The N+1 this capability exists to remove, asserted as round trips.
+
+    A count rather than a duration. The cost is one query per relation, which is
+    free against a fixture on this machine and is the whole latency budget
+    against a real server — 55ms here and 495ms at a 20ms round trip — so the
+    query count is the honest thing to hold, and it holds at any distance.
+
+    Three relations, one `pg_attribute` read. Without the capability it is three,
+    and `tests/test_bulk_columns.py` is where that fallback is pinned; this one
+    is here because only a real server can say the spread marker renders to SQL
+    Postgres will actually bind and plan.
+    """
+    psycopg2 = pytest.importorskip('psycopg2')
+    connection = psycopg2.connect(POSTGRES_DSN)
+    log: list[str] = []
+    catalog = DbapiCatalog(
+        lambda: _Counting(connection.cursor(), log),
+        POSTGRES,
+        paramstyle=psycopg2.paramstyle,
+    )
+    try:
+        sql = (
+            'SELECT * FROM auth_user u '
+            'JOIN reports_report r ON r.user_id = u.id '
+            'JOIN reports_database d ON d.id = r.database_id '
+            'WHERE '
+        )
+        found = complete(sql, len(sql), POSTGRES, catalog)
+    finally:
+        connection.close()
+
+    reads = [text for text in log if 'pg_attribute' in text]
+    assert len(reads) == 1, reads
+    texts = {suggestion.text for suggestion in found}
+    assert {'u.username', 'r.name', 'd.title'} <= texts, sorted(texts)[:20]

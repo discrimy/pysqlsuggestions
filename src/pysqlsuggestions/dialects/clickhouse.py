@@ -49,6 +49,23 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
+    # Every relation a FROM clause names, in one read. `$2...` is a spread and
+    # claims every remaining value, so it has to come last.
+    columns_in=Query(
+        sql="""
+            SELECT database, table, name, type, position FROM system.columns
+            WHERE ($1 = '' AND database = currentDatabase() OR database = $1)
+              AND table IN ($2...)
+            ORDER BY database, table, position
+        """,
+        row=lambda row: Column(
+            schema=str(row[0]),
+            table=str(row[1]),
+            name=str(row[2]),
+            type=str(row[3]),
+            position=int(row[4]),
+        ),
+    ),
     # ClickHouse exposes thousands of functions and no signatures, so they are
     # introspected rather than shipped, and the detail column stays empty.
     column_search=Query(

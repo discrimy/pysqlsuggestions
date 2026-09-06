@@ -469,6 +469,19 @@ class CatalogQueries:
     functions: Query | None = None
     values: Query | None = None
     """Frequent values of one column, from the backend's own planner statistics."""
+    columns_in: Query | None = None
+    """
+    Columns of several named relations at once. `$1` is the schema, `$2...` the names.
+
+    One read for a whole FROM clause rather than one per relation, which is what
+    `SupportsBulkColumns` exists to reach. Absent means the adapter falls back to
+    `columns` per relation and nothing else changes — the same suggestions, one
+    round trip each.
+
+    `$2...` is a spread marker: `catalogs/dbapi.py:render` expands it to as many
+    placeholders as there are names. It has to be the last marker in the query,
+    since it claims every remaining value.
+    """
     column_search: Query | None = None
     """
     Columns matching a substring, across every visible relation.

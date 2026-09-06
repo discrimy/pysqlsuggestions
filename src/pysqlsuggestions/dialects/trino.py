@@ -96,6 +96,26 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
+    # Every relation a FROM clause names, in one read, with the same two guarded
+    # conjuncts as `columns` above and for the same reason — a disjunction here
+    # would not push down either. `$2...` is a spread and must stay last.
+    columns_in=Query(
+        sql="""
+            SELECT table_schem, table_name, column_name, type_name, ordinal_position
+            FROM system.jdbc.columns
+            WHERE ($1 <> '' OR table_cat = current_catalog)
+              AND ($1 = '' OR table_schem = $1)
+              AND table_name IN ($2...)
+            ORDER BY table_schem, table_name, ordinal_position
+        """,
+        row=lambda row: Column(
+            schema=str(row[0]),
+            table=str(row[1]),
+            name=str(row[2]),
+            type=str(row[3]),
+            position=int(row[4]),
+        ),
+    ),
     functions=Query(
         # `SHOW FUNCTIONS` rather than a system table: `system.metadata` has no
         # functions relation, and `table_functions` — which does not exist on

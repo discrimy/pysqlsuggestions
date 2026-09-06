@@ -15,14 +15,26 @@ psycopg2 and trino" would not be true.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from pysqlsuggestions.dialects.base import Dialect, Query, Syntax
 from pysqlsuggestions.engine.lex import TokenType, lex
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
-_MARKER = re.compile(r'\$(\d+)')
+_MARKER = re.compile(r'\$(\d+)(\.\.\.)?')
+"""
+A parameter marker, and optionally the spread that turns it into a list.
+
+`$2...` means "every value from the second on, as its own placeholder". A query
+needing one is asking a question whose width is a property of the statement being
+completed rather than of the dialect — `columns_for` fetches the columns of every
+relation in scope, and how many that is nobody knows until the caret is read.
+
+Spelled as a suffix on an ordinary marker so the two share one scan. A separate
+pattern would need the same literal-and-comment protection, and the reason that
+protection exists is that it was once got wrong.
+"""
 
 _PARAMSTYLES = {
     'qmark': '?',
@@ -81,6 +93,44 @@ def _markers(sql: str, protected: tuple[tuple[int, int], ...]) -> list[re.Match[
     return [found for found in _MARKER.finditer(sql) if not _within(found.start(), protected)]
 
 
+def _spread_at(sql: str, protected: tuple[tuple[int, int], ...], supplied: int) -> int | None:
+    """
+    The marker number a spread starts from, or None when the query holds no spread.
+
+    Three things are refused here rather than left to the server, because each
+    one produces a query that runs and answers the wrong question.
+
+    A spread with nothing to expand renders `IN ()`, which every backend rejects
+    — but the reason to raise is not the syntax error. It is that the plausible
+    alternatives, `IN (NULL)` among them, parse and return nothing, and "no
+    columns for these relations" is indistinguishable from "these relations have
+    no columns" by the time it reaches a caret.
+
+    A second spread has no meaning: the first has already claimed every remaining
+    value.
+
+    A marker after a spread is the subtle one. The spread would bind that
+    trailing value into its own list, so the query runs with one relation too
+    many and one scalar missing, and the server reports a parameter count that
+    names neither.
+    """
+    spreads = [found for found in _markers(sql, protected) if found.group(2)]
+    if not spreads:
+        return None
+    if len(spreads) > 1:
+        message = f'a query may hold one spread marker, not {len(spreads)}: {sql!r}'
+        raise ValueError(message)
+    found = spreads[0]
+    if any(other.start() > found.start() for other in _markers(sql, protected)):
+        message = f'a spread marker takes every remaining value, so nothing may follow it: {sql!r}'
+        raise ValueError(message)
+    first = int(found.group(1))
+    if supplied < first:
+        message = f'spread ${first}... has no values to expand: {supplied} supplied'
+        raise ValueError(message)
+    return first
+
+
 def render(sql: str, values: Sequence[str], paramstyle: str, syntax: Syntax | None = None) -> tuple[str, Any]:
     """
     Rewrite `$1`-style markers for `paramstyle`, returning (sql, parameters).
@@ -121,9 +171,17 @@ def render(sql: str, values: Sequence[str], paramstyle: str, syntax: Syntax | No
     # every `%` ahead of a marker shifted that marker's offset by one and the
     # protection slipped a place. A `$1` that is text got rewritten, and
     # `pyformat` then bound nothing while its SQL asked for `p1`.
+    spread = _spread_at(sql, protected, len(values))
+
     doubles = paramstyle in ('format', 'pyformat')
     order: list[int] = []
-    wanted = sorted({int(found.group(1)) for found in _markers(sql, protected)})
+    numbers = {int(found.group(1)) for found in _markers(sql, protected)}
+    if spread is not None:
+        # The spread stands for every value from its own position on, so those
+        # are the numbers the bounds check and `numeric`'s slice have to know
+        # about — not just the one written in the text.
+        numbers |= set(range(spread, len(values) + 1))
+    wanted = sorted(numbers)
     parts: list[str] = []
     cursor = 0
 
@@ -131,6 +189,10 @@ def render(sql: str, values: Sequence[str], paramstyle: str, syntax: Syntax | No
         parts.append(_escaped(sql[cursor : found.start()], doubles=doubles))
         if _within(found.start(), protected):
             parts.append(found.group(0))
+        elif found.group(2):
+            spread_numbers = range(int(found.group(1)), len(values) + 1)
+            order.extend(number - 1 for number in spread_numbers)
+            parts.append(', '.join(_PARAMSTYLES[paramstyle].format(number) for number in spread_numbers))
         else:
             number = int(found.group(1))
             order.append(number - 1)
@@ -198,6 +260,44 @@ class DbapiCatalog:
         """Columns of one relation, in declaration order."""
         rows = self._rows(self._dialect.catalog_queries.columns, schema or '', table)
         return [row for row in rows if isinstance(row, Column)]
+
+    def columns_for(
+        self,
+        relations: Sequence[tuple[str | None, str]],
+    ) -> Mapping[tuple[str | None, str], Sequence[Column]]:
+        """
+        Columns for several relations, one query per distinct schema.
+
+        Grouped by schema rather than sent as pairs, because the neutral marker
+        language spells a list of values and not a list of tuples — and because
+        the grouping costs nothing in practice: a FROM clause naming relations
+        from three schemas is rare, and one naming them all from the default
+        namespace is the ordinary case and becomes exactly one query.
+
+        Falls back to one read per relation when the dialect ships no
+        `columns_in`. That is a dialect declining the capability the way Trino
+        declines `relation_search`, and it leaves the caller's behaviour
+        unchanged rather than making it an error.
+        """
+        query = self._dialect.catalog_queries.columns_in
+        if query is None:
+            return {key: self.columns(*key) for key in relations}
+
+        wanted: dict[str | None, list[str]] = {}
+        for schema, table in relations:
+            wanted.setdefault(schema, []).append(table)
+
+        found: dict[tuple[str | None, str], list[Column]] = {}
+        for schema, names in wanted.items():
+            # Keyed by the name asked for, not by the schema the row came back
+            # with: a relation reached through the search path knows a schema the
+            # question did not name, and the caller has to match answers to the
+            # questions it asked. Two visible relations of the same name merge,
+            # which is exactly what one `columns` call does with them today.
+            for row in self._rows(query, schema or '', *names):
+                if isinstance(row, Column):
+                    found.setdefault((schema, row.table), []).append(row)
+        return found
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
         """Functions, aggregates and window functions."""

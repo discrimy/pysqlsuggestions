@@ -1,7 +1,7 @@
 # Catalog reads on large schemas — design
 
 Date: 2026-09-06
-Status: **specified**. Nothing built.
+Status: §4 **built**. §5 and §6 specified, nothing built.
 
 Two of the four findings that prompted this are already fixed and shipped on
 this branch; they are recorded in §2 as evidence rather than as work. What is
@@ -87,6 +87,11 @@ That is what makes these safe to add one at a time.
 ---
 
 ## 4. Bulk column reads
+
+**Built.** `SupportsBulkColumns`, and the `$N...` spread marker it needed. The
+twenty-relation caret went from 21 queries to 2, and from 494.9 ms to 73.4 ms at
+a 20 ms round trip. What follows is the design as specified; it was built as
+written, including the per-relation caching in §4.3 and option (1) in §4.4.
 
 ### 4.1 The problem
 

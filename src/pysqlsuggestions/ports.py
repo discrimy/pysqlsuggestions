@@ -11,7 +11,7 @@ where the degradation lives so no adapter has to repeat it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
@@ -110,6 +110,55 @@ class SupportsRelationSearch(Protocol):
         exact match behind two hundred near-misses. `Table.schema` travels with
         each row, because a relation the search path does not cover has to be
         written qualified.
+        """
+        ...
+
+
+@runtime_checkable
+class SupportsBulkColumns(Protocol):
+    """
+    The columns of several relations at once — every relation a statement joins.
+
+    Absent: one `Catalog.columns` call per relation, which is what happened
+    before this existed. Correct, and one round trip per relation in scope.
+
+    A twenty-way join issued twenty-one queries for one keystroke. That is free
+    against a server on the same machine and is the whole latency budget against
+    a real one — 55 ms locally, 495 ms at a 20 ms round trip — and it is *flat in
+    the size of the catalog*, because the cost is the join count. A hundred-table
+    database pays exactly what a warehouse does.
+
+    Unlike almost everything else `resolve` fetches, these keys are known before
+    any I/O happens: the statement's scope names every relation. `docs/gaps.md`
+    §5 argues batching is unreachable because `_Reader` discovers its keys as the
+    request resolves, and that argument is sound — it is simply not true here,
+    which is why this one capability exists and a general bulk read does not.
+
+    Prefix-independent, so what it returns caches. It is nonetheless *not* a
+    cache key: `resolve` stores each relation under the key a single read would
+    have used, so a later statement sharing two of three relations pays for one.
+    Keyed per batch, this optimisation and the cache would compete instead of
+    compounding.
+    """
+
+    def columns_for(
+        self,
+        relations: Sequence[tuple[str | None, str]],
+    ) -> Mapping[tuple[str | None, str], Sequence[Column]]:
+        """
+        Columns for each of `relations`, keyed by the (schema, table) asked for.
+
+        Keyed as asked, not as found: the caller has to match answers to
+        questions, and a relation reached through the search path comes back
+        knowing a schema the question did not name.
+
+        A mapping rather than a flat sequence, so a relation that yielded nothing
+        can be told from one that was never asked about. A role that may not read
+        a relation produces an absent key, and answering that with an empty list
+        would be a claim — that the relation exists and has no columns — which
+        `Availability` exists precisely to avoid making.
+
+        Ordering within each relation is `Catalog.columns`'s: declaration order.
         """
         ...
 

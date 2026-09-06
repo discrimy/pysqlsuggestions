@@ -157,6 +157,36 @@ QUERIES = CatalogQueries(
             availability=_column_state(row[5]),
         ),
     ),
+    # The same read as `columns`, for every relation a FROM clause names at once.
+    # `$2...` is a spread and so must stay last, which is why the schema
+    # predicate is written before it rather than after.
+    #
+    # ORDER BY relname first, then attnum: the rows for several relations arrive
+    # interleaved otherwise, and declaration order within each one is what
+    # ranking reads as `Column.position`.
+    columns_in=Query(
+        sql="""
+            SELECT n.nspname, c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum,
+                   CASE WHEN c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                        THEN pg_catalog.has_column_privilege(c.oid, a.attnum, 'SELECT')
+                   END
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE a.attnum > 0 AND NOT a.attisdropped
+              AND ($1 = '' AND pg_catalog.pg_table_is_visible(c.oid) OR n.nspname = $1)
+              AND c.relname IN ($2...)
+            ORDER BY n.nspname, c.relname, a.attnum
+        """,
+        row=lambda row: Column(
+            schema=str(row[0]),
+            table=str(row[1]),
+            name=str(row[2]),
+            type=str(row[3]),
+            position=int(row[4]),
+            availability=_column_state(row[5]),
+        ),
+    ),
     # pg_proc holds ~3300 entries, most of them type I/O plumbing that cannot be
     # called from SQL — `anynonarray_in`, `RI_FKey_noaction_del`. Excluding
     # anything that takes or returns internal/cstring, and anything returning a

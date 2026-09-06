@@ -6,6 +6,39 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A caret in a joined statement reads every relation at once
+
+`SELECT * FROM a JOIN b JOIN c … WHERE ⌶` asked the catalog for one relation's
+columns at a time, so a twenty-way join issued twenty-one queries for a single
+keystroke. Now it issues two.
+
+This is worth stating in latency rather than in queries, because a server on the
+same machine hides it completely:
+
+| `WHERE ⌶`, 20 relations in scope | before | after |
+| --- | --- | --- |
+| local server | 52.6 ms | 31.2 ms |
+| 20 ms round trip | 494.9 ms | 73.4 ms |
+
+It is also **flat in the size of the catalog** — 490 ms against a 100-table
+schema, 495 ms against 5000 — because the cost was the join count and nothing
+else. So this is not a large-schema fix: every wide query paid it, on every
+database, and a small one never grew out of it.
+
+`SupportsBulkColumns` is a new capability, so nothing an existing adapter does
+changes. Absent, the reads happen one at a time exactly as before and the
+suggestions are identical; `DbapiCatalog` implements it for all three shipped
+dialects, and a dialect that ships no `columns_in` query falls back the same way.
+
+A batch is a transport detail and deliberately not a cache key: each relation is
+stored under the key a single read would have used, so a later statement sharing
+two of its three relations still pays for one. Adding it to a `MemoryCache` keyed
+per batch would have made the two optimisations compete instead of compound.
+
+Dialect authors get one new piece of the marker language: `$2...` is a spread,
+expanding to as many placeholders as there are values. It must be the last marker
+in a query, since it claims every remaining value.
+
 ### A keystroke on a large schema costs a quarter less, and offers the same thing
 
 Two pure functions in the hot path were recomputed on every keystroke over names
