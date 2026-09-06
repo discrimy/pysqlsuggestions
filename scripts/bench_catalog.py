@@ -50,6 +50,7 @@ from pysqlsuggestions.api import complete
 from pysqlsuggestions.caches import MemoryCache
 from pysqlsuggestions.caches.codec import decode, encode
 from pysqlsuggestions.catalogs.dbapi import DbapiCatalog
+from pysqlsuggestions.dialects.base import SEARCH_ROWS
 from pysqlsuggestions.dialects.postgres import POSTGRES
 from pysqlsuggestions.engine.rank import rank
 from pysqlsuggestions.engine.request import derive_request
@@ -82,6 +83,32 @@ and that is the difference between a slow query and a design that will not hold.
 The largest is about the size of a warehouse an editor plugin is actually pointed
 at, and takes a couple of minutes to build.
 """
+
+CROWDED = 'bench_crowded'
+"""
+The schema that shows what a truncated search costs, rather than what it costs to run.
+
+Seven hundred relations in a schema *off* the search path, named so they sort
+first, all carrying the same column name; and one relation on the search path
+carrying it too, named so it sorts last. The engine ranks the last one first —
+it is the only one a bare reference could reach — and the server, which orders by
+match position, name length and then the alphabet, hands back the other seven
+hundred and stops.
+
+It is the one case where `SEARCH_ROWS` is visibly load-bearing: the wanted column
+appears at 701 rows and not at 700. Kept because a number chosen by measurement
+needs the measurement to survive alongside it, and because the shape — an
+`archive` or `staging` schema full of dated copies — is ordinary.
+"""
+
+
+def crowded_ddl(decoys: int = 700) -> Iterator[str]:
+    """Every statement building the crowded-search fixture."""
+    yield 'CREATE SCHEMA archive'
+    for index in range(decoys):
+        yield f'CREATE TABLE archive.aaa_{index:04d} (id bigint, user_ref bigint)'
+    yield 'CREATE TABLE public.zzz_orders (id bigint, user_ref bigint)'
+
 
 _WORDS = (
     'user',
@@ -329,10 +356,13 @@ def measure(spec: Ladder, connect: Any, paramstyle: str, rtt: float) -> None:
         ('columns(None, one)', lambda: catalog.columns(None, sample)),
         ('functions(None)', lambda: catalog.functions(None)),
         ('foreign_keys(None)', lambda: catalog.foreign_keys(None)),
-        ("search_columns('u')", lambda: catalog.search_columns('u', 500)),
-        ("search_columns('user')", lambda: catalog.search_columns('user', 500)),
-        ("search_relations('o')", lambda: catalog.search_relations('o', 200)),
-        ("search_relations('ord')", lambda: catalog.search_relations('ord', 200)),
+        # `SEARCH_ROWS`, not a number of this file's own: the point is what the
+        # engine actually asks for, and a hardcoded limit here would go on
+        # reporting the old cost after that constant moved.
+        ("search_columns('u')", lambda: catalog.search_columns('u', SEARCH_ROWS)),
+        ("search_columns('user')", lambda: catalog.search_columns('user', SEARCH_ROWS)),
+        ("search_relations('o')", lambda: catalog.search_relations('o', SEARCH_ROWS)),
+        ("search_relations('ord')", lambda: catalog.search_relations('ord', SEARCH_ROWS)),
     ]
     rows = []
     for label, call in reads:

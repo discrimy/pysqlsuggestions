@@ -18,7 +18,7 @@ from typing import Any, TypeVar, cast
 
 from pysqlsuggestions.caches import codec
 from pysqlsuggestions.caches.keys import ReadKind, cache_key
-from pysqlsuggestions.dialects.base import EXCLUSIVE, Clause, Dialect
+from pysqlsuggestions.dialects.base import EXCLUSIVE, SEARCH_ROWS, Clause, Dialect
 from pysqlsuggestions.engine import datatypes, joins
 from pysqlsuggestions.engine.analyse import SET_OPERATION_TAIL
 from pysqlsuggestions.engine.rank import MAX_POSITION_PENALTY, quote_if_needed
@@ -735,7 +735,7 @@ def _loose_columns(request: Request, reader: _Reader, limit: int) -> list[Candid
     `public.invoices.amount` and `billing.invoices.period` can never render
     alike, so neither is touched.
     """
-    columns = list(reader.loose_columns(request.prefix, limit))
+    columns = list(reader.loose_columns(request.prefix, SEARCH_ROWS))
     schemas: dict[tuple[str, str], set[str]] = {}
     for column in columns:
         schemas.setdefault((column.table, column.name), set()).add(column.schema)
@@ -848,7 +848,7 @@ def _unqualified(request: Request, reader: _Reader, dialect: Dialect, limit: int
         here = {(table.schema, table.name) for table in listed}
         candidates += [
             _table_candidate(table, qualify=(table.schema,))
-            for table in reader.search_relations(request.prefix, limit)
+            for table in reader.search_relations(request.prefix, SEARCH_ROWS)
             if _admits(table, wanted) and (table.schema, table.name) not in here
         ]
         candidates += [
@@ -1169,7 +1169,7 @@ def _sequences(request: Request, reader: _Reader, dialect: Dialect, limit: int) 
     found: list[tuple[Table, str | None]] = [(table, None) for table in listed]
     found += [
         (table, table.schema)
-        for table in reader.search_relations(request.prefix, limit)
+        for table in reader.search_relations(request.prefix, SEARCH_ROWS)
         if table.kind == _SEQUENCE and (table.schema, table.name) not in here
     ]
     if not request.writes_a_literal:

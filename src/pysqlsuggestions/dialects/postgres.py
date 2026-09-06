@@ -7,6 +7,7 @@ from dataclasses import replace
 from pysqlsuggestions.dialects.ansi import ANSI, COLUMN_EXPRESSION, EXPLAINABLE, RELATION_REFERENCE
 from pysqlsuggestions.dialects.ansi import RESERVED as ANSI_RESERVED
 from pysqlsuggestions.dialects.base import (
+    SEARCH_ROWS,
     CatalogQueries,
     Clause,
     LiteralArgument,
@@ -322,7 +323,7 @@ QUERIES = CatalogQueries(
     # result, which a subquery does not promise to preserve. `hit` carries the
     # match position out so the second ordering does not recompute it.
     column_search=Query(
-        sql="""
+        sql=f"""
             WITH found AS (
                 SELECT a.attnum, a.attname, a.atttypid, a.atttypmod, c.oid AS reloid,
                        n.nspname, c.relname,
@@ -335,7 +336,7 @@ QUERIES = CatalogQueries(
                   AND position(lower($1) in lower(a.attname)) > 0
                 ORDER BY position(lower($1) in lower(a.attname)), length(a.attname),
                          n.nspname, c.relname, a.attname
-                LIMIT 500
+                LIMIT {SEARCH_ROWS}
             )
             SELECT f.nspname, f.relname, f.attname, format_type(f.atttypid, f.atttypmod), f.attnum,
                    pg_catalog.has_column_privilege(f.reloid, f.attnum, 'SELECT')
@@ -363,7 +364,7 @@ QUERIES = CatalogQueries(
     # neighbouring queries that answer the same kind of question differently are
     # a trap for whoever edits one of them next.
     relation_search=Query(
-        sql="""
+        sql=f"""
             WITH found AS (
                 SELECT c.oid AS reloid, c.relname, c.relkind, c.reltuples, n.nspname,
                        position(lower($1) in lower(c.relname)) AS hit
@@ -373,7 +374,7 @@ QUERIES = CatalogQueries(
                   AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'
                   AND position(lower($1) in lower(c.relname)) > 0
                 ORDER BY position(lower($1) in lower(c.relname)), length(c.relname), n.nspname, c.relname
-                LIMIT 200
+                LIMIT {SEARCH_ROWS}
             )
             SELECT f.nspname, f.relname, f.relkind, f.reltuples,
                    CASE WHEN f.relkind IN ('r', 'p', 'v', 'm', 'f')

@@ -6,6 +6,45 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### A truncated completion list now says it is truncated
+
+The language server reported `isIncomplete: false` on every answer. The LSP
+specification says a list is recomputed on further typing only when that flag is
+true, so a client told `false` caches the items and filters them itself — and on
+a large schema every answer is cut to `limit`. One truncated list at `SELECT u`
+therefore stayed wrong through `user`, `user_r` and `user_ref`: the server was
+never asked again, and the column being reached for could not appear however much
+more of it you typed.
+
+A full list is now reported as incomplete. The signal is right-biased on purpose:
+a list that happens to be exactly `limit` long and is genuinely complete gets
+re-queried once for nothing, at a few milliseconds. The opposite mistake is
+silent and lasts for the rest of the word.
+
+### A cross-relation search ranks a thousand rows instead of two hundred
+
+The search that answers `SELECT user⌶` before any FROM truncates on the server,
+and the server cannot rank: it orders by match position, name length and then the
+alphabet, while the engine also knows declaration order and — most decisively —
+whether a relation can be referenced without qualifying it.
+
+Those two numbers used to disagree. The queries stopped at 500 rows while
+`resolve` asked for `limit × 5`, which is 200 by default, so three hundred rows
+were ordered, returned and discarded unranked. They are one number now,
+`SEARCH_ROWS`, interpolated into every shipped search query so a dialect and the
+engine cannot drift apart.
+
+Raised to 1000 with it. Measured on a 5000-table schema at the worst prefix there
+is: 200 rows cost 65 ms, 1000 cost 72 ms, 2000 cost 84 ms — five times the
+headroom for about a tenth of the time.
+
+**This narrows the failure rather than removing it, and is not offered as a
+fix.** 700 relations in an off-search-path schema named `aaa_*` will still hide
+the one `public` column a bare reference could have used; the wanted row appears
+at 701 and not at 700. What closes it properly is putting search-path visibility
+into the server's ordering, which costs about 30 ms on the worst prefix and is
+not currently thought worth it — `docs/gaps.md` records that with the numbers.
+
 ### Searching for a column by name stops checking privileges it will discard
 
 `SELECT user⌶`, before any FROM clause, searches every relation in the database
