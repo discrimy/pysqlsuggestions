@@ -10,6 +10,7 @@ suite stays runnable without docker. Bring them up with:
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -114,4 +115,55 @@ def trino_catalog() -> Iterator[DbapiCatalog]:
     except Exception as error:  # noqa: BLE001
         _skip('trino', error)
     yield DbapiCatalog(connection.cursor, TRINO, paramstyle=trino_http.paramstyle)
+    connection.close()
+
+
+class CountingCursor:
+    """
+    A cursor that records every statement, so a test can assert on round trips.
+
+    A wrapper rather than a patched attribute: a psycopg2 cursor's `execute` is
+    read-only, so the obvious approach raises `AttributeError` at assignment
+    rather than failing a test.
+    """
+
+    def __init__(self, inner: Any, log: list[str]) -> None:
+        self._inner = inner
+        self._log = log
+
+    def execute(self, operation: str, parameters: Any = None) -> Any:
+        """Record, then run."""
+        self._log.append(operation)
+        return self._inner.execute(operation, parameters)
+
+    def fetchall(self) -> Any:
+        """Every remaining row."""
+        return self._inner.fetchall()
+
+
+@pytest.fixture
+def counting_postgres() -> Iterator[tuple[DbapiCatalog, list[str]]]:
+    """
+    Postgres, plus the list of statements it was asked to run.
+
+    A fixture rather than a connection opened inside the test, because the skip
+    is what fixtures here are *for*: a test that connects on its own fails the
+    suite on a machine with no docker instead of standing aside, and CI is the
+    machine with no docker. That is exactly how this arrived — the round-trip
+    assertion for `SupportsBulkColumns` was written against a bare
+    `psycopg2.connect` and passed locally for a day before failing the moment it
+    ran anywhere else.
+    """
+    psycopg2 = pytest.importorskip('psycopg2')
+    try:
+        connection = psycopg2.connect(POSTGRES_DSN)
+    except Exception as error:  # noqa: BLE001
+        _skip('postgres', error)
+    log: list[str] = []
+    catalog = DbapiCatalog(
+        lambda: CountingCursor(connection.cursor(), log),
+        POSTGRES,
+        paramstyle=psycopg2.paramstyle,
+    )
+    yield catalog, log
     connection.close()

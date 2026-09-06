@@ -9,7 +9,6 @@ SQL. A fixture cannot.
 from __future__ import annotations
 
 import time
-from typing import Any
 
 import pytest
 
@@ -714,24 +713,9 @@ def test_trino_pages_through_a_result_larger_than_one_response(trino_catalog: Db
     assert len(functions) > 500
 
 
-class _Counting:
-    """A cursor that records what it was asked, since psycopg2's will not be patched."""
-
-    def __init__(self, inner: Any, log: list[str]) -> None:
-        self._inner = inner
-        self._log = log
-
-    def execute(self, operation: str, parameters: Any = None) -> Any:
-        """Record, then run."""
-        self._log.append(operation)
-        return self._inner.execute(operation, parameters)
-
-    def fetchall(self) -> Any:
-        """Every remaining row."""
-        return self._inner.fetchall()
-
-
-def test_a_join_reads_every_relation_in_one_query() -> None:
+def test_a_join_reads_every_relation_in_one_query(
+    counting_postgres: tuple[DbapiCatalog, list[str]],
+) -> None:
     """
     The N+1 this capability exists to remove, asserted as round trips.
 
@@ -745,24 +729,14 @@ def test_a_join_reads_every_relation_in_one_query() -> None:
     is here because only a real server can say the spread marker renders to SQL
     Postgres will actually bind and plan.
     """
-    psycopg2 = pytest.importorskip('psycopg2')
-    connection = psycopg2.connect(POSTGRES_DSN)
-    log: list[str] = []
-    catalog = DbapiCatalog(
-        lambda: _Counting(connection.cursor(), log),
-        POSTGRES,
-        paramstyle=psycopg2.paramstyle,
+    catalog, log = counting_postgres
+    sql = (
+        'SELECT * FROM auth_user u '
+        'JOIN reports_report r ON r.user_id = u.id '
+        'JOIN reports_database d ON d.id = r.database_id '
+        'WHERE '
     )
-    try:
-        sql = (
-            'SELECT * FROM auth_user u '
-            'JOIN reports_report r ON r.user_id = u.id '
-            'JOIN reports_database d ON d.id = r.database_id '
-            'WHERE '
-        )
-        found = complete(sql, len(sql), POSTGRES, catalog)
-    finally:
-        connection.close()
+    found = complete(sql, len(sql), POSTGRES, catalog)
 
     reads = [text for text in log if 'pg_attribute' in text]
     assert len(reads) == 1, reads
