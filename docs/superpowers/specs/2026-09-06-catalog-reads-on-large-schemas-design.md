@@ -1,7 +1,7 @@
 # Catalog reads on large schemas — design
 
 Date: 2026-09-06
-Status: §4 and §5 **built**. §6 specified, nothing built.
+Status: §4, §5 and §6 **built**. §7 stands as written.
 
 Two of the four findings that prompted this are already fixed and shipped on
 this branch; they are recorded in §2 as evidence rather than as work. What is
@@ -277,6 +277,18 @@ Two consequences to state plainly:
 ---
 
 ## 6. The candidate build
+
+**Built, as specified in §6.2.** Ranking at `FROM ⌶` went from 21.3 ms to 2.5 ms
+and no longer grows with the catalog.
+
+§6.2 worried about a margin that "has to be justified by measurement". It needed
+none: including every candidate that *ties* with the last of the shortlist makes
+the selection exact rather than approximate, and growing the shortlist when
+deduplication comes up short handles the other case. So there is no tuning
+constant here at all, which is a better answer than a measured one.
+
+What remains after it is `resolve`, not `rank` — see §7, which is now the largest
+single number on the warm path.
 
 ### 6.1 The problem
 

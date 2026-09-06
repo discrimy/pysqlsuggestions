@@ -6,6 +6,33 @@ records: the positions where it now answers differently.
 
 ## Unreleased
 
+### Ranking renders the suggestions it shows, not the ones it discards
+
+A `FROM ⌶` on a 5000-relation schema built five thousand suggestions — each with
+its quoting decided and its text rendered — in order to return forty. That was
+about half of what ranking cost, and none of it was needed.
+
+The sort key's first three elements are availability, score and name length, all
+of which come from the candidate itself; only the fourth is the rendered text. So
+the shortlist is chosen on the first three and only what survives is rendered.
+
+| warm caret, 5000 tables | before | after |
+| --- | --- | --- |
+| `SELECT * FROM ⌶` | 38.0 ms | 12.9 ms |
+| `SELECT ⌶` | 18.6 ms | 7.4 ms |
+| `... JOIN ⌶` | 42.5 ms | 14.9 ms |
+| `WHERE ⌶`, 20 relations | 24.3 ms | 8.7 ms |
+
+Ranking itself went from 21.3 ms to 2.5 ms at that first caret, and no longer
+grows with the catalog.
+
+**The output is identical**, which is the only thing that matters here and took
+two things to be true rather than nearly true. Every candidate tying with the
+last of the shortlist is rendered too, because the rendered text is what decides
+between them and a large catalog produces long runs of ties. And the shortlist
+grows if deduplication leaves fewer suggestions than were asked for, since
+duplicates can only be found after rendering.
+
 ### A relation caret stops fetching every index in the database
 
 `Catalog.tables` returns everything in the catalog, because `DROP INDEX ⌶` reads
