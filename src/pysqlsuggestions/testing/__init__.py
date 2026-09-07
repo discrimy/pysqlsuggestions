@@ -39,7 +39,7 @@ from pysqlsuggestions.types import Function, Kind
 
 _QUERY_ARITY = {
     'schemas': 1,
-    'tables': 1,
+    'tables': 2,
     'queryable_tables': 1,
     'columns': 2,
     'columns_in': 2,

@@ -443,7 +443,7 @@ def test_a_completion_stores_the_key_cache_key_builds() -> None:
     """
     cache = _Recorder()
     complete('SELECT * FROM ', 14, POSTGRES, catalog(), cache=cache, identity='analyst')
-    assert cache_key('analyst', 'postgres', 'tables', None) in cache.writes
+    assert cache_key('analyst', 'postgres', 'tables', None, None) in cache.writes
 
 
 def test_cache_prevents_a_second_read(cache: Cache) -> None:
@@ -465,7 +465,7 @@ def test_column_search_degrades_when_unsupported() -> None:
         def schemas(self) -> list[str]:
             return ['public']
 
-        def tables(self, schema: str | None = None) -> list[object]:
+        def tables(self, schema: str | None = None, catalog: str | None = None) -> list[object]:
             return []
 
         def columns(self, schema: str | None, table: str) -> list[object]:
@@ -683,9 +683,9 @@ class _InventsEverything:
         del catalog
         return []
 
-    def tables(self, schema: str | None = None) -> Sequence[Table]:
+    def tables(self, schema: str | None = None, catalog: str | None = None) -> Sequence[Table]:
         """No relations."""
-        del schema
+        del schema, catalog
         return []
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:

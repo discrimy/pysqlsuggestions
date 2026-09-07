@@ -34,10 +34,32 @@ QUERIES = CatalogQueries(
     # no useful "visible by default" set — a bare `FROM <caret>` in Trino wants
     # catalogs, which `schemas` supplies. Enumerating every table in every
     # catalog would also mean scanning each connector's metadata on a keystroke.
+    #
+    # `$2` is the catalog, and its two guarded conjuncts are the same shape — and
+    # there for the same two reasons — as the pair in `columns` below, which see.
+    # This query had no `table_cat` predicate whatever, so a named schema was
+    # asked of every connector the coordinator federates. Wrong first: `FROM
+    # analytics.<caret>` against a postgresql-bound session offered ClickHouse's
+    # relations, and `postgresql.analytics.report_dim` resolves nowhere. Slow
+    # second, and worse than slow — `system.jdbc.tables` reaches each connector's
+    # metadata in turn, so one unreachable catalog anywhere on the coordinator
+    # does not merely delay the read, it *fails* it, and a caret that should have
+    # been narrow comes back empty after the deadline.
+    #
+    # An empty `$2` binds to `current_catalog` rather than to nothing, because a
+    # schema written alone is resolved by Trino against the session's catalog:
+    # `FROM analytics.orders` is `<session>.analytics.orders` and never another
+    # connector's. That is the same reading `columns` gives an unqualified name.
+    #
+    # Written catalogs are honoured over the session's, which is what keeps
+    # federation working: `clickhouse.analytics.<caret>` from a postgresql-bound
+    # connection must reach ClickHouse.
     tables=Query(
         sql="""
             SELECT table_schem, table_name, table_type FROM system.jdbc.tables
             WHERE $1 <> '' AND table_schem = $1
+              AND ($2 <> '' OR table_cat = current_catalog)
+              AND ($2 = '' OR table_cat = $2)
               AND table_schem NOT IN ('information_schema', 'jdbc', 'metadata', 'runtime')
             ORDER BY table_schem, table_name
         """,

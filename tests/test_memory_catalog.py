@@ -61,6 +61,27 @@ def test_a_schema_names_its_relations() -> None:
     assert texts('SELECT * FROM warehouse.public.⌶', federated()) == ['flight']
 
 
+def test_a_relation_position_is_scoped_to_the_catalog_the_caret_named() -> None:
+    """
+    `events.public.` is the *events* catalog's `public`, and events has no such schema.
+
+    The catalog was written and then discarded: `resolve` passed `qualifier[-1]`
+    alone, so the port was asked for "any schema called public" and answered with
+    the one `warehouse` owns. That is a relation the statement cannot name — on
+    Trino `events.public.flight` is `Schema 'events.public' does not exist` — and
+    it is the same defect `columns` was fixed for one release earlier, arriving
+    at the level above.
+    """
+    assert federated().tables('public', 'events') == []
+    assert texts('SELECT * FROM events.public.⌶', federated()) == []
+
+
+def test_a_relation_position_still_answers_for_the_catalog_that_owns_the_schema() -> None:
+    """The other half: scoping must narrow the wrong catalog, not every catalog."""
+    assert [t.name for t in federated().tables('public', 'warehouse')] == ['flight']
+    assert texts('SELECT * FROM warehouse.public.⌶', federated()) == ['flight']
+
+
 def test_there_is_no_default_relation_set() -> None:
     """
     Three levels leave no useful "visible by default": a bare position wants
@@ -73,6 +94,21 @@ def test_there_is_no_default_relation_set() -> None:
 def test_columns_are_reached_through_the_deepest_two_segments() -> None:
     """`catalog.schema.table.` is a column position; the catalog has done its work by then."""
     assert texts('SELECT * FROM warehouse.public.flight f WHERE f.⌶', federated()) == ['id', 'number']
+
+
+def test_a_two_level_snapshot_ignores_the_catalog_it_is_offered() -> None:
+    """
+    Without `catalogs` the snapshot holds one unnamed catalog, so scoping to a name is not its question.
+
+    `schemas` has always said so; `tables` has to agree, because the port allows
+    a two-level catalog to be paired with a three-level dialect and the argument
+    then arrives filled in. Reading it as "the snapshot has no catalog by that
+    name" would empty every relation position instead of ignoring a level the
+    fixture does not model.
+    """
+    plain = MemoryCatalog(SNAPSHOT)
+    assert [t.name for t in plain.tables('public', 'warehouse')] == ['flight']
+    assert texts('SELECT * FROM warehouse.public.⌶', plain) == ['flight']
 
 
 def test_a_snapshot_without_catalogs_is_unchanged() -> None:

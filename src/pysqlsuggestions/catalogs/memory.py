@@ -142,9 +142,9 @@ class MemoryCatalog:
             return sorted(self._catalogs)
         return sorted(self._catalogs.get(catalog, ()))
 
-    def tables(self, schema: str | None = None) -> Sequence[Table]:
+    def tables(self, schema: str | None = None, catalog: str | None = None) -> Sequence[Table]:
         """
-        Relations in `schema`.
+        Relations in `schema`, of `catalog` where the snapshot names catalogs.
 
         With None and two levels, whatever `search_path` covers — every relation
         in the snapshot when there is none. With three levels there is no useful
@@ -152,7 +152,19 @@ class MemoryCatalog:
         of every catalog is what the live Trino adapter declines to do for the
         same reason.
         """
-        self.calls.append(('tables', schema or ''))
+        self.calls.append(('tables', schema or '', catalog or ''))
+        if self._catalogs and catalog is not None and schema not in self._catalogs.get(catalog, ()):
+            # A named catalog that does not own this schema owns none of its
+            # relations either. Without the check the snapshot answered from
+            # whichever catalog does own it, because it is keyed by schema alone
+            # — the same shape of mistake the live Trino reader made in SQL.
+            #
+            # Guarded on `self._catalogs` the way `schemas` is: a snapshot built
+            # without them is two-level and holds one unnamed catalog, so a name
+            # offered here is a level it does not model rather than one it can
+            # fail to match. Unguarded, every such lookup missed and a two-level
+            # fixture paired with a three-level dialect answered nothing at all.
+            return []
         if schema is not None:
             return [t for t in self._tables if t.schema == schema]
         if self._catalogs:
