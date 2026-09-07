@@ -96,6 +96,34 @@ def test_columns_are_reached_through_the_deepest_two_segments() -> None:
     assert texts('SELECT * FROM warehouse.public.flight f WHERE f.⌶', federated()) == ['id', 'number']
 
 
+def test_a_column_position_is_scoped_to_the_catalog_the_caret_named() -> None:
+    """
+    `events.public.flight` is a relation that does not exist, so it has no columns.
+
+    The level below `tables`, reached the same way and broken the same way:
+    `_split_path` handed `columns` a schema and a relation and dropped the
+    catalog above them, so a fully qualified relation was read as "any `flight`
+    in any `public`". The caret then offered columns of a relation the statement
+    cannot name.
+    """
+    assert federated().columns('public', 'flight', 'events') == ()
+    assert texts('SELECT * FROM events.public.flight f WHERE f.⌶', federated()) == []
+
+
+def test_a_column_position_still_answers_across_catalogs() -> None:
+    """
+    Scoping to the catalog *written* is what keeps a federated join working.
+
+    Each relation carries its own, so constraining each read to it narrows both
+    sides correctly rather than emptying either — which is why this can be
+    scoped at all, and the reason the old comment gave for leaving it open no
+    longer holds once the catalog reaches the port.
+    """
+    assert [c.name for c in federated().columns('public', 'flight', 'warehouse')] == ['id', 'number']
+    joined = 'SELECT * FROM warehouse.public.flight f JOIN events.analytics.flight_event e ON e.⌶'
+    assert texts(joined, federated()) == ['flight_id', 'gate']
+
+
 def test_a_two_level_snapshot_ignores_the_catalog_it_is_offered() -> None:
     """
     Without `catalogs` the snapshot holds one unnamed catalog, so scoping to a name is not its question.

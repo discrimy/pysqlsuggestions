@@ -39,12 +39,12 @@ class Counting(MemoryCatalog):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self.singles: list[tuple[str | None, str]] = []
-        self.bulk: list[tuple[tuple[str | None, str], ...]] = []
+        self.bulk: list[tuple[tuple[str | None, str | None, str], ...]] = []
 
-    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[Column]:
         """Record, then answer as the snapshot does."""
         self.singles.append((schema, table))
-        return super().columns(schema, table)
+        return super().columns(schema, table, catalog)
 
 
 class Bulk(Counting):
@@ -52,11 +52,14 @@ class Bulk(Counting):
 
     def columns_for(
         self,
-        relations: Sequence[tuple[str | None, str]],
-    ) -> Mapping[tuple[str | None, str], Sequence[Column]]:
+        relations: Sequence[tuple[str | None, str | None, str]],
+    ) -> Mapping[tuple[str | None, str | None, str], Sequence[Column]]:
         """Every relation asked for, keyed as asked."""
         self.bulk.append(tuple(relations))
-        return {key: MemoryCatalog.columns(self, *key) for key in relations}
+        return {
+            (catalog, schema, table): MemoryCatalog.columns(self, schema, table, catalog)
+            for catalog, schema, table in relations
+        }
 
 
 def test_the_capability_is_detected_at_runtime() -> None:
@@ -70,7 +73,7 @@ def test_three_relations_in_scope_cost_one_read() -> None:
     catalog = Bulk(SNAPSHOT)
     complete(JOINED, len(JOINED), POSTGRES, catalog)
     assert len(catalog.bulk) == 1
-    assert sorted(catalog.bulk[0]) == [(None, 'customers'), (None, 'invoices'), (None, 'orders')]
+    assert sorted(catalog.bulk[0]) == [(None, None, 'customers'), (None, None, 'invoices'), (None, None, 'orders')]
     assert catalog.singles == []
 
 
@@ -131,7 +134,7 @@ def test_only_the_relations_still_missing_are_asked_for() -> None:
 
     catalog = Bulk(SNAPSHOT)
     complete(JOINED, len(JOINED), POSTGRES, catalog, cache=cache)
-    assert sorted(catalog.bulk[0]) == [(None, 'customers'), (None, 'invoices')]
+    assert sorted(catalog.bulk[0]) == [(None, None, 'customers'), (None, None, 'invoices')]
 
 
 def test_a_relation_the_catalog_omits_is_not_asked_for_again() -> None:
@@ -147,11 +150,11 @@ def test_a_relation_the_catalog_omits_is_not_asked_for_again() -> None:
 
         def columns_for(
             self,
-            relations: Sequence[tuple[str | None, str]],
-        ) -> Mapping[tuple[str | None, str], Sequence[Column]]:
+            relations: Sequence[tuple[str | None, str | None, str]],
+        ) -> Mapping[tuple[str | None, str | None, str], Sequence[Column]]:
             """Drop one relation from the answer, the way a privilege filter would."""
             found = super().columns_for(relations)
-            return {key: value for key, value in found.items() if key[1] != 'invoices'}
+            return {key: value for key, value in found.items() if key[2] != 'invoices'}
 
     catalog = Partial(SNAPSHOT)
     found = [s.text for s in complete(JOINED, len(JOINED), POSTGRES, catalog)]

@@ -340,7 +340,7 @@ def test_a_catalog_query_wanting_more_values_than_it_gets_is_reported() -> None:
     """
     A `$N` typo is the mistake this harness ships to catch and did not.
 
-    `DbapiCatalog` fixes each query's arity — `columns` is given two values, the
+    `DbapiCatalog` fixes each query's arity — `columns` is given three values, the
     searches one — so a marker beyond that is a static contradiction of exactly
     the kind reported here, needing neither a server nor a consistent dialect to
     see. Left unchecked it surfaced as an IndexError on the first catalog read.
@@ -349,10 +349,10 @@ def test_a_catalog_query_wanting_more_values_than_it_gets_is_reported() -> None:
         POSTGRES,
         catalog_queries=replace(
             POSTGRES.catalog_queries,
-            columns=Query(sql='SELECT 1 WHERE s = $1 AND t = $2 AND x = $3', row=lambda row: row),
+            columns=Query(sql='SELECT 1 WHERE s = $1 AND t = $2 AND c = $3 AND x = $4', row=lambda row: row),
         ),
     )
-    assert any('$3' in problem for problem in DialectConformance.structure(broken))
+    assert any('$4' in problem for problem in DialectConformance.structure(broken))
 
 
 def test_the_registry_does_not_hand_out_the_dictionary_it_caches() -> None:

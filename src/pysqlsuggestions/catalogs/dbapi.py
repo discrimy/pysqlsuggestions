@@ -276,23 +276,32 @@ class DbapiCatalog:
             return self.tables(schema)
         return [row for row in self._rows(query, schema or '') if isinstance(row, Table)]
 
-    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
-        """Columns of one relation, in declaration order."""
-        rows = self._rows(self._dialect.catalog_queries.columns, schema or '', table)
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[Column]:
+        """
+        Columns of one relation, in declaration order.
+
+        `catalog` is `$3`, after the schema and the relation the query already
+        took, so a dialect naming only `$1` and `$2` is untouched.
+        """
+        rows = self._rows(self._dialect.catalog_queries.columns, schema or '', table, catalog or '')
         return [row for row in rows if isinstance(row, Column)]
 
     def columns_for(
         self,
-        relations: Sequence[tuple[str | None, str]],
-    ) -> Mapping[tuple[str | None, str], Sequence[Column]]:
+        relations: Sequence[tuple[str | None, str | None, str]],
+    ) -> Mapping[tuple[str | None, str | None, str], Sequence[Column]]:
         """
-        Columns for several relations, one query per distinct schema.
+        Columns for several relations, one query per distinct (catalog, schema).
 
-        Grouped by schema rather than sent as pairs, because the neutral marker
-        language spells a list of values and not a list of tuples — and because
-        the grouping costs nothing in practice: a FROM clause naming relations
-        from three schemas is rare, and one naming them all from the default
-        namespace is the ordinary case and becomes exactly one query.
+        Grouped rather than sent as tuples, because the neutral marker language
+        spells a list of values and not a list of tuples — and because the
+        grouping costs nothing in practice: a FROM clause naming relations from
+        three schemas is rare, and one naming them all from the default namespace
+        is the ordinary case and becomes exactly one query.
+
+        Grouped by the catalog too, now that one travels. A federated join names
+        two, and merging them into one query would ask each catalog for the
+        other's relations — which is the read this capability exists to avoid.
 
         Falls back to one read per relation when the dialect ships no
         `columns_in`. That is a dialect declining the capability the way Trino
@@ -301,22 +310,22 @@ class DbapiCatalog:
         """
         query = self._dialect.catalog_queries.columns_in
         if query is None:
-            return {key: self.columns(*key) for key in relations}
+            return {(cat, schema, table): self.columns(schema, table, cat) for cat, schema, table in relations}
 
-        wanted: dict[str | None, list[str]] = {}
-        for schema, table in relations:
-            wanted.setdefault(schema, []).append(table)
+        wanted: dict[tuple[str | None, str | None], list[str]] = {}
+        for catalog, schema, table in relations:
+            wanted.setdefault((catalog, schema), []).append(table)
 
-        found: dict[tuple[str | None, str], list[Column]] = {}
-        for schema, names in wanted.items():
+        found: dict[tuple[str | None, str | None, str], list[Column]] = {}
+        for (catalog, schema), names in wanted.items():
             # Keyed by the name asked for, not by the schema the row came back
             # with: a relation reached through the search path knows a schema the
             # question did not name, and the caller has to match answers to the
             # questions it asked. Two visible relations of the same name merge,
             # which is exactly what one `columns` call does with them today.
-            for row in self._rows(query, schema or '', *names):
+            for row in self._rows(query, schema or '', catalog or '', *names):
                 if isinstance(row, Column):
-                    found.setdefault((schema, row.table), []).append(row)
+                    found.setdefault((catalog, schema, row.table), []).append(row)
         return found
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:

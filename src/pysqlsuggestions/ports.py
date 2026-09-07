@@ -60,8 +60,19 @@ class Catalog(Protocol):
         """
         ...
 
-    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
-        """Columns of one relation, in declaration order."""
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[Column]:
+        """
+        Columns of one relation, in declaration order.
+
+        `catalog` is the level above `schema`, as it is on `tables` and `schemas`,
+        and a two-level backend ignores it.
+
+        Scoping to the catalog *written* is what lets a federated statement work
+        rather than what breaks it: each relation in `FROM a.public.orders JOIN
+        b.analytics.events` carries its own, so each read narrows to its own. It
+        is leaving it open that mixes them — two connectors holding a same-named
+        relation answered as though they were one.
+        """
         ...
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:
@@ -196,10 +207,15 @@ class SupportsBulkColumns(Protocol):
 
     def columns_for(
         self,
-        relations: Sequence[tuple[str | None, str]],
-    ) -> Mapping[tuple[str | None, str], Sequence[Column]]:
+        relations: Sequence[tuple[str | None, str | None, str]],
+    ) -> Mapping[tuple[str | None, str | None, str], Sequence[Column]]:
         """
-        Columns for each of `relations`, keyed by the (schema, table) asked for.
+        Columns for each of `relations`, keyed by the (catalog, schema, table) asked for.
+
+        Triples rather than pairs, because a batch may span catalogs: the join
+        this capability exists to serve is exactly where a federating backend
+        names two of them, and a key without the catalog collides the two halves
+        of `FROM a.public.orders JOIN b.public.orders`.
 
         Keyed as asked, not as found: the caller has to match answers to
         questions, and a relation reached through the search path comes back

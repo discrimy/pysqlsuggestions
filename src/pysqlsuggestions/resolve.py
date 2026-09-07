@@ -171,19 +171,19 @@ def _prefetch_scope_columns(request: Request, reader: _Reader) -> None:
     if not any(kind in request.kinds for kind in _WANTS_EVERY_RELATION) and request.comparand is None:
         return
 
-    wanted: list[tuple[str | None, str]] = []
-    seen: set[tuple[str | None, str]] = set()
+    wanted: list[tuple[str | None, str | None, str]] = []
+    seen: set[tuple[str | None, str | None, str]] = set()
     for relation in scope.visible():
         # A projection describes itself, so it needs no catalog call and must not
         # be counted towards the batch — a statement of five CTEs would otherwise
         # look like five relations worth fetching and produce a query for none.
         if relation.projection is not None:
             continue
-        schema, table = _split_path(relation.path)
-        if table is None or (schema, table) in seen:
+        catalog, schema, table = _split_path(relation.path)
+        if table is None or (catalog, schema, table) in seen:
             continue
-        seen.add((schema, table))
-        wanted.append((schema, table))
+        seen.add((catalog, schema, table))
+        wanted.append((catalog, schema, table))
     reader.prefetch_columns(wanted)
 
 
@@ -226,8 +226,8 @@ def _catalog_columns(relation: Relation, reader: _Reader) -> Sequence[Column]:
     """Typed columns for a relation the catalog knows. A projection carries no types."""
     if relation.projection is not None:
         return ()
-    schema, table = _split_path(relation.path)
-    return reader.columns(schema, table) if table else ()
+    catalog, schema, table = _split_path(relation.path)
+    return reader.columns(schema, table, catalog) if table else ()
 
 
 def _edges(scope: Scope | None, reader: _Reader) -> Sequence[ForeignKey]:
@@ -239,7 +239,7 @@ def _edges(scope: Scope | None, reader: _Reader) -> Sequence[ForeignKey]:
     """
     if scope is None:
         return ()
-    wanted = {_split_path(r.path)[0] for r in scope.relations if r.projection is None and r.path}
+    wanted = {_split_path(r.path)[1] for r in scope.relations if r.projection is None and r.path}
     # The default namespace is always asked for, not only when the statement
     # left a name unqualified. The port returns the constraints whose
     # *referencing* side lives in the schema asked for, and a join is
@@ -468,11 +468,21 @@ class _Reader:
         narrow = self._catalog.queryable_tables
         return self._read(self._key('queryable', schema), lambda: narrow(schema))
 
-    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
-        """Columns of one relation."""
-        return self._read(self._key('columns', schema, table), lambda: self._catalog.columns(schema, table))
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[Column]:
+        """
+        Columns of one relation.
 
-    def prefetch_columns(self, relations: Sequence[tuple[str | None, str]]) -> None:
+        `catalog` joins the key for the same reason it joins `tables`': two
+        catalogs may hold a same-named relation under a same-named schema, and
+        a federated join names both in one statement — which is the one place
+        where the collision is not hypothetical.
+        """
+        return self._read(
+            self._key('columns', schema, table, catalog),
+            lambda: self._catalog.columns(schema, table, catalog),
+        )
+
+    def prefetch_columns(self, relations: Sequence[tuple[str | None, str | None, str]]) -> None:
         """
         Warm every relation in `relations` with one read, where the catalog can.
 
@@ -492,9 +502,9 @@ class _Reader:
         if not _declared(self._catalog, 'columns_for'):
             return
 
-        missing: list[tuple[str | None, str]] = []
-        for schema, table in relations:
-            key = self._key('columns', schema, table)
+        missing: list[tuple[str | None, str | None, str]] = []
+        for catalog, schema, table in relations:
+            key = self._key('columns', schema, table, catalog)
             if key in self._memo:
                 continue
             # The caller's cache is asked per relation, which is one `get` each
@@ -505,7 +515,7 @@ class _Reader:
             if cached is not None:
                 self._memo[key] = cached
                 continue
-            missing.append((schema, table))
+            missing.append((catalog, schema, table))
 
         # One left is not a batch. Falling through leaves it to `columns`, which
         # is the same single read spelled by the query whose text does not vary
@@ -515,14 +525,14 @@ class _Reader:
             return
 
         found = self._catalog.columns_for(missing)
-        for schema, table in missing:
+        for catalog, schema, table in missing:
             # `list`, and defaulting to empty: a relation the catalog left out of
             # the mapping is one the role cannot see, and the per-relation path
             # would have cached the same empty answer for it. Memoised either
             # way, so an omission costs one read rather than one per position
             # that asks again within this request.
-            columns = list(found.get((schema, table), ()))
-            key = self._key('columns', schema, table)
+            columns = list(found.get((catalog, schema, table), ()))
+            key = self._key('columns', schema, table, catalog)
             self._memo[key] = columns
             if self._cache is not None and not self._failed:
                 self._store(key, columns)
@@ -704,8 +714,12 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
 
     if Kind.COLUMN in request.kinds and len(request.qualifier) >= len(dialect.namespace.levels):
         # schema.table.<caret> — the deepest reading is a column of that relation.
-        schema, table = request.qualifier[-2], request.qualifier[-1]
-        return [_column_candidate(column) for column in reader.columns(schema, table)]
+        # `_split_path` reads the same three segments the same way, so the whole
+        # written path reaches the port rather than its last two.
+        catalog, schema, table = _split_path(request.qualifier)
+        if table is None:
+            return []
+        return [_column_candidate(column) for column in reader.columns(schema, table, catalog)]
 
     candidates: list[Candidate] = []
     if Kind.COLUMN in request.kinds and not _names_a_relation(scope, request.qualifier):
@@ -1251,10 +1265,10 @@ def _values(request: Request, reader: _Reader) -> list[Candidate]:
     for candidate in relations:
         if candidate is None or candidate.projection is not None:
             continue
-        schema, table = _split_path(candidate.path)
+        catalog, schema, table = _split_path(candidate.path)
         if not table:
             continue
-        column = next((c for c in reader.columns(schema, table) if c.name == path[-1]), None)
+        column = next((c for c in reader.columns(schema, table, catalog) if c.name == path[-1]), None)
         if column is None:
             continue
         if column.availability is Availability.RESTRICTED:
@@ -1394,10 +1408,10 @@ def _columns_of(
     shown = label or relation.declared_name
 
     if relation.projection is None:
-        schema, table = _split_path(relation.path)
+        catalog, schema, table = _split_path(relation.path)
         if table is None:
             return []
-        return [_column_candidate(column, shown, qualify) for column in reader.columns(schema, table)]
+        return [_column_candidate(column, shown, qualify) for column in reader.columns(schema, table, catalog)]
 
     return _from_projection(relation.projection, shown, reader, seen, qualify, remaining)
 
@@ -1427,18 +1441,28 @@ def _from_projection(
     return candidates
 
 
-def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None]:
+def _split_path(path: tuple[str, ...]) -> tuple[str | None, str | None, str | None]:
     """
-    A relation path as (schema, table).
+    A relation path as (catalog, schema, table).
 
-    A three-segment Trino path drops its catalog: the Catalog port is bound to one
-    catalog already, so `catalog.schema.table` reads as `schema.table` here.
+    The catalog used to be discarded here, on the grounds that the port was bound
+    to one already. It is not: a Trino connection has a *session* catalog, and
+    `system.jdbc` spans every catalog the coordinator federates, so dropping the
+    one that was written turned `sms.public.orders` into "any `orders` in any
+    `public`" — a relation the statement cannot name, read at the cost of
+    reaching every connector's metadata in turn.
+
+    Two segments are a schema and a relation on every dialect here, including
+    Trino: `public.orders` names no catalog and means the session's, which the
+    backend knows and this does not. None travels rather than a guess.
     """
     if not path:
-        return None, None
+        return None, None, None
     if len(path) == 1:
-        return None, path[0]
-    return path[-2], path[-1]
+        return None, None, path[0]
+    if len(path) == 2:
+        return None, path[0], path[1]
+    return path[-3], path[-2], path[-1]
 
 
 _NO_PRIVILEGE = 'no SELECT privilege'

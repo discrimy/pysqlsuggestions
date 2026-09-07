@@ -340,7 +340,7 @@ def test_cte_selecting_a_star_expands_through_the_catalog() -> None:
     cat = catalog()
     found = texts('WITH a AS (SELECT * FROM reports_database) SELECT a.⌶ FROM a', cat=cat)
     assert found == ['id', 'title', 'type', 'host']
-    assert cat.calls == [('columns', '', 'reports_database')]
+    assert cat.calls == [('columns', '', 'reports_database', '')]
 
 
 def test_order_by_offers_select_list_names() -> None:
@@ -468,7 +468,7 @@ def test_column_search_degrades_when_unsupported() -> None:
         def tables(self, schema: str | None = None, catalog: str | None = None) -> list[object]:
             return []
 
-        def columns(self, schema: str | None, table: str) -> list[object]:
+        def columns(self, schema: str | None, table: str, catalog: str | None = None) -> list[object]:
             return []
 
         def functions(self, schema: str | None = None) -> list[object]:
@@ -688,9 +688,9 @@ class _InventsEverything:
         del schema, catalog
         return []
 
-    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[Column]:
         """No columns."""
-        del schema, table
+        del schema, table, catalog
         return []
 
     def functions(self, schema: str | None = None) -> Sequence[Function]:

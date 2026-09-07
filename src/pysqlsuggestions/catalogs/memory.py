@@ -173,14 +173,20 @@ class MemoryCatalog:
             return list(self._tables)
         return [t for t in self._tables if t.schema in self._search_path]
 
-    def columns(self, schema: str | None, table: str) -> Sequence[Column]:
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[Column]:
         """
-        Columns of `table`.
+        Columns of `table`, of `catalog` where the snapshot names catalogs.
 
         With `schema=None` the first matching relation wins, which stands in for
         a search path without the fixture needing to model one.
         """
-        self.calls.append(('columns', schema or '', table))
+        self.calls.append(('columns', schema or '', table, catalog or ''))
+        if self._catalogs and catalog is not None and schema not in self._catalogs.get(catalog, ()):
+            # Guarded on `self._catalogs` exactly as `tables` is: a snapshot
+            # built without them is two-level and holds one unnamed catalog, so
+            # a name offered here is a level it does not model rather than one
+            # it can fail to match.
+            return ()
         if schema is not None:
             return self._columns.get((schema, table), ())
         for (candidate_schema, candidate_table), columns in self._columns.items():

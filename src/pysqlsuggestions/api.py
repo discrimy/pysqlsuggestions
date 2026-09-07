@@ -56,9 +56,9 @@ class _NullCatalog:
         del schema, catalog
         return []
 
-    def columns(self, schema: str | None, table: str) -> list[Column]:
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> list[Column]:
         """No columns are known."""
-        del schema, table
+        del schema, table, catalog
         return []
 
     def functions(self, schema: str | None = None) -> list[Function]:

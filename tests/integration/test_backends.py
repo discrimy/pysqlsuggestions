@@ -526,6 +526,62 @@ def test_trino_relations_come_from_the_catalog_when_one_is_named(trino_catalog: 
     assert 'report_executions' in found
 
 
+def test_trino_columns_stay_inside_the_catalog_the_relation_named(trino_catalog: DbapiCatalog) -> None:
+    """
+    A written catalog scopes the column read, one level below `tables`.
+
+    `columns` was left unconstrained once a schema was named, on the stated
+    grounds that federating is what Trino is for. The code could not have done
+    otherwise — `_split_path` discarded the catalog — so the choice was really
+    between "any relation of this name anywhere" and nothing, and the first is
+    what shipped. This connection is bound to `postgresql`, and `report_dim`
+    lives only in ClickHouse; naming a catalog Postgres does not have must not
+    reach the one that does.
+    """
+    assert trino_catalog.columns('analytics', 'report_dim', 'postgresql') == []
+
+
+def test_trino_columns_without_a_catalog_stay_in_the_session_one(trino_catalog: DbapiCatalog) -> None:
+    """
+    `FROM public.orders o WHERE o.<caret>` names a schema and no catalog, which means the session's.
+
+    The guard that binds `current_catalog` used to key off the *schema* marker,
+    so it applied only when nothing at all was written — a leftover from when
+    there was no catalog marker to key off instead. Writing a schema therefore
+    switched the catalog filter off rather than narrowing it, which is the wrong
+    direction: more of the name returned more relations, from connectors the
+    statement never mentioned.
+
+    `analytics` is a ClickHouse schema and this connection is bound to
+    `postgresql`, where `public.reports_report` lives. Trino resolves a bare
+    `FROM analytics.report_dim` against the session catalog and finds nothing,
+    so neither may this.
+    """
+    assert trino_catalog.columns('analytics', 'report_dim') == []
+
+
+def test_trino_columns_reach_the_catalog_that_was_written(trino_catalog: DbapiCatalog) -> None:
+    """The other half, and the one the old comment feared losing: naming a catalog reaches it."""
+    found = [c.name for c in trino_catalog.columns('analytics', 'report_dim', 'clickhouse')]
+    assert found, 'a catalog this connection is not bound to must still answer when it is named'
+
+
+def test_trino_bulk_columns_keep_each_relation_in_its_own_catalog(trino_catalog: DbapiCatalog) -> None:
+    """
+    The batch groups by catalog as well as schema, so a federated join stays two queries.
+
+    Grouped by schema alone, the two halves of a cross-catalog join collapse into
+    one read that asks each catalog for the other's relations — which is the read
+    the whole capability exists to avoid.
+    """
+    found = trino_catalog.columns_for(
+        [('postgresql', 'public', 'reports_report'), ('clickhouse', 'analytics', 'report_executions')],
+    )
+    assert found.get(('postgresql', 'public', 'reports_report')), 'the postgres half is missing'
+    assert found.get(('clickhouse', 'analytics', 'report_executions')), 'the clickhouse half is missing'
+    assert ('postgresql', 'analytics', 'report_executions') not in found
+
+
 def test_trino_columns_have_positions(trino_catalog: DbapiCatalog) -> None:
     """ordinal_position from system.jdbc.columns, so ranking keeps declaration order."""
     columns = trino_catalog.columns('public', 'reports_database')

@@ -4,6 +4,61 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## Unreleased
+
+### A column caret reads the catalog its relation named
+
+0.12.0 bounded the relation position and left the one below it open. `FROM
+sms.public.orders o WHERE o.⌶` — a fully written relation, the most explicit
+thing an author can type — still asked `system.jdbc.columns` for "any `orders`
+in any `public`", so it reached every connector on the coordinator. Against a
+fixture with one unreachable catalog it took **15.0s and then failed**, where it
+now answers in **0.11s**.
+
+The comment in `dialects/trino.py` said this was deliberate — that federating is
+what Trino is for, and constraining the catalog would empty every cross-catalog
+join. That was true of the code and false of the reasoning. `_split_path` was
+*discarding* the catalog before the port ever saw it, so the choice was never
+between narrow and federated; it was between "any relation of this name
+anywhere" and nothing. Now that the whole written path arrives, each relation in
+a federated join carries its own catalog and each read narrows to its own, which
+is what the join actually needs. `FROM postgresql.public.reports_report p JOIN
+clickhouse.analytics.report_executions c ON c.⌶` is unchanged.
+
+### A written schema no longer widens the search
+
+The same guard, keyed wrongly. `FROM public.orders o WHERE o.⌶` names a schema
+and no catalog, which on Trino means the session's — but the conjunct binding
+`current_catalog` was guarded by the *schema* marker, a leftover from before
+there was a catalog marker to guard it with. Writing a schema therefore switched
+the catalog filter off instead of narrowing it, so more of the name returned
+relations from more connectors. Both guards now key off the catalog, and every
+case constrains `table_cat`: the one written when there is one, the session's
+when there is not.
+
+### `Catalog.columns` takes a catalog, and `columns_for` takes triples
+
+```python
+def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[Column]: ...
+```
+
+`SupportsBulkColumns.columns_for` now takes and keys by `(catalog, schema,
+table)` rather than `(schema, table)`: the join this capability exists to serve
+is exactly where a federating backend names two catalogs, and a key without one
+collides the halves of `FROM a.public.orders JOIN b.public.orders`. The batch
+groups by catalog as well as schema, so a cross-catalog join stays two queries
+rather than becoming one that asks each catalog for the other's relations.
+
+A two-level backend ignores the new argument, as it does the ones `tables` and
+`schemas` take. Third-party adapters need both signatures widened;
+`DialectConformance` checks the new arities.
+
+### Cached catalog reads are invalidated once more
+
+`KEY_VERSION` is 3. An older `columns` entry answers "any relation of that name
+in any namespace called `public`", which is the question this release stopped
+asking.
+
 ## 0.12.0
 
 ### A relation caret under a named catalog reads that catalog, not every catalog
