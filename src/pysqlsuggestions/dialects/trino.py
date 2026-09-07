@@ -96,17 +96,40 @@ QUERIES = CatalogQueries(
     # literal. A parameter would have meant a marker every dialect's `columns` had
     # to accept and only this one would use.
     #
-    # The catalog is deliberately *not* constrained once a schema is named.
-    # Federating across catalogs is what Trino is for, and `_split_path` hands a
-    # three-segment `clickhouse.analytics.report_executions` down as schema
-    # `analytics`; constraining it there would empty every cross-catalog join.
-    # `test_trino_federated_join_across_catalogs` is the test that says so.
+    # `$3` is the catalog, and the reason it exists is that this comment used to
+    # say the opposite: that the catalog was deliberately unconstrained once a
+    # schema was named, because federating is what Trino is for and constraining
+    # it would empty every cross-catalog join. That was true of the code and
+    # false of the reasoning. `_split_path` was *discarding* the catalog, so
+    # there was none here to constrain by — the choice was never between narrow
+    # and federated, it was between "any relation of this name anywhere" and
+    # nothing. Now that the whole written path arrives, each relation in a
+    # federated join carries its own catalog and each read narrows to it, which
+    # is what `test_trino_federated_join_across_catalogs` actually needs.
+    #
+    # What it cost meanwhile: `system.jdbc.columns` with `table_schem` bound and
+    # `table_cat` free reaches every connector on the coordinator, so
+    # `FROM sms.public.orders o WHERE o.<caret>` — a fully written relation, the
+    # most explicit thing an author can type — took 15s and then failed against a
+    # coordinator with one unreachable catalog, where it now answers in 0.2s.
+    #
+    # Both catalog guards key off `$3`, the catalog marker, and the schema keeps
+    # a guard of its own. That pairing is the whole point and it is easy to get
+    # subtly wrong: the `current_catalog` branch used to be guarded by `$1`,
+    # because before there was a catalog marker the schema was the only thing to
+    # key off. The effect was that writing a *schema* switched the catalog filter
+    # off instead of narrowing it — `FROM public.orders o WHERE o.<caret>` went
+    # from one catalog to all of them, so more of the name returned more
+    # relations. Keyed off `$3`, every case constrains `table_cat`: the written
+    # catalog when there is one, and the session's when there is not, which is
+    # how Trino resolves an unqualified name itself.
     columns=Query(
         sql="""
             SELECT table_schem, table_name, column_name, type_name, ordinal_position
             FROM system.jdbc.columns
             WHERE table_name = $2
-              AND ($1 <> '' OR table_cat = current_catalog)
+              AND ($3 <> '' OR table_cat = current_catalog)
+              AND ($3 = '' OR table_cat = $3)
               AND ($1 = '' OR table_schem = $1)
             ORDER BY ordinal_position
         """,
@@ -118,16 +141,24 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
-    # Every relation a FROM clause names, in one read, with the same two guarded
-    # conjuncts as `columns` above and for the same reason — a disjunction here
-    # would not push down either. `$2...` is a spread and must stay last.
+    # Every relation a FROM clause names, in one read, with the same three guarded
+    # conjuncts as `columns` above and for the same reasons — a disjunction here
+    # would not push down either, and an unconstrained `table_cat` here reaches
+    # every connector for a whole FROM clause rather than for one relation.
+    #
+    # `$2` is the catalog, inserted *before* the spread rather than after it:
+    # `$3...` is a spread and must stay last, since it stands for every value
+    # from its own position on. Its two guards key off `$2` for the reason
+    # `columns` gives above — guarding the `current_catalog` branch on the schema
+    # instead turns a written schema into *fewer* constraints rather than more.
     columns_in=Query(
         sql="""
             SELECT table_schem, table_name, column_name, type_name, ordinal_position
             FROM system.jdbc.columns
-            WHERE ($1 <> '' OR table_cat = current_catalog)
+            WHERE ($2 <> '' OR table_cat = current_catalog)
+              AND ($2 = '' OR table_cat = $2)
               AND ($1 = '' OR table_schem = $1)
-              AND table_name IN ($2...)
+              AND table_name IN ($3...)
             ORDER BY table_schem, table_name, ordinal_position
         """,
         row=lambda row: Column(

@@ -55,9 +55,9 @@ class _Bare:
         del schema, catalog
         return []
 
-    def columns(self, schema: str | None, table: str) -> Sequence[object]:
+    def columns(self, schema: str | None, table: str, catalog: str | None = None) -> Sequence[object]:
         """No columns."""
-        del schema, table
+        del schema, table, catalog
         return []
 
     def functions(self, schema: str | None = None) -> Sequence[object]:

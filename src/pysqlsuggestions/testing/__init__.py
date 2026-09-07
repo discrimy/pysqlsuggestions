@@ -41,8 +41,8 @@ _QUERY_ARITY = {
     'schemas': 1,
     'tables': 2,
     'queryable_tables': 1,
-    'columns': 2,
-    'columns_in': 2,
+    'columns': 3,
+    'columns_in': 3,
     'functions': 1,
     'column_search': 1,
     'relation_search': 1,
@@ -58,9 +58,9 @@ silently followed a refactor of the caller would stop catching the mistake it
 exists for. A change to either has to be a change to both, which is the point.
 
 `columns_in` is the least of what it is given, not the most: its last marker is a
-spread and takes as many relation names as the statement holds. Two is therefore
-the floor — a schema and at least one name — and the check below is what says the
-spread is where a spread may be.
+spread and takes as many relation names as the statement holds. Three is therefore
+the floor — a schema, a catalog, and at least one name — and the check below is
+what says the spread is where a spread may be.
 """
 
 __all__ = ['CacheConformance', 'Case', 'DialectConformance', 'InMemoryByteCache']

@@ -100,9 +100,9 @@ def test_a_catalog_without_the_capability_is_unchanged() -> None:
             """Delegate."""
             return list(self._inner.tables(schema, catalog))
 
-        def columns(self, schema: str | None, table: str) -> list[object]:
+        def columns(self, schema: str | None, table: str, catalog: str | None = None) -> list[object]:
             """Delegate."""
-            return list(self._inner.columns(schema, table))
+            return list(self._inner.columns(schema, table, catalog))
 
         def functions(self, schema: str | None = None) -> list[object]:
             """Delegate."""
