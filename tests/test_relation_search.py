@@ -96,9 +96,9 @@ def test_a_catalog_without_the_capability_is_unchanged() -> None:
             """Delegate."""
             return list(self._inner.schemas(catalog))
 
-        def tables(self, schema: str | None = None) -> list[object]:
+        def tables(self, schema: str | None = None, catalog: str | None = None) -> list[object]:
             """Delegate."""
-            return list(self._inner.tables(schema))
+            return list(self._inner.tables(schema, catalog))
 
         def columns(self, schema: str | None, table: str) -> list[object]:
             """Delegate."""

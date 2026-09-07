@@ -235,7 +235,10 @@ def _warm(key: str) -> None:
             # ever read back. `cache_key` is what keeps the two ends from drifting again.
             schema = name or None
             cache.set(cache_key('demo', dialect.name, 'schemas', schema), catalog.schemas(schema))
-            cache.set(cache_key('demo', dialect.name, 'tables', schema), catalog.tables(schema))
+            # The trailing `None` is `tables`' catalog, which this warms nothing
+            # above: a two-level backend has no such level, and on a three-level
+            # one the loop is walking catalogs rather than schemas already.
+            cache.set(cache_key('demo', dialect.name, 'tables', schema, None), catalog.tables(schema))
 
 
 @app.on_event('startup')

@@ -51,9 +51,9 @@ class _NullCatalog:
         del catalog
         return []
 
-    def tables(self, schema: str | None = None) -> list[Table]:
+    def tables(self, schema: str | None = None, catalog: str | None = None) -> list[Table]:
         """No relations are known."""
-        del schema
+        del schema, catalog
         return []
 
     def columns(self, schema: str | None, table: str) -> list[Column]:

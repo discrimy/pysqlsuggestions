@@ -252,9 +252,16 @@ class DbapiCatalog:
         """Namespace names one level below `catalog`."""
         return [str(name) for name in self._rows(self._dialect.catalog_queries.schemas, catalog or '')]
 
-    def tables(self, schema: str | None = None) -> Sequence[Table]:
-        """Relations in `schema`, or those visible by default."""
-        return [row for row in self._rows(self._dialect.catalog_queries.tables, schema or '') if isinstance(row, Table)]
+    def tables(self, schema: str | None = None, catalog: str | None = None) -> Sequence[Table]:
+        """
+        Relations in `schema`, or those visible by default.
+
+        `catalog` arrives as `$2`, so a two-level dialect whose query names only
+        `$1` is untouched: `render` builds its parameters from the markers the
+        SQL actually holds, not from the values offered it.
+        """
+        rows = self._rows(self._dialect.catalog_queries.tables, schema or '', catalog or '')
+        return [row for row in rows if isinstance(row, Table)]
 
     def queryable_tables(self, schema: str | None = None) -> Sequence[Table]:
         """

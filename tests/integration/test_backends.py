@@ -481,6 +481,51 @@ def test_trino_unqualified_columns_push_the_catalog_filter_down(trino_catalog: D
     assert elapsed < 3.0, f'{elapsed:.1f}s: the catalog filter is no longer pushed down'
 
 
+def test_trino_relations_stay_inside_the_catalog_the_caret_named(trino_catalog: DbapiCatalog) -> None:
+    """
+    `tables` had no `table_cat` predicate at all, so a named schema meant every catalog.
+
+    This connection is bound to `postgresql`, which has no `analytics` schema —
+    ClickHouse does. Unconstrained, `system.jdbc.tables` answered with
+    ClickHouse's relations, so `FROM analytics.<caret>` offered a name that
+    resolves nowhere: Trino answers `Schema 'postgresql.analytics' does not
+    exist` for every one of them.
+
+    The same shape as `columns` one release earlier, one namespace level up, and
+    it was the more expensive of the two — a relation position is the first
+    thing a FROM clause asks for.
+
+    There is deliberately no timing twin to this, unlike
+    `test_trino_unqualified_columns_push_the_catalog_filter_down`. That test can
+    tell a pushed filter from an unpushed one because its unpushed form costs
+    9.8s against 46ms. Here the three forms — the shipped conjuncts, the
+    disjunction that does not push down, and no filter whatever — measure 0.18s,
+    0.16s and 0.12s, which is to say this fixture cannot tell them apart in
+    either direction. Both its connectors are local and answer a metadata call
+    immediately, so there is nothing for a pushed-down filter to save; the cost
+    the filter removes is a *slow* connector, and adding one to the fixture
+    would put it in the path of every other test here.
+
+    So the shape is held down elsewhere, and it is worth knowing where. The
+    `columns` timing test is the one that can still measure it, and the two
+    queries carry the same pair of guards for the same reason — a rewrite to the
+    disjunction would have to touch both, and that test fails when it does.
+    """
+    assert trino_catalog.tables('analytics') == []
+
+
+def test_trino_relations_come_from_the_catalog_when_one_is_named(trino_catalog: DbapiCatalog) -> None:
+    """
+    The other half: naming a catalog reaches it, including one this connection is not bound to.
+
+    Federating is what Trino is for, so scoping must narrow to the catalog
+    *written* rather than to the session's. A postgresql-bound connection asked
+    for `clickhouse.analytics.` gets ClickHouse's relations.
+    """
+    found = [t.name for t in trino_catalog.tables('analytics', 'clickhouse')]
+    assert 'report_executions' in found
+
+
 def test_trino_columns_have_positions(trino_catalog: DbapiCatalog) -> None:
     """ordinal_position from system.jdbc.columns, so ranking keeps declaration order."""
     columns = trino_catalog.columns('public', 'reports_database')

@@ -23,8 +23,15 @@ from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 from pysqlsuggestions.types import Column, ColumnValue, ForeignKey, Function, Table
 
-KEY_VERSION = '1'
-"""The grammar's version. Bumped by hand when the *shape* of the key changes, not its contents."""
+KEY_VERSION = '2'
+"""
+The grammar's version. Bumped by hand when the *shape* of the key changes, not its contents.
+
+2 is `tables` gaining the catalog its schema belongs to. A bump rather than a
+silent widening: a version-1 `tables` entry answers "any namespace called
+`public`", which is the question this release stopped asking, and there is no
+reading of that payload that makes it a correct answer to the narrower one.
+"""
 
 ReadKind = Literal['schemas', 'tables', 'queryable', 'columns', 'functions', 'values', 'fk']
 """
@@ -142,7 +149,8 @@ def cache_key(identity: str | None, dialect: str, kind: ReadKind, *parts: str | 
     bug rather than a caching one.
 
     `parts` are the namespace path the read is scoped to, one component per
-    level — a catalog for `schemas`, a schema for `tables`, `functions` and `fk`,
+    level — a catalog for `schemas`, a schema and a catalog for `tables`, a schema
+    for `functions` and `fk`,
     a schema and a relation for `columns`, and those plus a column for `values`.
     """
     encoded = (KEY_VERSION, FINGERPRINT, _component(identity), _quote(dialect), kind, *(_component(p) for p in parts))

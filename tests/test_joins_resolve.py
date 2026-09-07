@@ -50,9 +50,9 @@ class _Bare:
         del catalog
         return []
 
-    def tables(self, schema: str | None = None) -> Sequence[object]:
+    def tables(self, schema: str | None = None, catalog: str | None = None) -> Sequence[object]:
         """No relations."""
-        del schema
+        del schema, catalog
         return []
 
     def columns(self, schema: str | None, table: str) -> Sequence[object]:

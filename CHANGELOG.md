@@ -4,6 +4,48 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## 0.12.0
+
+### A relation caret under a named catalog reads that catalog, not every catalog
+
+`FROM sms.public.⌶` on Trino was answered by a query with no `table_cat`
+predicate in it at all. The catalog was written, parsed and then dropped:
+`resolve` passed the schema alone, `Catalog.tables` had nowhere to put a
+catalog, and `system.jdbc.tables` was therefore asked "every namespace called
+`public`, anywhere on this coordinator".
+
+Wrong first. A postgresql-bound session offered ClickHouse's relations for
+`analytics.⌶`, and `postgresql.analytics.report_dim` resolves nowhere — Trino
+answers `Schema 'postgresql.analytics' does not exist` for every name in that
+list. Writing the catalog out did not help, because it was the part being
+thrown away.
+
+Slow second, and worse than slow. `system.jdbc.tables` reaches each connector's
+metadata in turn, so the read scaled with the number of catalogs on the
+coordinator and with the slowest of them. Against a fixture with one unreachable
+catalog the caret took 15.2s and then raised, where it now takes 0.66s and
+answers: an unreachable connector nobody asked about does not merely delay a
+relation list, it *fails* it, and a FROM caret is the first thing a statement
+asks for.
+
+`Catalog.tables` takes the catalog beside the schema, the way `Catalog.schemas`
+already took one. An adapter that does not accept it will need the parameter
+added; every shipped one has it, and a two-level backend may ignore it, as
+`schemas` says of its own. The Trino query spells the two guards as separate
+conjuncts rather than one disjunction, for the reason `columns` records at
+length: Trino pushes a conjunct into a connector and cannot push a disjunction,
+so the natural spelling is correct and costs exactly what no filter cost.
+
+A schema written without a catalog now means the session's catalog rather than
+all of them, which is how Trino itself resolves `FROM analytics.orders`.
+
+### Cached catalog reads are invalidated once
+
+`KEY_VERSION` is 2. `tables` gained a component, and a version-1 entry answers
+the broader question this release stopped asking — there is no reading of that
+payload that makes it a correct answer to the narrower one. Every other read is
+invalidated with it, which costs one cold cache per backend.
+
 ## 0.11.0
 
 ### `resolve` no longer takes a `limit`

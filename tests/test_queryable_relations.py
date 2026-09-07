@@ -44,10 +44,10 @@ class Counting(MemoryCatalog):
         self.broad = 0
         self.narrow = 0
 
-    def tables(self, schema: str | None = None) -> Sequence[Table]:
+    def tables(self, schema: str | None = None, catalog: str | None = None) -> Sequence[Table]:
         """Everything, the way `Catalog.tables` always has."""
         self.broad += 1
-        return super().tables(schema)
+        return super().tables(schema, catalog)
 
 
 class Narrowing(Counting):

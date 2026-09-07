@@ -428,9 +428,14 @@ class _Reader:
         """Namespace names one level below `catalog`."""
         return self._read(self._key('schemas', catalog), lambda: self._catalog.schemas(catalog))
 
-    def tables(self, schema: str | None) -> Sequence[Table]:
+    def tables(self, schema: str | None, catalog: str | None = None) -> Sequence[Table]:
         """
-        Relations in `schema`, or the default namespace.
+        Relations in `schema` of `catalog`, or the default namespace.
+
+        `catalog` joins the key rather than being dropped into it: two catalogs
+        may each own a schema of the same name, and on a federating backend they
+        hold different relations. Keyed on the schema alone, whichever caret
+        arrived first answered for both.
 
         The sentinel is what keeps this clear of `columns`, and it is not
         decoration: a relation named `''` is reachable from ordinary text.
@@ -441,7 +446,7 @@ class _Reader:
         silent, and `lsp/` holds one cache per session, so a single such caret
         emptied the relation list for the rest of it.
         """
-        return self._read(self._key('tables', schema), lambda: self._catalog.tables(schema))
+        return self._read(self._key('tables', schema, catalog), lambda: self._catalog.tables(schema, catalog))
 
     def queryable_tables(self, schema: str | None = None) -> Sequence[Table]:
         """
@@ -646,6 +651,22 @@ def _names_a_relation(scope: Scope | None, qualifier: tuple[str, ...]) -> bool:
     return bool(visible)
 
 
+def _named_catalog(request: Request, dialect: Dialect) -> str | None:
+    """
+    The catalog a relation qualifier names, on a namespace with room for one.
+
+    `sms.public.<caret>` is a catalog and a schema; `public.<caret>` is a schema
+    and the session's own catalog, which the backend knows and this does not, so
+    None travels rather than a guess. Gated on the dialect having three levels
+    because on two `a.b.<caret>` is a *relation* — `a` is a schema and `b` a
+    table — and reading `a` as a catalog there would scope a read by a name that
+    means something else.
+    """
+    if len(dialect.namespace.levels) < 3 or len(request.qualifier) < 2:
+        return None
+    return request.qualifier[-2]
+
+
 def _qualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Candidate]:
     """A dotted path narrows hard: either one relation's columns, or one namespace's contents."""
     scope = request.scope
@@ -677,7 +698,7 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     if Kind.SEQUENCE in request.kinds:
         return [
             _table_candidate(table, kind=Kind.SEQUENCE)
-            for table in reader.tables(request.qualifier[-1])
+            for table in reader.tables(request.qualifier[-1], _named_catalog(request, dialect))
             if table.kind == _SEQUENCE
         ]
 
@@ -707,7 +728,7 @@ def _qualified(request: Request, reader: _Reader, dialect: Dialect) -> list[Cand
     if Kind.TABLE in request.kinds:
         candidates += [
             _table_candidate(table)
-            for table in reader.tables(request.qualifier[-1])
+            for table in reader.tables(request.qualifier[-1], _named_catalog(request, dialect))
             if _admits(table, _relation_kinds(request, dialect))
         ]
     if Kind.SCHEMA in request.kinds:

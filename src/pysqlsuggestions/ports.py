@@ -42,8 +42,22 @@ class Catalog(Protocol):
         """
         ...
 
-    def tables(self, schema: str | None = None) -> Sequence[Table]:
-        """Relations in `schema`, or those visible by default."""
+    def tables(self, schema: str | None = None, catalog: str | None = None) -> Sequence[Table]:
+        """
+        Relations in `schema`, or those visible by default.
+
+        `catalog` is the level above `schema`, and like the one `schemas` takes it
+        is only meaningful where the dialect has three levels. Backends with a
+        two-level namespace ignore it.
+
+        It is not decoration there either. `sms.public.<caret>` names a catalog
+        and a schema; asking for the schema alone asks "any namespace called
+        `public`", which on a federating backend is a different question with a
+        different answer — Trino returned another connector's `public` for a
+        relation this statement cannot name. The cost of asking the broad
+        question is the other half: `system.jdbc.tables` unconstrained by
+        `table_cat` reaches every connector's metadata in turn.
+        """
         ...
 
     def columns(self, schema: str | None, table: str) -> Sequence[Column]:
