@@ -17,7 +17,7 @@ def clause(marked: str) -> str | None:
     sql, caret = split_caret(marked)
     tokens = lex(sql, POSTGRES.syntax)
     lo, hi = statement_at(tokens, caret)
-    return clause_at(tokens, lo, hi, caret, POSTGRES.clauses)
+    return clause_at(tokens, lo, hi, caret, POSTGRES)
 
 
 @pytest.mark.parametrize(
@@ -35,6 +35,20 @@ def clause(marked: str) -> str | None:
         ('DELETE FROM ⌶', 'DELETE FROM'),
         ('WITH x AS (SELECT ⌶', 'SELECT'),
         ('⌶', None),
+        # `call` is unreserved in Postgres and also spells the CALL clause. After
+        # a relation it is the relation's alias, and a statement cannot begin
+        # there. After WITH or EXPLAIN it is the clause, because those name the
+        # statement forms they introduce.
+        ('SELECT 1 FROM auth_user call ⌶', 'FROM'),
+        ('SELECT 1 FROM auth_user call WHERE ⌶', 'WHERE'),
+        ('SELECT 1 FROM auth_user call WHERE call.⌶', 'WHERE'),
+        ('SELECT 1 FROM auth_user AS call WHERE call.⌶', 'WHERE'),
+        ('SELECT call.⌶ FROM auth_user call', 'SELECT'),
+        ('SELECT id update ⌶', 'SELECT'),
+        ('WITH x AS (SELECT 1) UPDATE ⌶', 'UPDATE'),
+        ('EXPLAIN UPDATE ⌶', 'UPDATE'),
+        ('EXPLAIN (ANALYZE) DELETE FROM ⌶', 'DELETE FROM'),
+        ('CALL ⌶', 'CALL'),
     ],
 )
 def test_clause_detection(marked: str, expected: str | None) -> None:

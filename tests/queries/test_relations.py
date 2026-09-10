@@ -16,6 +16,19 @@ def test_plain_alias_columns(cur: MemoryCatalog) -> None:
     assert sorted(texts(cur, 'select * from auth_user u where u.')) == sorted(USER_COLUMNS)
 
 
+def test_an_alias_spelling_a_statement_word(cur: MemoryCatalog) -> None:
+    """
+    `call` is not reserved in Postgres, and `FROM auth_user call` is that
+    relation aliased `call`. Read as the CALL clause instead, the alias was lost
+    from scope and the unqualified position offered `auth_user.username`; the
+    qualified one, `call.`, went looking for procedures and found none.
+    """
+    sql = 'select 1\nfrom auth_user call\nwhere '
+    assert 'call.username' in texts(cur, sql)
+    assert 'auth_user.username' not in texts(cur, sql)
+    assert sorted(texts(cur, sql + 'call.')) == sorted(USER_COLUMNS)
+
+
 def test_plain_table_name_qualifier(cur: MemoryCatalog) -> None:
     """
     A relation with no alias answers to its own name. Requiring an alias would

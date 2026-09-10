@@ -80,6 +80,31 @@ def test_keywords_are_not_read_as_aliases() -> None:
     assert rendered('SELECT * FROM users WHERE ⌶') == [':users']
 
 
+def test_an_unreserved_statement_word_is_an_alias() -> None:
+    """
+    `call` is not reserved in Postgres, so `FROM auth_user call` aliases the relation.
+
+    It also spells the CALL clause, and reading it as one dropped the alias:
+    `WHERE ⌶` then offered `auth_user.username` for a relation the author had
+    just named `call`. A statement never begins after a relation, so the clause
+    reading is the wrong one there. UPDATE is the same word class, and the
+    derived-table spelling goes through a different reader.
+    """
+    assert rendered('SELECT ⌶ FROM auth_user call') == ['call:auth_user']
+    assert rendered('SELECT ⌶ FROM auth_user AS call') == ['call:auth_user']
+    assert rendered('SELECT ⌶ FROM auth_user update') == ['update:auth_user']
+    assert rendered('SELECT ⌶ FROM auth_user u JOIN auth_group call ON u.id = call.id') == [
+        'u:auth_user',
+        'call:auth_group',
+    ]
+    assert rendered('SELECT ⌶ FROM (SELECT 1 AS id) call') == ['call:']
+
+
+def test_a_relation_named_after_a_statement_word_is_still_a_relation() -> None:
+    """A table called `call` sits where a relation belongs and is read as one."""
+    assert rendered('SELECT ⌶ FROM call') == [':call']
+
+
 def test_quoted_relation_keeps_its_case() -> None:
     """Quoted identifiers are preserved verbatim in path."""
     assert rendered('SELECT ⌶ FROM "Mixed Case" m') == ['m:Mixed Case']

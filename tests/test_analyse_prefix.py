@@ -177,7 +177,7 @@ def _name_list(marked: str) -> bool:
     sql, caret = split_caret(marked)
     tokens = lex(sql, POSTGRES.syntax)
     lo, hi = statement_at(tokens, caret)
-    clause = clause_at(tokens, lo, hi, caret, POSTGRES.clauses)
+    clause = clause_at(tokens, lo, hi, caret, POSTGRES)
     return opens_a_name_list(tokens, caret, clause, POSTGRES.clauses)
 
 

@@ -20,7 +20,7 @@ def clause(marked: str, dialect: Dialect) -> str | None:
     sql, caret = split_caret(marked)
     tokens = lex(sql, dialect.syntax)
     lo, hi = statement_at(tokens, caret)
-    return clause_at(tokens, lo, hi, caret, dialect.clauses)
+    return clause_at(tokens, lo, hi, caret, dialect)
 
 
 def test_clickhouse_prewhere() -> None:

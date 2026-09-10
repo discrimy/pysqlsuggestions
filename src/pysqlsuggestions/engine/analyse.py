@@ -1001,7 +1001,7 @@ def clause_at(
     lo: int,
     hi: int,
     caret: int,
-    clauses: ClauseModel,
+    dialect: Dialect,
 ) -> str | None:
     """
     The nearest clause keyword governing the caret.
@@ -1013,7 +1013,7 @@ def clause_at(
     When the caret's depth holds no clause keyword — `WHERE (a AND <caret>)`,
     `SELECT sum(<caret>` — the search widens to the enclosing depth.
     """
-    if not clauses.clauses:
+    if not dialect.clauses.clauses:
         return None
     depth = depth_at(tokens, caret)
     # A clause name is a word, so a depth holding no word can hold no clause.
@@ -1024,7 +1024,7 @@ def clause_at(
     levels = _depths_holding_a_word(tokens, lo, hi, caret)
     while depth >= 0:
         if depth in levels:
-            found = _scan_for_clause(tokens, max(lo, _group_start(tokens, caret, depth)), hi, caret, clauses, depth)
+            found = _scan_for_clause(tokens, max(lo, _group_start(tokens, caret, depth)), hi, caret, dialect, depth)
             if found is not None:
                 return found
         depth -= 1
@@ -1080,7 +1080,7 @@ def _scan_for_clause(
     lo: int,
     hi: int,
     caret: int,
-    clauses: ClauseModel,
+    dialect: Dialect,
     depth: int,
 ) -> str | None:
     """
@@ -1088,18 +1088,21 @@ def _scan_for_clause(
 
     Ranked by (end offset, word count), so `DELETE FROM <caret>` answers
     'DELETE FROM' rather than the bare 'FROM' that ends at the same token.
+
+    The best so far is also the clause each later match is read *after*, which
+    is what tells `FROM auth_user call` — an alias — from `EXPLAIN CALL`.
     """
     best: tuple[int, int, str] | None = None
     for index in range(lo, hi):
         token = tokens[index]
         if token.type is not TokenType.IDENT or token.quoted or token.depth != depth or token.end >= caret:
             continue
-        matched = _clause_starting_at(tokens, index, hi, clauses)
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
         if matched is None:
             continue
         name = matched[0]
         last = tokens[matched[1] - 1]
-        if last.end >= caret:
+        if last.end >= caret or not _reads_as_a_clause(name, best[2] if best is not None else None, dialect):
             continue
         candidate = (last.end, len(name.split()), name)
         if best is None or candidate[:2] > best[:2]:
@@ -1619,16 +1622,18 @@ def clauses_written(
     lo, hi = _branch_at(tokens, lo, hi, caret)
     depth = depth_at(tokens, caret)
     found: set[str] = set()
+    after: str | None = None
     index = lo
     while index < hi:
         if tokens[index].type in _SKIP or tokens[index].depth != depth:
             index += 1
             continue
         matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
-        if matched is None:
+        if matched is None or not _reads_as_a_clause(matched[0], after, dialect):
             index += 1
             continue
         found.add(matched[0])
+        after = matched[0]
         index = matched[1]
     return frozenset(found)
 
@@ -1851,6 +1856,49 @@ def _remembered(tokens: Sequence[Token], key: object, produce: Callable[[], _Ans
     return answer
 
 
+def _can_be_a_name(clause: str, dialect: Dialect) -> bool:
+    """
+    Whether the word spelling `clause` may also be a name the author chose.
+
+    Only a word that opens a statement and is not reserved. `call` is not
+    reserved in Postgres, so `FROM auth_user call` aliases the relation and
+    `WHERE call.username` refers to it — and it also spells the CALL clause.
+    Read as the clause, the alias vanished from scope, `WHERE ⌶` offered
+    `auth_user.username` for a relation just named `call`, the caret after it
+    was offered procedures, and `call.` answered nothing. UPDATE, INSERT,
+    DELETE, DROP, ALTER and TRUNCATE are the same word class there.
+
+    A clause of a statement's body — SET, LIMIT, PARTITION — is left out on
+    purpose, however unreserved: it can legally stand where an alias could, and
+    `UPDATE t SET` has to keep reading as the clause. A statement opener cannot
+    stand there, which is what makes demoting it safe.
+
+    The first word decides, because `INSERT INTO` is a phrase and the name at
+    stake is `insert`.
+    """
+    return clause in dialect.statement_start and clause.split()[0] not in dialect.reserved_upper
+
+
+def _reads_as_a_clause(matched: str, after: str | None, dialect: Dialect) -> bool:
+    """
+    Whether `matched`, found after clause `after`, is that clause rather than a name.
+
+    Only a statement opener that could be a name is in doubt. It is the clause
+    at the start of a scan, and after a clause that offers it: WITH names
+    UPDATE and DELETE FROM among its continuations, EXPLAIN names every
+    explainable form. FROM names neither, so the `call` in `FROM auth_user
+    call` is an alias, and so is the `update` in `SELECT id update`.
+
+    Read from `continuations` rather than from a second list of positions, so
+    what is recognised here is exactly what is offered there and the two
+    cannot drift. `CREATE TABLE t AS SELECT` is not caught by this: SELECT is
+    reserved, so it never reaches the question.
+    """
+    if after is None or not _can_be_a_name(matched, dialect):
+        return True
+    return matched in dialect.clauses.continuations(after)
+
+
 def _clause_starting_at(
     tokens: Sequence[Token],
     index: int,
@@ -1927,7 +1975,10 @@ def _read_relation_list(
     """Read comma-separated relation references until the next clause keyword."""
     while index < hi:
         index = _skip_forward(tokens, index, hi)
-        if index >= hi or _clause_starting_at(tokens, index, hi, dialect.clauses) is not None:
+        if index >= hi:
+            break
+        matched = _clause_starting_at(tokens, index, hi, dialect.clauses)
+        if matched is not None and _reads_as_a_clause(matched[0], clause, dialect):
             break
         token = tokens[index]
         if token.type is TokenType.PUNCT and token.text == ',':
@@ -2038,7 +2089,12 @@ def _read_alias(
             return None, index
         return tokens[probe].value, probe + 1
     word = tokens[probe].value.upper()
-    if word in dialect.reserved_upper or _clause_starting_at(tokens, probe, hi, dialect.clauses) is not None:
+    if word in dialect.reserved_upper:
+        return None, index
+    # A statement never begins right after a relation, so a clause word that
+    # could be a name is one here: `FROM auth_user call` is aliased `call`.
+    matched = _clause_starting_at(tokens, probe, hi, dialect.clauses)
+    if matched is not None and not _can_be_a_name(matched[0], dialect):
         return None, index
     return tokens[probe].value, probe + 1
 
