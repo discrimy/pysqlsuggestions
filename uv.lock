@@ -1228,7 +1228,7 @@ wheels = [
 
 [[package]]
 name = "pysqlsuggestions"
-version = "0.13.0"
+version = "0.13.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1302,7 +1302,7 @@ dev = [
 
 [[package]]
 name = "pysqlsuggestions-lsp"
-version = "0.13.0"
+version = "0.13.1"
 source = { editable = "lsp" }
 dependencies = [
     { name = "pygls" },
