@@ -4,6 +4,32 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## Unreleased
+
+### An alias spelling a statement word is an alias
+
+`call` is not reserved in Postgres, so `FROM auth_user call WHERE ⌶` is a
+relation aliased `call`. It also spells the CALL clause, and the clause reading
+won everywhere it was asked: the alias vanished from scope, so the WHERE offered
+`auth_user.username` for a relation the author had just renamed; the caret
+straight after it was offered procedures; and `call.⌶` went looking for a
+schema called `call` and found nothing. `update`, `insert`, `delete`, `drop`,
+`alter` and `truncate` behaved the same, and the AS spelling fixed the scope but
+not the clause.
+
+The rule is the clause model's own. An unreserved word that opens a statement is
+read as a clause only where a statement may begin: first in its scan, or after a
+clause that offers it — WITH names UPDATE and DELETE FROM, EXPLAIN names every
+explainable form. FROM and SELECT name neither, so `FROM auth_user call` and
+`SELECT id update` are names. Nothing that is reserved is touched, so `CREATE
+TABLE t AS SELECT` reads as it did, and a clause of a statement's body — SET,
+LIMIT — is deliberately not in the word class: `UPDATE t SET` must keep reading
+as the clause, and an opener is the one kind of word that cannot legally stand
+where an alias could.
+
+`clause_at` now takes the dialect rather than its clause model, since the scan
+reads reserved words and statement starts as well as clauses.
+
 ## 0.13.0
 
 ### A column caret reads the catalog its relation named

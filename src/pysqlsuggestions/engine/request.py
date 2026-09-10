@@ -76,7 +76,7 @@ def derive_request(sql: str, caret: int, dialect: Dialect) -> Request:
     caret = max(0, min(caret, len(sql)))
     tokens = lex(sql, dialect.syntax)
     lo, hi = statement_at(tokens, caret)
-    clause = clause_at(tokens, lo, hi, caret, dialect.clauses)
+    clause = clause_at(tokens, lo, hi, caret, dialect)
     scope = scope_of(tokens, lo, hi, caret, dialect) if tokens else None
 
     comparand, comparand_type = comparand_at(tokens, caret, dialect)
