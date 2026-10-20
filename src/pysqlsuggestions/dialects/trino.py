@@ -141,34 +141,25 @@ QUERIES = CatalogQueries(
             position=int(row[4]),
         ),
     ),
-    # Every relation a FROM clause names, in one read, with the same three guarded
-    # conjuncts as `columns` above and for the same reasons — a disjunction here
-    # would not push down either, and an unconstrained `table_cat` here reaches
-    # every connector for a whole FROM clause rather than for one relation.
+    # No `columns_in`, and the measurement is the reason. `system.jdbc.columns`
+    # pushes `table_name` into the connector only as a single value: with
+    # `table_name IN (…)` Trino lists the columns of every relation in the schema
+    # and filters them afterwards, so the read grew with the schema rather than
+    # with the FROM clause. Three of 500 tables took 8.6s on Trino 393 against
+    # 0.08s for one `=` read, and still 1.5s on 468; a production 479-table
+    # schema hit an 8s execution limit on every cache miss. `table_cat` and
+    # `table_schem` push down fine, and the guarded conjuncts were not the cause —
+    # a literal `IN` was just as slow as the bound one.
     #
-    # `$2` is the catalog, inserted *before* the spread rather than after it:
-    # `$3...` is a spread and must stay last, since it stands for every value
-    # from its own position on. Its two guards key off `$2` for the reason
-    # `columns` gives above — guarding the `current_catalog` branch on the schema
-    # instead turns a written schema into *fewer* constraints rather than more.
-    columns_in=Query(
-        sql="""
-            SELECT table_schem, table_name, column_name, type_name, ordinal_position
-            FROM system.jdbc.columns
-            WHERE ($2 <> '' OR table_cat = current_catalog)
-              AND ($2 = '' OR table_cat = $2)
-              AND ($1 = '' OR table_schem = $1)
-              AND table_name IN ($3...)
-            ORDER BY table_schem, table_name, ordinal_position
-        """,
-        row=lambda row: Column(
-            schema=str(row[0]),
-            table=str(row[1]),
-            name=str(row[2]),
-            type=str(row[3]),
-            position=int(row[4]),
-        ),
-    ),
+    # Declining is what `CatalogQueries.columns_in` already defines: the adapter
+    # falls back to one `columns` read per relation, 0.3s for the same three on
+    # 393, and it stays flat however large the schema is. A `UNION ALL` of `=`
+    # reads was faster still at 0.12s and was rejected: the marker language
+    # spreads a list of values but cannot repeat a sub-query per value, and a new
+    # rendering construct for 0.2s is not worth carrying. Do not restore this by
+    # symmetry with Postgres and ClickHouse without measuring it against a schema
+    # of a few hundred tables: the docker fixtures are too small to show a cost
+    # that scales with the schema, which is how this one shipped.
     functions=Query(
         # `SHOW FUNCTIONS` rather than a system table: `system.metadata` has no
         # functions relation, and `table_functions` — which does not exist on

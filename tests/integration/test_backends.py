@@ -568,11 +568,12 @@ def test_trino_columns_reach_the_catalog_that_was_written(trino_catalog: DbapiCa
 
 def test_trino_bulk_columns_keep_each_relation_in_its_own_catalog(trino_catalog: DbapiCatalog) -> None:
     """
-    The batch groups by catalog as well as schema, so a federated join stays two queries.
+    A federated join's relations each come back from their own catalog.
 
-    Grouped by schema alone, the two halves of a cross-catalog join collapse into
-    one read that asks each catalog for the other's relations — which is the read
-    the whole capability exists to avoid.
+    This was written for the batch, which grouped by catalog as well as schema so
+    the two halves did not collapse into one read asking each catalog for the
+    other's relations. Trino now ships no `columns_in`, so it runs through the
+    per-relation fallback instead — and has to give the same answer.
     """
     found = trino_catalog.columns_for(
         [('postgresql', 'public', 'reports_report'), ('clickhouse', 'analytics', 'report_executions')],
