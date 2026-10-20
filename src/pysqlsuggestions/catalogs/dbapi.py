@@ -305,7 +305,8 @@ class DbapiCatalog:
 
         Falls back to one read per relation when the dialect ships no
         `columns_in`. That is a dialect declining the capability the way Trino
-        declines `relation_search`, and it leaves the caller's behaviour
+        declines `relation_search` — and Trino declines this one too, because its
+        `IN` read scans the whole schema — and it leaves the caller's behaviour
         unchanged rather than making it an error.
         """
         query = self._dialect.catalog_queries.columns_in

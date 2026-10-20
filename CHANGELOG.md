@@ -4,6 +4,24 @@ Grouped by what changes for someone using the library rather than by commit.
 The engine's whole job is what it offers at a caret, so that is what this
 records: the positions where it now answers differently.
 
+## Unreleased
+
+### A Trino FROM clause no longer reads the whole schema for its columns
+
+`FROM a JOIN b JOIN c WHERE ⌶` on Trino asked `system.jdbc.columns` for the three
+relations in one read with `table_name IN (…)`. Trino pushes `table_name` into
+the connector only as a single value, so that read listed the columns of every
+relation in the schema and then filtered them. The cost grew with the schema
+rather than with the FROM clause: 8.6s for three of 500 tables on Trino 393, and
+still 1.5s on 468. A production 479-table schema hit an 8s execution limit on
+every cache miss.
+
+The Trino dialect no longer ships `columns_in`, so `columns_for` makes one
+`columns` read per relation, which is the fallback that query was always allowed
+to have. Three relations now take 0.3s on 393 and 468, the suggestions are the
+same, and the time no longer depends on how large the schema is. Postgres and
+ClickHouse keep their single read.
+
 ## 0.13.1
 
 ### An alias spelling a statement word is an alias

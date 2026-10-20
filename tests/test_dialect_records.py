@@ -105,6 +105,20 @@ def test_only_the_affordable_backends_search_relations() -> None:
     assert ANSI.catalog_queries.relation_search is None
 
 
+def test_trino_reads_columns_one_relation_at_a_time() -> None:
+    """
+    Trino declines `columns_in` on a measurement too, and this is what keeps it declined.
+
+    `system.jdbc.columns` pushes `table_name` down only as a single value, so
+    `table_name IN (…)` lists every relation in the schema: 8.6s against 0.3s for
+    per-relation reads, for three of 500 tables on Trino 393. Postgres and
+    ClickHouse ship one, which is exactly the symmetry that would re-add it.
+    """
+    assert POSTGRES.catalog_queries.columns_in is not None
+    assert CLICKHOUSE.catalog_queries.columns_in is not None
+    assert TRINO.catalog_queries.columns_in is None
+
+
 def _column(query: Query | None, row: tuple[object, ...]) -> Column:
     """One mapped column. `Query.row` is typed `object`, so narrowing is the caller's job."""
     assert query is not None
